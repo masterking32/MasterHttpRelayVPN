@@ -46,7 +46,7 @@ func (c *Client) handleConn(ctx context.Context, conn net.Conn) {
 	defer c.unregisterConn(conn)
 	defer conn.Close()
 
-	socksConn := c.socksConnections.New(c.clientSessionKey, conn.RemoteAddr().String())
+	socksConn := c.socksConnections.New(c.clientSessionKey, conn.RemoteAddr().String(), c.chunkPolicy)
 	defer c.socksConnections.Delete(socksConn.ID)
 
 	c.log.Infof(
@@ -100,6 +100,10 @@ func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, socksConn *SOC
 		"<green>socks_id=<cyan>%d</cyan> CONNECT target=<cyan>%s:%d</cyan> auth_method=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
 		socksConn.ID, socksConn.TargetHost, socksConn.TargetPort, socksConn.SOCKSAuthMethod, socksConn.ClientSessionKey,
 	)
+
+	if err := socksConn.EnqueuePacket(socksConn.BuildSOCKSConnectPacket()); err != nil {
+		return err
+	}
 
 	return c.captureInitialPayload(ctx, conn, socksConn)
 }
@@ -261,10 +265,14 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socks
 		socksConn.InitialPayload = append([]byte(nil), buf[:n]...)
 		socksConn.BufferedBytes += n
 		socksConn.LastActivityAt = time.Now()
+		enqueued, enqueueErr := socksConn.EnqueuePayloadChunks(buf[:n], false)
 		c.log.Debugf(
-			"<green>socks_id=<cyan>%d</cyan> captured initial payload bytes=<cyan>%d</cyan> target=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan></green>",
-			socksConn.ID, n, net.JoinHostPort(socksConn.TargetHost, strconv.Itoa(int(socksConn.TargetPort))), socksConn.ClientSessionKey,
+			"<green>socks_id=<cyan>%d</cyan> captured initial payload bytes=<cyan>%d</cyan> target=<cyan>%s</cyan> queued_packets=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
+			socksConn.ID, n, net.JoinHostPort(socksConn.TargetHost, strconv.Itoa(int(socksConn.TargetPort))), enqueued, socksConn.ClientSessionKey,
 		)
+		if enqueueErr != nil {
+			return enqueueErr
+		}
 	} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -289,10 +297,15 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socks
 		if n > 0 {
 			socksConn.BufferedBytes += n
 			socksConn.LastActivityAt = time.Now()
+			enqueued, enqueueErr := socksConn.EnqueuePayloadChunks(buf[:n], false)
+			queueItems, queueBytes := socksConn.QueueSnapshot()
 			c.log.Debugf(
-				"<green>socks_id=<cyan>%d</cyan> buffered payload chunk=<cyan>%d</cyan> total=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
-				socksConn.ID, n, socksConn.BufferedBytes, socksConn.ClientSessionKey,
+				"<green>socks_id=<cyan>%d</cyan> buffered payload chunk=<cyan>%d</cyan> total=<cyan>%d</cyan> queued_packets=<cyan>%d</cyan> queue_depth=<cyan>%d</cyan> queue_bytes=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
+				socksConn.ID, n, socksConn.BufferedBytes, enqueued, queueItems, queueBytes, socksConn.ClientSessionKey,
 			)
+			if enqueueErr != nil {
+				return enqueueErr
+			}
 		}
 
 		if err != nil {

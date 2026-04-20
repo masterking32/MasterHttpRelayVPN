@@ -24,6 +24,7 @@ type Client struct {
 	log              *logger.Logger
 	clientSessionKey string
 	socksConnections *SOCKSConnectionStore
+	chunkPolicy      ChunkPolicy
 
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
@@ -37,6 +38,7 @@ func New(cfg config.Config, lg *logger.Logger) *Client {
 		log:              lg,
 		clientSessionKey: clientSessionKey,
 		socksConnections: NewSOCKSConnectionStore(),
+		chunkPolicy:      newChunkPolicy(cfg),
 		conns:            make(map[net.Conn]struct{}),
 	}
 }

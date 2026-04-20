@@ -16,20 +16,30 @@ import (
 )
 
 type Config struct {
-	AESEncryptionKey string
-	SOCKSHost        string
-	SOCKSPort        int
-	SOCKSAuth        bool
-	SOCKSUsername    string
-	SOCKSPassword    string
-	LogLevel         string
+	AESEncryptionKey      string
+	SOCKSHost             string
+	SOCKSPort             int
+	SOCKSAuth             bool
+	SOCKSUsername         string
+	SOCKSPassword         string
+	LogLevel              string
+	MaxChunkSize          int
+	MaxPacketsPerBatch    int
+	MaxBatchBytes         int
+	WorkerCount           int
+	MaxQueueBytesPerSOCKS int
 }
 
 func Load(path string) (Config, error) {
 	cfg := Config{
-		SOCKSHost: "127.0.0.1",
-		SOCKSPort: 1080,
-		LogLevel:  "INFO",
+		SOCKSHost:             "127.0.0.1",
+		SOCKSPort:             1080,
+		LogLevel:              "INFO",
+		MaxChunkSize:          16 * 1024,
+		MaxPacketsPerBatch:    32,
+		MaxBatchBytes:         256 * 1024,
+		WorkerCount:           4,
+		MaxQueueBytesPerSOCKS: 1024 * 1024,
 	}
 
 	file, err := os.Open(path)
@@ -76,6 +86,36 @@ func Load(path string) (Config, error) {
 			cfg.SOCKSPassword = trimString(value)
 		case "LOG_LEVEL":
 			cfg.LogLevel = trimString(value)
+		case "MAX_CHUNK_SIZE":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MAX_CHUNK_SIZE: %w", err)
+			}
+			cfg.MaxChunkSize = size
+		case "MAX_PACKETS_PER_BATCH":
+			count, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MAX_PACKETS_PER_BATCH: %w", err)
+			}
+			cfg.MaxPacketsPerBatch = count
+		case "MAX_BATCH_BYTES":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MAX_BATCH_BYTES: %w", err)
+			}
+			cfg.MaxBatchBytes = size
+		case "WORKER_COUNT":
+			count, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse WORKER_COUNT: %w", err)
+			}
+			cfg.WorkerCount = count
+		case "MAX_QUEUE_BYTES_PER_SOCKS":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MAX_QUEUE_BYTES_PER_SOCKS: %w", err)
+			}
+			cfg.MaxQueueBytesPerSOCKS = size
 		}
 	}
 
@@ -89,6 +129,26 @@ func Load(path string) (Config, error) {
 
 	if cfg.SOCKSPort < 1 || cfg.SOCKSPort > 65535 {
 		return Config{}, fmt.Errorf("invalid SOCKS_PORT: %d", cfg.SOCKSPort)
+	}
+
+	if cfg.MaxChunkSize < 1 {
+		return Config{}, fmt.Errorf("invalid MAX_CHUNK_SIZE: %d", cfg.MaxChunkSize)
+	}
+
+	if cfg.MaxPacketsPerBatch < 1 {
+		return Config{}, fmt.Errorf("invalid MAX_PACKETS_PER_BATCH: %d", cfg.MaxPacketsPerBatch)
+	}
+
+	if cfg.MaxBatchBytes < cfg.MaxChunkSize {
+		return Config{}, fmt.Errorf("MAX_BATCH_BYTES must be >= MAX_CHUNK_SIZE")
+	}
+
+	if cfg.WorkerCount < 1 {
+		return Config{}, fmt.Errorf("invalid WORKER_COUNT: %d", cfg.WorkerCount)
+	}
+
+	if cfg.MaxQueueBytesPerSOCKS < cfg.MaxChunkSize {
+		return Config{}, fmt.Errorf("MAX_QUEUE_BYTES_PER_SOCKS must be >= MAX_CHUNK_SIZE")
 	}
 
 	return cfg, nil

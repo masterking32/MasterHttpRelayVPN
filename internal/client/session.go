@@ -16,6 +16,7 @@ import (
 type SOCKSConnection struct {
 	ID                uint64
 	ClientSessionKey  string
+	ChunkPolicy       ChunkPolicy
 	CreatedAt         time.Time
 	LastActivityAt    time.Time
 	ClientAddress     string
@@ -32,6 +33,10 @@ type SOCKSConnection struct {
 	CloseReadSent     bool
 	CloseWriteSent    bool
 	ResetSent         bool
+
+	queueMu       sync.Mutex
+	OutboundQueue []*SOCKSOutboundQueueItem
+	QueuedBytes   int
 }
 
 func (s *SOCKSConnection) InitialPayloadHex() string {
@@ -53,12 +58,13 @@ func NewSOCKSConnectionStore() *SOCKSConnectionStore {
 	}
 }
 
-func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string) *SOCKSConnection {
+func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string, chunkPolicy ChunkPolicy) *SOCKSConnection {
 	id := s.nextID.Add(1)
 	now := time.Now()
 	socksConn := &SOCKSConnection{
 		ID:               id,
 		ClientSessionKey: clientSessionKey,
+		ChunkPolicy:      chunkPolicy,
 		CreatedAt:        now,
 		LastActivityAt:   now,
 		ClientAddress:    clientAddress,
