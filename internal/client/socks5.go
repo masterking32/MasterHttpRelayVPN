@@ -316,7 +316,9 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socks
 
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				socksConn.MarkLocalReadEOF()
 				_ = socksConn.EnqueuePacket(socksConn.BuildSOCKSCloseWritePacket())
+				socksConn.WaitUntilClosed(ctx)
 				return nil
 			}
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {

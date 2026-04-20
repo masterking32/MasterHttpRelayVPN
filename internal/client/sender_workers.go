@@ -151,7 +151,7 @@ func (c *Client) buildPollBatch(connections []*SOCKSConnection) (protocol.Batch,
 	now := time.Now()
 	nowUnixMS := now.UnixMilli()
 	lastUnixMS := c.lastPollUnixMS.Load()
-	minInterval := time.Duration(c.cfg.WorkerPollIntervalMS) * time.Millisecond
+	minInterval := time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond
 	if lastUnixMS > 0 && nowUnixMS-lastUnixMS < minInterval.Milliseconds() {
 		return protocol.Batch{}, false
 	}
@@ -304,7 +304,26 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 		socksConn.LastActivityAt = time.Now()
 		return socksConn.WriteToLocal(packet.Payload)
 
-	case protocol.PacketTypeSOCKSCloseRead, protocol.PacketTypeSOCKSCloseWrite, protocol.PacketTypeSOCKSRST:
+	case protocol.PacketTypeSOCKSCloseRead:
+		_ = socksConn.AckPacket(packet)
+		socksConn.LastActivityAt = time.Now()
+		if err := socksConn.CloseLocalWrite(); err != nil {
+			return err
+		}
+		if socksConn.BothLocalSidesClosed() {
+			return socksConn.CloseLocal()
+		}
+		return nil
+
+	case protocol.PacketTypeSOCKSCloseWrite:
+		_ = socksConn.AckPacket(packet)
+		socksConn.LastActivityAt = time.Now()
+		if socksConn.BothLocalSidesClosed() {
+			return socksConn.CloseLocal()
+		}
+		return nil
+
+	case protocol.PacketTypeSOCKSRST:
 		_ = socksConn.AckPacket(packet)
 		socksConn.LastActivityAt = time.Now()
 		return socksConn.CloseLocal()

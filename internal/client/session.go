@@ -7,6 +7,7 @@
 package client
 
 import (
+	"context"
 	"encoding/hex"
 	"net"
 	"sync"
@@ -38,6 +39,11 @@ type SOCKSConnection struct {
 
 	LocalConn      net.Conn
 	localWriteMu   sync.Mutex
+	localCloseMu   sync.Mutex
+	localReadEOF   bool
+	localWriteEOF  bool
+	closedC        chan struct{}
+	closeOnce      sync.Once
 	connectResultC chan error
 	queueMu        sync.Mutex
 	OutboundQueue  []*SOCKSOutboundQueueItem
@@ -74,6 +80,7 @@ func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string
 		CreatedAt:        now,
 		LastActivityAt:   now,
 		ClientAddress:    clientAddress,
+		closedC:          make(chan struct{}),
 		connectResultC:   make(chan error, 1),
 		InFlight:         make(map[string]*SOCKSOutboundQueueItem),
 	}
@@ -112,13 +119,65 @@ func (s *SOCKSConnection) WriteToLocal(payload []byte) error {
 }
 
 func (s *SOCKSConnection) CloseLocal() error {
-	s.localWriteMu.Lock()
-	defer s.localWriteMu.Unlock()
+	var err error
+	s.closeOnce.Do(func() {
+		s.localWriteMu.Lock()
+		defer s.localWriteMu.Unlock()
+		if s.LocalConn != nil {
+			err = s.LocalConn.Close()
+		}
+		close(s.closedC)
+	})
+	return err
+}
 
-	if s.LocalConn == nil {
+func (s *SOCKSConnection) CloseLocalWrite() error {
+	s.localCloseMu.Lock()
+	defer s.localCloseMu.Unlock()
+
+	if s.localWriteEOF {
 		return nil
 	}
-	return s.LocalConn.Close()
+	s.localWriteEOF = true
+
+	if tcpConn, ok := s.LocalConn.(*net.TCPConn); ok {
+		return tcpConn.CloseWrite()
+	}
+	return s.CloseLocal()
+}
+
+func (s *SOCKSConnection) CloseLocalRead() error {
+	s.localCloseMu.Lock()
+	defer s.localCloseMu.Unlock()
+
+	if s.localReadEOF {
+		return nil
+	}
+	s.localReadEOF = true
+
+	if tcpConn, ok := s.LocalConn.(*net.TCPConn); ok {
+		return tcpConn.CloseRead()
+	}
+	return nil
+}
+
+func (s *SOCKSConnection) MarkLocalReadEOF() {
+	s.localCloseMu.Lock()
+	s.localReadEOF = true
+	s.localCloseMu.Unlock()
+}
+
+func (s *SOCKSConnection) BothLocalSidesClosed() bool {
+	s.localCloseMu.Lock()
+	defer s.localCloseMu.Unlock()
+	return s.localReadEOF && s.localWriteEOF
+}
+
+func (s *SOCKSConnection) WaitUntilClosed(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+	case <-s.closedC:
+	}
 }
 
 func (s *SOCKSConnectionStore) Get(id uint64) *SOCKSConnection {

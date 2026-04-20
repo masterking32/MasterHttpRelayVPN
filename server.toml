@@ -12,4 +12,5 @@ WORKER_COUNT = 4
 SESSION_IDLE_TIMEOUT_MS = 300000
 SOCKS_IDLE_TIMEOUT_MS = 120000
 READ_BODY_LIMIT_BYTES = 2097152
+MAX_SERVER_QUEUE_BYTES = 2097152
 # ==============================================================================

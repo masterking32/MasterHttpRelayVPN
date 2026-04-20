@@ -32,12 +32,14 @@ type Config struct {
 	WorkerCount           int
 	HTTPRequestTimeoutMS  int
 	WorkerPollIntervalMS  int
+	IdlePollIntervalMS    int
 	MaxQueueBytesPerSOCKS int
 	AckTimeoutMS          int
 	MaxRetryCount         int
 	SessionIdleTimeoutMS  int
 	SOCKSIdleTimeoutMS    int
 	ReadBodyLimitBytes    int
+	MaxServerQueueBytes   int
 }
 
 func Load(path string) (Config, error) {
@@ -53,12 +55,14 @@ func Load(path string) (Config, error) {
 		WorkerCount:           4,
 		HTTPRequestTimeoutMS:  15000,
 		WorkerPollIntervalMS:  200,
+		IdlePollIntervalMS:    1000,
 		MaxQueueBytesPerSOCKS: 1024 * 1024,
 		AckTimeoutMS:          5000,
 		MaxRetryCount:         5,
 		SessionIdleTimeoutMS:  5 * 60 * 1000,
 		SOCKSIdleTimeoutMS:    2 * 60 * 1000,
 		ReadBodyLimitBytes:    2 * 1024 * 1024,
+		MaxServerQueueBytes:   2 * 1024 * 1024,
 	}
 
 	file, err := os.Open(path)
@@ -151,6 +155,12 @@ func Load(path string) (Config, error) {
 				return Config{}, fmt.Errorf("parse WORKER_POLL_INTERVAL_MS: %w", err)
 			}
 			cfg.WorkerPollIntervalMS = interval
+		case "IDLE_POLL_INTERVAL_MS":
+			interval, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse IDLE_POLL_INTERVAL_MS: %w", err)
+			}
+			cfg.IdlePollIntervalMS = interval
 		case "MAX_QUEUE_BYTES_PER_SOCKS":
 			size, err := strconv.Atoi(value)
 			if err != nil {
@@ -187,6 +197,12 @@ func Load(path string) (Config, error) {
 				return Config{}, fmt.Errorf("parse READ_BODY_LIMIT_BYTES: %w", err)
 			}
 			cfg.ReadBodyLimitBytes = size
+		case "MAX_SERVER_QUEUE_BYTES":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MAX_SERVER_QUEUE_BYTES: %w", err)
+			}
+			cfg.MaxServerQueueBytes = size
 		}
 	}
 
@@ -216,6 +232,9 @@ func (c Config) ValidateClient() error {
 	if c.WorkerPollIntervalMS < 1 {
 		return fmt.Errorf("invalid WORKER_POLL_INTERVAL_MS: %d", c.WorkerPollIntervalMS)
 	}
+	if c.IdlePollIntervalMS < c.WorkerPollIntervalMS {
+		return fmt.Errorf("IDLE_POLL_INTERVAL_MS must be >= WORKER_POLL_INTERVAL_MS")
+	}
 	if c.AckTimeoutMS < 1 {
 		return fmt.Errorf("invalid ACK_TIMEOUT_MS: %d", c.AckTimeoutMS)
 	}
@@ -243,6 +262,9 @@ func (c Config) ValidateServer() error {
 	}
 	if c.ReadBodyLimitBytes < c.MaxChunkSize {
 		return fmt.Errorf("READ_BODY_LIMIT_BYTES must be >= MAX_CHUNK_SIZE")
+	}
+	if c.MaxServerQueueBytes < c.MaxChunkSize {
+		return fmt.Errorf("MAX_SERVER_QUEUE_BYTES must be >= MAX_CHUNK_SIZE")
 	}
 	return nil
 }
