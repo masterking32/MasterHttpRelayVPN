@@ -3,7 +3,7 @@ AES_ENCRYPTION_KEY = "c4710a45afed2fdc00e0522c70802e71"
 SERVER_HOST = "127.0.0.1"
 SERVER_PORT = 28080
 # ==============================================================================
-LOG_LEVEL = "INFO"
+LOG_LEVEL = "DEBUG"
 # ==============================================================================
 MAX_CHUNK_SIZE = 16384
 MAX_PACKETS_PER_BATCH = 32

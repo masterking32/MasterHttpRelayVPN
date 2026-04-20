@@ -8,6 +8,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -47,6 +48,12 @@ type SOCKSState struct {
 	ResetSeen        bool
 	ReceivedBytes    uint64
 	LastSequenceSeen uint64
+	OutboundSequence uint64
+	UpstreamConn     net.Conn
+	upstreamWriteMu  sync.Mutex
+	queueMu          sync.Mutex
+	OutboundQueue    []protocol.Packet
+	QueuedBytes      int
 }
 
 func New(cfg config.Config, lg *logger.Logger) *Server {
@@ -149,6 +156,9 @@ func (s *Server) processBatch(batch protocol.Batch) (protocol.Batch, error) {
 			responses = append(responses, *response)
 		}
 	}
+	for _, outbound := range s.drainSessionOutboundLocked(session) {
+		responses = append(responses, outbound)
+	}
 	s.mu.Unlock()
 
 	if len(responses) == 0 {
@@ -176,7 +186,6 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 				LastActivityAt:   now,
 				Target:           packet.Target,
 				ConnectSeen:      true,
-				ConnectAcked:     true,
 				LastSequenceSeen: packet.Sequence,
 			}
 			session.SOCKSConnections[packet.SOCKSID] = socksState
@@ -184,10 +193,23 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 			socksState.LastActivityAt = now
 			socksState.Target = packet.Target
 			socksState.ConnectSeen = true
-			socksState.ConnectAcked = true
 			if packet.Sequence > socksState.LastSequenceSeen {
 				socksState.LastSequenceSeen = packet.Sequence
 			}
+		}
+
+		if socksState.UpstreamConn == nil {
+			upstreamConn, err := net.DialTimeout("tcp", packet.Target.Address(), 10*time.Second)
+			if err != nil {
+				response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSUpstreamUnavailable)
+				response.SOCKSID = packet.SOCKSID
+				response.Sequence = packet.Sequence
+				response.Payload = []byte(err.Error())
+				return &response, nil
+			}
+			socksState.UpstreamConn = upstreamConn
+			socksState.ConnectAcked = true
+			go s.upstreamReadLoop(session.ClientSessionKey, socksState)
 		}
 
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSConnectAck)
@@ -201,6 +223,12 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		socksState.ReceivedBytes += uint64(len(packet.Payload))
 		if packet.Sequence > socksState.LastSequenceSeen {
 			socksState.LastSequenceSeen = packet.Sequence
+		}
+		if err := socksState.writeUpstream(packet.Payload); err != nil {
+			response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSRST)
+			response.SOCKSID = packet.SOCKSID
+			response.Sequence = packet.Sequence
+			return &response, nil
 		}
 
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSDataAck)
@@ -221,6 +249,7 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSCloseRead)
 		response.SOCKSID = packet.SOCKSID
 		response.Sequence = packet.Sequence
+		_ = socksState.closeUpstream()
 		return &response, nil
 
 	case protocol.PacketTypeSOCKSCloseWrite:
@@ -233,6 +262,7 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSCloseWrite)
 		response.SOCKSID = packet.SOCKSID
 		response.Sequence = packet.Sequence
+		_ = socksState.closeUpstream()
 		return &response, nil
 
 	case protocol.PacketTypeSOCKSRST:
@@ -245,6 +275,7 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSRST)
 		response.SOCKSID = packet.SOCKSID
 		response.Sequence = packet.Sequence
+		_ = socksState.closeUpstream()
 		delete(session.SOCKSConnections, packet.SOCKSID)
 		return &response, nil
 
@@ -318,6 +349,125 @@ func (s *Server) getOrCreateSOCKSStateLocked(session *ClientSession, packet prot
 	return socksState
 }
 
+func (s *Server) drainSessionOutboundLocked(session *ClientSession) []protocol.Packet {
+	packets := make([]protocol.Packet, 0)
+	for _, socksState := range session.SOCKSConnections {
+		packets = append(packets, socksState.drainOutbound(s.cfg.MaxPacketsPerBatch, s.cfg.MaxBatchBytes)...)
+	}
+	return packets
+}
+
+func (s *Server) upstreamReadLoop(clientSessionKey string, socksState *SOCKSState) {
+	if socksState.UpstreamConn == nil {
+		return
+	}
+
+	buffer := make([]byte, s.cfg.MaxChunkSize)
+	for {
+		n, err := socksState.UpstreamConn.Read(buffer)
+		if n > 0 {
+			chunk := append([]byte(nil), buffer[:n]...)
+			socksState.enqueueOutboundData(clientSessionKey, chunk, false)
+			socksState.LastActivityAt = time.Now()
+		}
+
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				socksState.enqueueControlPacket(clientSessionKey, protocol.PacketTypeSOCKSCloseRead, true)
+			} else {
+				socksState.enqueueControlPacket(clientSessionKey, protocol.PacketTypeSOCKSRST, true)
+			}
+			_ = socksState.closeUpstream()
+			return
+		}
+	}
+}
+
+func (s *SOCKSState) nextOutboundSequence() uint64 {
+	s.OutboundSequence++
+	return s.OutboundSequence
+}
+
+func (s *SOCKSState) enqueueOutboundData(clientSessionKey string, payload []byte, final bool) {
+	packet := protocol.NewPacket(clientSessionKey, protocol.PacketTypeSOCKSData)
+	packet.SOCKSID = s.ID
+	packet.Sequence = s.nextOutboundSequence()
+	packet.Final = final
+	packet.Payload = payload
+	s.enqueuePacket(packet)
+}
+
+func (s *SOCKSState) enqueueControlPacket(clientSessionKey string, packetType protocol.PacketType, final bool) {
+	packet := protocol.NewPacket(clientSessionKey, packetType)
+	packet.SOCKSID = s.ID
+	packet.Sequence = s.nextOutboundSequence()
+	packet.Final = final
+	s.enqueuePacket(packet)
+}
+
+func (s *SOCKSState) enqueuePacket(packet protocol.Packet) {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	s.OutboundQueue = append(s.OutboundQueue, packet)
+	s.QueuedBytes += len(packet.Payload)
+}
+
+func (s *SOCKSState) drainOutbound(maxPackets int, maxBytes int) []protocol.Packet {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+
+	if len(s.OutboundQueue) == 0 {
+		return nil
+	}
+
+	selected := make([]protocol.Packet, 0, maxPackets)
+	totalBytes := 0
+	count := 0
+	remaining := s.OutboundQueue[:0]
+
+	for _, packet := range s.OutboundQueue {
+		packetBytes := len(packet.Payload)
+		if count < maxPackets && (count == 0 || totalBytes+packetBytes <= maxBytes) {
+			selected = append(selected, packet)
+			totalBytes += packetBytes
+			count++
+			s.QueuedBytes -= packetBytes
+			continue
+		}
+		remaining = append(remaining, packet)
+	}
+
+	s.OutboundQueue = remaining
+	if s.QueuedBytes < 0 {
+		s.QueuedBytes = 0
+	}
+	return selected
+}
+
+func (s *SOCKSState) writeUpstream(payload []byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	s.upstreamWriteMu.Lock()
+	defer s.upstreamWriteMu.Unlock()
+	if s.UpstreamConn == nil {
+		return fmt.Errorf("upstream connection is not established")
+	}
+	_, err := s.UpstreamConn.Write(payload)
+	return err
+}
+
+func (s *SOCKSState) closeUpstream() error {
+	s.upstreamWriteMu.Lock()
+	defer s.upstreamWriteMu.Unlock()
+	if s.UpstreamConn == nil {
+		return nil
+	}
+	err := s.UpstreamConn.Close()
+	s.UpstreamConn = nil
+	return err
+}
+
 func (s *Server) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -343,6 +493,7 @@ func (s *Server) cleanupExpired() {
 	for clientSessionKey, session := range s.sessions {
 		for socksID, socksState := range session.SOCKSConnections {
 			if now.Sub(socksState.LastActivityAt) > socksTTL {
+				_ = socksState.closeUpstream()
 				delete(session.SOCKSConnections, socksID)
 				s.log.Debugf("<yellow>expired socks state session=<cyan>%s</cyan> socks_id=<cyan>%d</cyan></yellow>", clientSessionKey, socksID)
 			}

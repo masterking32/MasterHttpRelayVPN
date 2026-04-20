@@ -8,6 +8,7 @@ package client
 
 import (
 	"encoding/hex"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,13 +31,17 @@ type SOCKSConnection struct {
 	SOCKSUsername     string
 	HandshakeDone     bool
 	ConnectAccepted   bool
+	ConnectFailure    string
 	CloseReadSent     bool
 	CloseWriteSent    bool
 	ResetSent         bool
 
-	queueMu       sync.Mutex
-	OutboundQueue []*SOCKSOutboundQueueItem
-	QueuedBytes   int
+	LocalConn      net.Conn
+	localWriteMu   sync.Mutex
+	connectResultC chan error
+	queueMu        sync.Mutex
+	OutboundQueue  []*SOCKSOutboundQueueItem
+	QueuedBytes    int
 }
 
 func (s *SOCKSConnection) InitialPayloadHex() string {
@@ -68,12 +73,56 @@ func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string
 		CreatedAt:        now,
 		LastActivityAt:   now,
 		ClientAddress:    clientAddress,
+		connectResultC:   make(chan error, 1),
 	}
 
 	s.mu.Lock()
 	s.items[id] = socksConn
 	s.mu.Unlock()
 	return socksConn
+}
+
+func (s *SOCKSConnection) WaitForConnect(timeout time.Duration) error {
+	select {
+	case err := <-s.connectResultC:
+		return err
+	case <-time.After(timeout):
+		return ErrSOCKSConnectTimeout
+	}
+}
+
+func (s *SOCKSConnection) CompleteConnect(err error) {
+	select {
+	case s.connectResultC <- err:
+	default:
+	}
+}
+
+func (s *SOCKSConnection) WriteToLocal(payload []byte) error {
+	s.localWriteMu.Lock()
+	defer s.localWriteMu.Unlock()
+
+	if s.LocalConn == nil || len(payload) == 0 {
+		return nil
+	}
+	_, err := s.LocalConn.Write(payload)
+	return err
+}
+
+func (s *SOCKSConnection) CloseLocal() error {
+	s.localWriteMu.Lock()
+	defer s.localWriteMu.Unlock()
+
+	if s.LocalConn == nil {
+		return nil
+	}
+	return s.LocalConn.Close()
+}
+
+func (s *SOCKSConnectionStore) Get(id uint64) *SOCKSConnection {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.items[id]
 }
 
 func (s *SOCKSConnectionStore) Delete(id uint64) {

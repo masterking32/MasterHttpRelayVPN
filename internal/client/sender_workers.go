@@ -56,7 +56,7 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 		}
 
 		batch, selected := c.buildNextBatch()
-		if len(selected) == 0 {
+		if len(batch.Packets) == 0 {
 			time.Sleep(pollInterval)
 			continue
 		}
@@ -130,11 +130,37 @@ func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
 	}
 
 	if len(packets) == 0 {
+		if pingBatch, ok := c.buildPollBatch(connections); ok {
+			return pingBatch, nil
+		}
 		return protocol.Batch{}, nil
 	}
 
 	batch := protocol.NewBatch(c.clientSessionKey, protocol.NewBatchID(), packets)
 	return batch, selected
+}
+
+func (c *Client) buildPollBatch(connections []*SOCKSConnection) (protocol.Batch, bool) {
+	if len(connections) == 0 {
+		return protocol.Batch{}, false
+	}
+
+	now := time.Now()
+	nowUnixMS := now.UnixMilli()
+	lastUnixMS := c.lastPollUnixMS.Load()
+	minInterval := time.Duration(c.cfg.WorkerPollIntervalMS) * time.Millisecond
+	if lastUnixMS > 0 && nowUnixMS-lastUnixMS < minInterval.Milliseconds() {
+		return protocol.Batch{}, false
+	}
+
+	if !c.lastPollUnixMS.CompareAndSwap(lastUnixMS, nowUnixMS) {
+		return protocol.Batch{}, false
+	}
+
+	packet := protocol.NewPacket(c.clientSessionKey, protocol.PacketTypePing)
+	packet.Payload = []byte("poll")
+	batch := protocol.NewBatch(c.clientSessionKey, protocol.NewBatchID(), []protocol.Packet{packet})
+	return batch, true
 }
 
 func (c *Client) requeueSelected(selected []dequeuedPacket) {
@@ -168,6 +194,83 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if len(respBody) == 0 {
+		return nil
+	}
+
+	responseBatch, err := protocol.DecryptBatch(respBody, c.cfg.AESEncryptionKey)
+	if err != nil {
+		return err
+	}
+	if err := c.applyResponseBatch(responseBatch); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (c *Client) applyResponseBatch(batch protocol.Batch) error {
+	for _, packet := range batch.Packets {
+		if err := c.applyResponsePacket(packet); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) applyResponsePacket(packet protocol.Packet) error {
+	switch packet.Type {
+	case protocol.PacketTypePing, protocol.PacketTypePong, protocol.PacketTypeSOCKSDataAck:
+		return nil
+	}
+
+	socksConn := c.socksConnections.Get(packet.SOCKSID)
+	if socksConn == nil {
+		return nil
+	}
+
+	switch packet.Type {
+	case protocol.PacketTypeSOCKSConnectAck:
+		socksConn.ConnectAccepted = true
+		socksConn.LastActivityAt = time.Now()
+		socksConn.CompleteConnect(nil)
+		return nil
+
+	case protocol.PacketTypeSOCKSConnectFail,
+		protocol.PacketTypeSOCKSRuleSetDenied,
+		protocol.PacketTypeSOCKSNetworkUnreachable,
+		protocol.PacketTypeSOCKSHostUnreachable,
+		protocol.PacketTypeSOCKSConnectionRefused,
+		protocol.PacketTypeSOCKSTTLExpired,
+		protocol.PacketTypeSOCKSCommandUnsupported,
+		protocol.PacketTypeSOCKSAddressTypeUnsupported,
+		protocol.PacketTypeSOCKSAuthFailed,
+		protocol.PacketTypeSOCKSUpstreamUnavailable:
+		message := packet.Type.String()
+		if len(packet.Payload) > 0 {
+			message = string(packet.Payload)
+		}
+		socksConn.ConnectFailure = message
+		socksConn.CompleteConnect(fmt.Errorf("%s", message))
+		_ = socksConn.CloseLocal()
+		return nil
+
+	case protocol.PacketTypeSOCKSData:
+		socksConn.LastActivityAt = time.Now()
+		return socksConn.WriteToLocal(packet.Payload)
+
+	case protocol.PacketTypeSOCKSCloseRead, protocol.PacketTypeSOCKSCloseWrite, protocol.PacketTypeSOCKSRST:
+		socksConn.LastActivityAt = time.Now()
+		return socksConn.CloseLocal()
+
+	default:
+		return nil
+	}
 }

@@ -15,6 +15,7 @@ import (
 )
 
 var ErrSOCKSQueueFull = errors.New("socks outbound queue is full")
+var ErrSOCKSConnectTimeout = errors.New("socks connect timeout")
 
 type ChunkPolicy struct {
 	MaxChunkSize          int

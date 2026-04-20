@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"masterhttprelayvpn/internal/config"
@@ -28,6 +29,8 @@ type Client struct {
 
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
+
+	lastPollUnixMS atomic.Int64
 }
 
 func New(cfg config.Config, lg *logger.Logger) *Client {

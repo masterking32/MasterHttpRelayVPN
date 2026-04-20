@@ -47,6 +47,7 @@ func (c *Client) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
 	socksConn := c.socksConnections.New(c.clientSessionKey, conn.RemoteAddr().String(), c.chunkPolicy)
+	socksConn.LocalConn = conn
 	defer c.socksConnections.Delete(socksConn.ID)
 
 	c.log.Infof(
@@ -92,16 +93,21 @@ func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, socksConn *SOC
 	socksConn.HandshakeDone = true
 	socksConn.LastActivityAt = time.Now()
 
-	if err := writeSocksReply(conn, socksReplySuccess); err != nil {
-		return err
-	}
-
 	c.log.Infof(
 		"<green>socks_id=<cyan>%d</cyan> CONNECT target=<cyan>%s:%d</cyan> auth_method=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
 		socksConn.ID, socksConn.TargetHost, socksConn.TargetPort, socksConn.SOCKSAuthMethod, socksConn.ClientSessionKey,
 	)
 
 	if err := socksConn.EnqueuePacket(socksConn.BuildSOCKSConnectPacket()); err != nil {
+		return err
+	}
+
+	if err := socksConn.WaitForConnect(30 * time.Second); err != nil {
+		_ = writeSocksReply(conn, socksReplyGeneralFailure)
+		return err
+	}
+
+	if err := writeSocksReply(conn, socksReplySuccess); err != nil {
 		return err
 	}
 
@@ -253,7 +259,7 @@ func writeSocksReply(conn net.Conn, reply byte) error {
 
 func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socksConn *SOCKSConnection) error {
 	peekTimeout := 2 * time.Second
-	idleTimeout := 30 * time.Second
+	idleTimeout := 2 * time.Second
 	buf := make([]byte, 32*1024)
 
 	if err := conn.SetReadDeadline(time.Now().Add(peekTimeout)); err != nil {
@@ -310,11 +316,13 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socks
 
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				_ = socksConn.EnqueuePacket(socksConn.BuildSOCKSCloseWritePacket())
 				return nil
 			}
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				return nil
+				continue
 			}
+			_ = socksConn.EnqueuePacket(socksConn.BuildSOCKSRSTPacket())
 			return err
 		}
 	}
