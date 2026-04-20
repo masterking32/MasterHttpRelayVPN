@@ -62,6 +62,7 @@ func (c *Client) Run(ctx context.Context) error {
 	}()
 
 	var wg sync.WaitGroup
+	c.startSendWorkers(ctx, &wg)
 	defer wg.Wait()
 
 	for {

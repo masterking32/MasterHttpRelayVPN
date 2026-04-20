@@ -81,3 +81,14 @@ func (s *SOCKSConnectionStore) Delete(id uint64) {
 	delete(s.items, id)
 	s.mu.Unlock()
 }
+
+func (s *SOCKSConnectionStore) Snapshot() []*SOCKSConnection {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	items := make([]*SOCKSConnection, 0, len(s.items))
+	for _, item := range s.items {
+		items = append(items, item)
+	}
+	return items
+}

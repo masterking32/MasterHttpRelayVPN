@@ -97,6 +97,44 @@ func (s *SOCKSConnection) QueueSnapshot() (items int, bytes int) {
 	return len(s.OutboundQueue), s.QueuedBytes
 }
 
+func (s *SOCKSConnection) DequeuePacket() *SOCKSOutboundQueueItem {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+
+	if len(s.OutboundQueue) == 0 {
+		return nil
+	}
+
+	item := s.OutboundQueue[0]
+	s.OutboundQueue[0] = nil
+	s.OutboundQueue = s.OutboundQueue[1:]
+	s.QueuedBytes -= item.PayloadSize
+	if s.QueuedBytes < 0 {
+		s.QueuedBytes = 0
+	}
+	return item
+}
+
+func (s *SOCKSConnection) RequeueFront(items []*SOCKSOutboundQueueItem) {
+	if len(items) == 0 {
+		return
+	}
+
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+
+	front := make([]*SOCKSOutboundQueueItem, 0, len(items)+len(s.OutboundQueue))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		front = append(front, item)
+		s.QueuedBytes += item.PayloadSize
+	}
+	front = append(front, s.OutboundQueue...)
+	s.OutboundQueue = front
+}
+
 func splitPayloadChunks(payload []byte, maxChunkSize int) [][]byte {
 	if len(payload) == 0 || maxChunkSize <= 0 {
 		return nil
