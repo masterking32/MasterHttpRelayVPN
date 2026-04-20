@@ -8,6 +8,8 @@ package client
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"sync"
@@ -18,20 +20,24 @@ import (
 )
 
 type Client struct {
-	cfg      config.Config
-	log      *logger.Logger
-	sessions *SessionStore
+	cfg              config.Config
+	log              *logger.Logger
+	clientSessionKey string
+	streams          *StreamStore
 
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
 }
 
 func New(cfg config.Config, lg *logger.Logger) *Client {
+	clientSessionKey := generateClientSessionKey()
+
 	return &Client{
-		cfg:      cfg,
-		log:      lg,
-		sessions: NewSessionStore(),
-		conns:    make(map[net.Conn]struct{}),
+		cfg:              cfg,
+		log:              lg,
+		clientSessionKey: clientSessionKey,
+		streams:          NewStreamStore(),
+		conns:            make(map[net.Conn]struct{}),
 	}
 }
 
@@ -44,6 +50,7 @@ func (c *Client) Run(ctx context.Context) error {
 	defer ln.Close()
 
 	c.log.Infof("<green>SOCKS5 listener started on <cyan>%s</cyan></green>", addr)
+	c.log.Infof("<green>client session key: <cyan>%s</cyan></green>", c.clientSessionKey)
 
 	go func() {
 		<-ctx.Done()
@@ -102,4 +109,14 @@ func (c *Client) closeAllConns() {
 	for _, conn := range conns {
 		_ = conn.Close()
 	}
+}
+
+func generateClientSessionKey() string {
+	now := time.Now().UTC().Format("20060102T150405.000000000Z")
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Sprintf("%s_fallback", now)
+	}
+
+	return fmt.Sprintf("%s_%s", now, hex.EncodeToString(random))
 }

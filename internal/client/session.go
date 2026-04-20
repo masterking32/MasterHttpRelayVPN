@@ -13,58 +13,60 @@ import (
 	"time"
 )
 
-type Session struct {
-	ID              uint64
-	CreatedAt       time.Time
-	LastActivityAt  time.Time
-	ClientAddr      string
-	TargetHost      string
-	TargetPort      uint16
-	AddressType     byte
-	InitialPayload  []byte
-	BytesCaptured   int
-	AuthMethod      byte
-	UsernameUsed    string
-	HandshakeDone   bool
-	ConnectAccepted bool
+type Stream struct {
+	ID                uint64
+	ClientSessionKey  string
+	CreatedAt         time.Time
+	LastActivityAt    time.Time
+	ClientAddress     string
+	TargetHost        string
+	TargetPort        uint16
+	TargetAddressType byte
+	InitialPayload    []byte
+	BufferedBytes     int
+	SOCKSAuthMethod   byte
+	SOCKSUsername     string
+	HandshakeDone     bool
+	ConnectAccepted   bool
 }
 
-func (s *Session) InitialPayloadHex() string {
+func (s *Stream) InitialPayloadHex() string {
 	if len(s.InitialPayload) == 0 {
 		return ""
 	}
 	return hex.EncodeToString(s.InitialPayload)
 }
 
-type SessionStore struct {
+type StreamStore struct {
 	nextID atomic.Uint64
 	mu     sync.RWMutex
-	items  map[uint64]*Session
+	items  map[uint64]*Stream
 }
 
-func NewSessionStore() *SessionStore {
-	return &SessionStore{
-		items: make(map[uint64]*Session),
+func NewStreamStore() *StreamStore {
+	return &StreamStore{
+		items: make(map[uint64]*Stream),
 	}
 }
 
-func (s *SessionStore) New(clientAddr string) *Session {
+func (s *StreamStore) New(clientSessionKey string, clientAddress string) *Stream {
 	id := s.nextID.Add(1)
 	now := time.Now()
-	session := &Session{
-		ID:             id,
-		CreatedAt:      now,
-		LastActivityAt: now,
-		ClientAddr:     clientAddr,
+	stream := &Stream{
+		ID:               id,
+		ClientSessionKey: clientSessionKey,
+		CreatedAt:        now,
+		LastActivityAt:   now,
+		ClientAddress:    clientAddress,
 	}
 
 	s.mu.Lock()
-	s.items[id] = session
+	s.items[id] = stream
 	s.mu.Unlock()
-	return session
+	return stream
 }
 
-func (s *SessionStore) Delete(id uint64) {
+func (s *StreamStore) Delete(id uint64) {
 	s.mu.Lock()
 	delete(s.items, id)
 	s.mu.Unlock()
