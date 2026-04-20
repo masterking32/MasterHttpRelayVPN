@@ -10,6 +10,11 @@ A free tool that lets you access the internet freely by hiding your traffic behi
 
 ---
 
+# Announcement and Support Channel 📢
+For the latest news, releases, and project updates, follow our Telegram channel: Telegram Channel
+
+---
+
 ## How It Works
 
 ```
