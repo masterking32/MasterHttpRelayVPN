@@ -7,8 +7,12 @@
 package protocol
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -215,4 +219,62 @@ func (b Batch) Validate() error {
 	}
 
 	return nil
+}
+
+func EncryptBatch(batch Batch, keyText string) ([]byte, error) {
+	plain, err := json.Marshal(batch)
+	if err != nil {
+		return nil, err
+	}
+
+	key := sha256.Sum256([]byte(keyText))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, err
+	}
+
+	ciphertext := gcm.Seal(nil, nonce, plain, nil)
+	return append(nonce, ciphertext...), nil
+}
+
+func DecryptBatch(ciphertext []byte, keyText string) (Batch, error) {
+	key := sha256.Sum256([]byte(keyText))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return Batch{}, err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return Batch{}, err
+	}
+	if len(ciphertext) < gcm.NonceSize() {
+		return Batch{}, fmt.Errorf("encrypted body is shorter than nonce size")
+	}
+
+	nonce := ciphertext[:gcm.NonceSize()]
+	encrypted := ciphertext[gcm.NonceSize():]
+	plain, err := gcm.Open(nil, nonce, encrypted, nil)
+	if err != nil {
+		return Batch{}, err
+	}
+
+	var batch Batch
+	if err := json.Unmarshal(plain, &batch); err != nil {
+		return Batch{}, err
+	}
+	if err := batch.Validate(); err != nil {
+		return Batch{}, err
+	}
+	return batch, nil
 }

@@ -9,11 +9,6 @@ package client
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -73,7 +68,7 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 			continue
 		}
 
-		body, err := encryptBatch(batch, c.cfg.AESEncryptionKey)
+		body, err := protocol.EncryptBatch(batch, c.cfg.AESEncryptionKey)
 		if err != nil {
 			c.log.Errorf("<red>worker=<cyan>%d</cyan> encrypt batch failed: <cyan>%v</cyan></red>", w.id, err)
 			c.requeueSelected(selected)
@@ -175,30 +170,4 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
-}
-
-func encryptBatch(batch protocol.Batch, keyText string) ([]byte, error) {
-	plain, err := json.Marshal(batch)
-	if err != nil {
-		return nil, err
-	}
-
-	key := sha256.Sum256([]byte(keyText))
-	block, err := aes.NewCipher(key[:])
-	if err != nil {
-		return nil, err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
-
-	ciphertext := gcm.Seal(nil, nonce, plain, nil)
-	return append(nonce, ciphertext...), nil
 }

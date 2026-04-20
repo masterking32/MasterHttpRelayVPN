@@ -13,27 +13,30 @@ import (
 	"os/signal"
 	"syscall"
 
-	"masterhttprelayvpn/internal/client"
 	"masterhttprelayvpn/internal/config"
 	lg "masterhttprelayvpn/internal/logger"
+	"masterhttprelayvpn/internal/server"
 )
 
 func main() {
-	logger := lg.New("MasterHttpRelayVPN Client", "INFO")
+	logger := lg.New("MasterHttpRelayVPN Server", "INFO")
 
-	cfg, err := config.Load("config.toml")
+	cfg, err := config.Load("server.toml")
 	if err != nil {
 		logger.Fatalf("<red>load config: <cyan>%v</cyan></red>", err)
 	}
+	if err := cfg.ValidateServer(); err != nil {
+		logger.Fatalf("<red>validate server config: <cyan>%v</cyan></red>", err)
+	}
 
-	logger = lg.New("MasterHttpRelayVPN Client", cfg.LogLevel)
+	logger = lg.New("MasterHttpRelayVPN Server", cfg.LogLevel)
 
-	app := client.New(cfg, logger)
+	app := server.New(cfg, logger)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if err := app.Run(ctx); err != nil {
-		logger.Fatalf("<red>run client: <cyan>%v</cyan></red>", err)
+		logger.Fatalf("<red>run server: <cyan>%v</cyan></red>", err)
 	}
 }

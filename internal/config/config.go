@@ -18,6 +18,8 @@ import (
 type Config struct {
 	AESEncryptionKey      string
 	RelayURL              string
+	ServerHost            string
+	ServerPort            int
 	SOCKSHost             string
 	SOCKSPort             int
 	SOCKSAuth             bool
@@ -31,12 +33,17 @@ type Config struct {
 	HTTPRequestTimeoutMS  int
 	WorkerPollIntervalMS  int
 	MaxQueueBytesPerSOCKS int
+	SessionIdleTimeoutMS  int
+	SOCKSIdleTimeoutMS    int
+	ReadBodyLimitBytes    int
 }
 
 func Load(path string) (Config, error) {
 	cfg := Config{
 		SOCKSHost:             "127.0.0.1",
 		SOCKSPort:             1080,
+		ServerHost:            "127.0.0.1",
+		ServerPort:            28080,
 		LogLevel:              "INFO",
 		MaxChunkSize:          16 * 1024,
 		MaxPacketsPerBatch:    32,
@@ -45,6 +52,9 @@ func Load(path string) (Config, error) {
 		HTTPRequestTimeoutMS:  15000,
 		WorkerPollIntervalMS:  200,
 		MaxQueueBytesPerSOCKS: 1024 * 1024,
+		SessionIdleTimeoutMS:  5 * 60 * 1000,
+		SOCKSIdleTimeoutMS:    2 * 60 * 1000,
+		ReadBodyLimitBytes:    2 * 1024 * 1024,
 	}
 
 	file, err := os.Open(path)
@@ -73,6 +83,14 @@ func Load(path string) (Config, error) {
 			cfg.AESEncryptionKey = trimString(value)
 		case "RELAY_URL":
 			cfg.RelayURL = trimString(value)
+		case "SERVER_HOST":
+			cfg.ServerHost = trimString(value)
+		case "SERVER_PORT":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse SERVER_PORT: %w", err)
+			}
+			cfg.ServerPort = port
 		case "SOCKS_HOST":
 			cfg.SOCKSHost = trimString(value)
 		case "SOCKS_PORT":
@@ -135,6 +153,24 @@ func Load(path string) (Config, error) {
 				return Config{}, fmt.Errorf("parse MAX_QUEUE_BYTES_PER_SOCKS: %w", err)
 			}
 			cfg.MaxQueueBytesPerSOCKS = size
+		case "SESSION_IDLE_TIMEOUT_MS":
+			timeout, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse SESSION_IDLE_TIMEOUT_MS: %w", err)
+			}
+			cfg.SessionIdleTimeoutMS = timeout
+		case "SOCKS_IDLE_TIMEOUT_MS":
+			timeout, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse SOCKS_IDLE_TIMEOUT_MS: %w", err)
+			}
+			cfg.SOCKSIdleTimeoutMS = timeout
+		case "READ_BODY_LIMIT_BYTES":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse READ_BODY_LIMIT_BYTES: %w", err)
+			}
+			cfg.ReadBodyLimitBytes = size
 		}
 	}
 
@@ -142,47 +178,70 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 
-	if cfg.SOCKSAuth && (cfg.SOCKSUsername == "" || cfg.SOCKSPassword == "") {
-		return Config{}, fmt.Errorf("SOCKS auth enabled but username/password missing")
-	}
-
-	if cfg.SOCKSPort < 1 || cfg.SOCKSPort > 65535 {
-		return Config{}, fmt.Errorf("invalid SOCKS_PORT: %d", cfg.SOCKSPort)
-	}
-	if strings.TrimSpace(cfg.RelayURL) == "" {
-		return Config{}, fmt.Errorf("RELAY_URL is required")
-	}
-	if strings.TrimSpace(cfg.AESEncryptionKey) == "" {
-		return Config{}, fmt.Errorf("AES_ENCRYPTION_KEY is required")
-	}
-
-	if cfg.MaxChunkSize < 1 {
-		return Config{}, fmt.Errorf("invalid MAX_CHUNK_SIZE: %d", cfg.MaxChunkSize)
-	}
-
-	if cfg.MaxPacketsPerBatch < 1 {
-		return Config{}, fmt.Errorf("invalid MAX_PACKETS_PER_BATCH: %d", cfg.MaxPacketsPerBatch)
-	}
-
-	if cfg.MaxBatchBytes < cfg.MaxChunkSize {
-		return Config{}, fmt.Errorf("MAX_BATCH_BYTES must be >= MAX_CHUNK_SIZE")
-	}
-
-	if cfg.WorkerCount < 1 {
-		return Config{}, fmt.Errorf("invalid WORKER_COUNT: %d", cfg.WorkerCount)
-	}
-	if cfg.HTTPRequestTimeoutMS < 1 {
-		return Config{}, fmt.Errorf("invalid HTTP_REQUEST_TIMEOUT_MS: %d", cfg.HTTPRequestTimeoutMS)
-	}
-	if cfg.WorkerPollIntervalMS < 1 {
-		return Config{}, fmt.Errorf("invalid WORKER_POLL_INTERVAL_MS: %d", cfg.WorkerPollIntervalMS)
-	}
-
-	if cfg.MaxQueueBytesPerSOCKS < cfg.MaxChunkSize {
-		return Config{}, fmt.Errorf("MAX_QUEUE_BYTES_PER_SOCKS must be >= MAX_CHUNK_SIZE")
-	}
-
 	return cfg, nil
+}
+
+func (c Config) ValidateClient() error {
+	if err := c.validateShared(); err != nil {
+		return err
+	}
+	if c.SOCKSAuth && (c.SOCKSUsername == "" || c.SOCKSPassword == "") {
+		return fmt.Errorf("SOCKS auth enabled but username/password missing")
+	}
+	if c.SOCKSPort < 1 || c.SOCKSPort > 65535 {
+		return fmt.Errorf("invalid SOCKS_PORT: %d", c.SOCKSPort)
+	}
+	if strings.TrimSpace(c.RelayURL) == "" {
+		return fmt.Errorf("RELAY_URL is required")
+	}
+	if c.HTTPRequestTimeoutMS < 1 {
+		return fmt.Errorf("invalid HTTP_REQUEST_TIMEOUT_MS: %d", c.HTTPRequestTimeoutMS)
+	}
+	if c.WorkerPollIntervalMS < 1 {
+		return fmt.Errorf("invalid WORKER_POLL_INTERVAL_MS: %d", c.WorkerPollIntervalMS)
+	}
+	if c.MaxQueueBytesPerSOCKS < c.MaxChunkSize {
+		return fmt.Errorf("MAX_QUEUE_BYTES_PER_SOCKS must be >= MAX_CHUNK_SIZE")
+	}
+	return nil
+}
+
+func (c Config) ValidateServer() error {
+	if err := c.validateShared(); err != nil {
+		return err
+	}
+	if c.ServerPort < 1 || c.ServerPort > 65535 {
+		return fmt.Errorf("invalid SERVER_PORT: %d", c.ServerPort)
+	}
+	if c.SessionIdleTimeoutMS < 1 {
+		return fmt.Errorf("invalid SESSION_IDLE_TIMEOUT_MS: %d", c.SessionIdleTimeoutMS)
+	}
+	if c.SOCKSIdleTimeoutMS < 1 {
+		return fmt.Errorf("invalid SOCKS_IDLE_TIMEOUT_MS: %d", c.SOCKSIdleTimeoutMS)
+	}
+	if c.ReadBodyLimitBytes < c.MaxChunkSize {
+		return fmt.Errorf("READ_BODY_LIMIT_BYTES must be >= MAX_CHUNK_SIZE")
+	}
+	return nil
+}
+
+func (c Config) validateShared() error {
+	if strings.TrimSpace(c.AESEncryptionKey) == "" {
+		return fmt.Errorf("AES_ENCRYPTION_KEY is required")
+	}
+	if c.MaxChunkSize < 1 {
+		return fmt.Errorf("invalid MAX_CHUNK_SIZE: %d", c.MaxChunkSize)
+	}
+	if c.MaxPacketsPerBatch < 1 {
+		return fmt.Errorf("invalid MAX_PACKETS_PER_BATCH: %d", c.MaxPacketsPerBatch)
+	}
+	if c.MaxBatchBytes < c.MaxChunkSize {
+		return fmt.Errorf("MAX_BATCH_BYTES must be >= MAX_CHUNK_SIZE")
+	}
+	if c.WorkerCount < 1 {
+		return fmt.Errorf("invalid WORKER_COUNT: %d", c.WorkerCount)
+	}
+	return nil
 }
 
 func trimString(value string) string {

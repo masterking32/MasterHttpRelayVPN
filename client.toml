@@ -1,0 +1,20 @@
+# ==============================================================================
+AES_ENCRYPTION_KEY = "c4710a45afed2fdc00e0522c70802e71"
+RELAY_URL = "http://127.0.0.1/relay.php"
+# ==============================================================================
+LOG_LEVEL = "INFO"
+# ==============================================================================
+SOCKS_HOST = "127.0.0.1"
+SOCKS_PORT = 18001
+SOCKS_AUTH = false
+SOCKS_USERNAME = "your_socks_username_here"
+SOCKS_PASSWORD = "your_socks_password_here"
+# ==============================================================================
+MAX_CHUNK_SIZE = 16384
+MAX_PACKETS_PER_BATCH = 32
+MAX_BATCH_BYTES = 262144
+WORKER_COUNT = 4
+HTTP_REQUEST_TIMEOUT_MS = 15000
+WORKER_POLL_INTERVAL_MS = 200
+MAX_QUEUE_BYTES_PER_SOCKS = 1048576
+# ==============================================================================
