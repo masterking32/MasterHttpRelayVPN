@@ -105,6 +105,10 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read body failed", http.StatusBadRequest)
 		return
 	}
+	s.log.Debugf(
+		"<gray>relay request method=<cyan>%s</cyan> remote=<cyan>%s</cyan> body_bytes=<cyan>%d</cyan></gray>",
+		r.Method, r.RemoteAddr, len(body),
+	)
 
 	batch, err := protocol.DecryptBatch(body, s.cfg.AESEncryptionKey)
 	if err != nil {
@@ -112,6 +116,10 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid encrypted payload", http.StatusBadRequest)
 		return
 	}
+	s.log.Debugf(
+		"<gray>decrypted batch=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan> packets=<cyan>%d</cyan></gray>",
+		batch.BatchID, batch.ClientSessionKey, len(batch.Packets),
+	)
 
 	responseBatch, err := s.processBatch(batch)
 	if err != nil {
@@ -121,6 +129,10 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(responseBatch.Packets) == 0 {
+		s.log.Debugf(
+			"<gray>batch=<cyan>%s</cyan> produced no response packets client_session_key=<cyan>%s</cyan></gray>",
+			batch.BatchID, batch.ClientSessionKey,
+		)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -131,6 +143,10 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "response encryption failed", http.StatusInternalServerError)
 		return
 	}
+	s.log.Debugf(
+		"<gray>response batch=<cyan>%s</cyan> packets=<cyan>%d</cyan> encrypted_bytes=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></gray>",
+		responseBatch.BatchID, len(responseBatch.Packets), len(encrypted), responseBatch.ClientSessionKey,
+	)
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("X-Relay-Version", fmt.Sprintf("%d", protocol.CurrentVersion))
@@ -147,16 +163,28 @@ func (s *Server) processBatch(batch protocol.Batch) (protocol.Batch, error) {
 
 	responses := make([]protocol.Packet, 0, len(batch.Packets))
 	for _, packet := range batch.Packets {
+		s.log.Debugf(
+			"<gray>processing batch=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan> packet=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> payload_bytes=<cyan>%d</cyan> final=<cyan>%t</cyan></gray>",
+			batch.BatchID, batch.ClientSessionKey, packet.Type, packet.SOCKSID, packet.Sequence, len(packet.Payload), packet.Final,
+		)
 		response, err := s.processPacketLocked(session, packet, now)
 		if err != nil {
 			s.mu.Unlock()
 			return protocol.Batch{}, err
 		}
 		if response != nil {
+			s.log.Debugf(
+				"<gray>generated direct response packet=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> payload_bytes=<cyan>%d</cyan></gray>",
+				response.Type, response.SOCKSID, response.Sequence, len(response.Payload),
+			)
 			responses = append(responses, *response)
 		}
 	}
 	for _, outbound := range s.drainSessionOutboundLocked(session) {
+		s.log.Debugf(
+			"<gray>drained queued response packet=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> payload_bytes=<cyan>%d</cyan></gray>",
+			outbound.Type, outbound.SOCKSID, outbound.Sequence, len(outbound.Payload),
+		)
 		responses = append(responses, outbound)
 	}
 	s.mu.Unlock()
@@ -199,8 +227,16 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		}
 
 		if socksState.UpstreamConn == nil {
+			s.log.Debugf(
+				"<gray>dial upstream socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan></gray>",
+				packet.SOCKSID, packet.Target.Address(), session.ClientSessionKey,
+			)
 			upstreamConn, err := net.DialTimeout("tcp", packet.Target.Address(), 10*time.Second)
 			if err != nil {
+				s.log.Warnf(
+					"<yellow>upstream dial failed socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan> error=<cyan>%v</cyan></yellow>",
+					packet.SOCKSID, packet.Target.Address(), session.ClientSessionKey, err,
+				)
 				response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSUpstreamUnavailable)
 				response.SOCKSID = packet.SOCKSID
 				response.Sequence = packet.Sequence
@@ -209,6 +245,10 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 			}
 			socksState.UpstreamConn = upstreamConn
 			socksState.ConnectAcked = true
+			s.log.Infof(
+				"<green>upstream connected socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan></green>",
+				packet.SOCKSID, packet.Target.Address(), session.ClientSessionKey,
+			)
 			go s.upstreamReadLoop(session.ClientSessionKey, socksState)
 		}
 
@@ -224,7 +264,15 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		if packet.Sequence > socksState.LastSequenceSeen {
 			socksState.LastSequenceSeen = packet.Sequence
 		}
+		s.log.Debugf(
+			"<gray>write upstream socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> payload_bytes=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></gray>",
+			packet.SOCKSID, packet.Sequence, len(packet.Payload), session.ClientSessionKey,
+		)
 		if err := socksState.writeUpstream(packet.Payload); err != nil {
+			s.log.Warnf(
+				"<yellow>write upstream failed socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan> error=<cyan>%v</cyan></yellow>",
+				packet.SOCKSID, packet.Sequence, session.ClientSessionKey, err,
+			)
 			response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSRST)
 			response.SOCKSID = packet.SOCKSID
 			response.Sequence = packet.Sequence
@@ -249,6 +297,10 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSCloseRead)
 		response.SOCKSID = packet.SOCKSID
 		response.Sequence = packet.Sequence
+		s.log.Debugf(
+			"<gray>received close_read socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></gray>",
+			packet.SOCKSID, packet.Sequence, session.ClientSessionKey,
+		)
 		_ = socksState.closeUpstream()
 		return &response, nil
 
@@ -262,6 +314,10 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSCloseWrite)
 		response.SOCKSID = packet.SOCKSID
 		response.Sequence = packet.Sequence
+		s.log.Debugf(
+			"<gray>received close_write socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></gray>",
+			packet.SOCKSID, packet.Sequence, session.ClientSessionKey,
+		)
 		_ = socksState.closeUpstream()
 		return &response, nil
 
@@ -275,11 +331,19 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypeSOCKSRST)
 		response.SOCKSID = packet.SOCKSID
 		response.Sequence = packet.Sequence
+		s.log.Debugf(
+			"<gray>received rst socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></gray>",
+			packet.SOCKSID, packet.Sequence, session.ClientSessionKey,
+		)
 		_ = socksState.closeUpstream()
 		delete(session.SOCKSConnections, packet.SOCKSID)
 		return &response, nil
 
 	case protocol.PacketTypePing:
+		s.log.Debugf(
+			"<gray>received ping client_session_key=<cyan>%s</cyan> payload_bytes=<cyan>%d</cyan></gray>",
+			session.ClientSessionKey, len(packet.Payload),
+		)
 		response := protocol.NewPacket(session.ClientSessionKey, protocol.PacketTypePong)
 		response.Payload = append([]byte(nil), packet.Payload...)
 		return &response, nil
@@ -346,13 +410,24 @@ func (s *Server) getOrCreateSOCKSStateLocked(session *ClientSession, packet prot
 		LastSequenceSeen: packet.Sequence,
 	}
 	session.SOCKSConnections[packet.SOCKSID] = socksState
+	s.log.Debugf(
+		"<gray>created socks state client_session_key=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan></gray>",
+		session.ClientSessionKey, packet.SOCKSID, targetAddressForLog(packet.Target),
+	)
 	return socksState
 }
 
 func (s *Server) drainSessionOutboundLocked(session *ClientSession) []protocol.Packet {
 	packets := make([]protocol.Packet, 0)
 	for _, socksState := range session.SOCKSConnections {
-		packets = append(packets, socksState.drainOutbound(s.cfg.MaxPacketsPerBatch, s.cfg.MaxBatchBytes)...)
+		drained := socksState.drainOutbound(s.cfg.MaxPacketsPerBatch, s.cfg.MaxBatchBytes)
+		if len(drained) > 0 {
+			s.log.Debugf(
+				"<gray>drained outbound queue client_session_key=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> packets=<cyan>%d</cyan></gray>",
+				session.ClientSessionKey, socksState.ID, len(drained),
+			)
+		}
+		packets = append(packets, drained...)
 	}
 	return packets
 }
@@ -369,12 +444,25 @@ func (s *Server) upstreamReadLoop(clientSessionKey string, socksState *SOCKSStat
 			chunk := append([]byte(nil), buffer[:n]...)
 			socksState.enqueueOutboundData(clientSessionKey, chunk, false)
 			socksState.LastActivityAt = time.Now()
+			queueDepth, queueBytes := socksState.queueSnapshot()
+			s.log.Debugf(
+				"<gray>read upstream socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan> bytes=<cyan>%d</cyan> queue_depth=<cyan>%d</cyan> queue_bytes=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></gray>",
+				socksState.ID, targetAddressForLog(socksState.Target), n, queueDepth, queueBytes, clientSessionKey,
+			)
 		}
 
 		if err != nil {
 			if errors.Is(err, io.EOF) {
+				s.log.Debugf(
+					"<gray>upstream eof socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan></gray>",
+					socksState.ID, targetAddressForLog(socksState.Target), clientSessionKey,
+				)
 				socksState.enqueueControlPacket(clientSessionKey, protocol.PacketTypeSOCKSCloseRead, true)
 			} else {
+				s.log.Warnf(
+					"<yellow>upstream read failed socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan> error=<cyan>%v</cyan></yellow>",
+					socksState.ID, targetAddressForLog(socksState.Target), clientSessionKey, err,
+				)
 				socksState.enqueueControlPacket(clientSessionKey, protocol.PacketTypeSOCKSRST, true)
 			}
 			_ = socksState.closeUpstream()
@@ -410,6 +498,12 @@ func (s *SOCKSState) enqueuePacket(packet protocol.Packet) {
 	defer s.queueMu.Unlock()
 	s.OutboundQueue = append(s.OutboundQueue, packet)
 	s.QueuedBytes += len(packet.Payload)
+}
+
+func (s *SOCKSState) queueSnapshot() (items int, bytes int) {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	return len(s.OutboundQueue), s.QueuedBytes
 }
 
 func (s *SOCKSState) drainOutbound(maxPackets int, maxBytes int) []protocol.Packet {
@@ -463,8 +557,13 @@ func (s *SOCKSState) closeUpstream() error {
 	if s.UpstreamConn == nil {
 		return nil
 	}
+	target := targetAddressForLog(s.Target)
 	err := s.UpstreamConn.Close()
 	s.UpstreamConn = nil
+	if err == nil {
+		return nil
+	}
+	_ = target
 	return err
 }
 
@@ -495,7 +594,7 @@ func (s *Server) cleanupExpired() {
 			if now.Sub(socksState.LastActivityAt) > socksTTL {
 				_ = socksState.closeUpstream()
 				delete(session.SOCKSConnections, socksID)
-				s.log.Debugf("<yellow>expired socks state session=<cyan>%s</cyan> socks_id=<cyan>%d</cyan></yellow>", clientSessionKey, socksID)
+				s.log.Debugf("<yellow>expired socks state session=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan></yellow>", clientSessionKey, socksID, targetAddressForLog(socksState.Target))
 			}
 		}
 
@@ -519,4 +618,11 @@ func (s *Server) SessionSnapshot() (sessions int, socksConnections int) {
 
 func LocalListenAddress(host string, port int) string {
 	return net.JoinHostPort(host, fmt.Sprintf("%d", port))
+}
+
+func targetAddressForLog(target *protocol.Target) string {
+	if target == nil {
+		return ""
+	}
+	return target.Address()
 }
