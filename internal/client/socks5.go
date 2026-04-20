@@ -258,7 +258,7 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, sessi
 		session.InitialPayload = append([]byte(nil), buf[:n]...)
 		session.BytesCaptured += n
 		session.LastActivityAt = time.Now()
-		c.log.Infof(
+		c.log.Debugf(
 			"<green>session=<cyan>%d</cyan> captured initial payload bytes=<cyan>%d</cyan> target=<cyan>%s</cyan></green>",
 			session.ID, n, net.JoinHostPort(session.TargetHost, strconv.Itoa(int(session.TargetPort))),
 		)

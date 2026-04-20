@@ -22,12 +22,14 @@ type Config struct {
 	SOCKSAuth        bool
 	SOCKSUsername    string
 	SOCKSPassword    string
+	LogLevel         string
 }
 
 func Load(path string) (Config, error) {
 	cfg := Config{
 		SOCKSHost: "127.0.0.1",
 		SOCKSPort: 1080,
+		LogLevel:  "INFO",
 	}
 
 	file, err := os.Open(path)
@@ -72,6 +74,8 @@ func Load(path string) (Config, error) {
 			cfg.SOCKSUsername = trimString(value)
 		case "SOCKS_PASSWORD":
 			cfg.SOCKSPassword = trimString(value)
+		case "LOG_LEVEL":
+			cfg.LogLevel = trimString(value)
 		}
 	}
 

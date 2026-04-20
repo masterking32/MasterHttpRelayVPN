@@ -26,6 +26,8 @@ func main() {
 		logger.Fatalf("<red>load config: <cyan>%v</cyan></red>", err)
 	}
 
+	logger = lg.New("MasterHttpRelayVPN Client", cfg.LogLevel)
+
 	app := client.New(cfg, logger)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
