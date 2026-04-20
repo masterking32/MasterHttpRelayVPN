@@ -101,6 +101,7 @@ func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, socksConn *SOC
 	if err := socksConn.EnqueuePacket(socksConn.BuildSOCKSConnectPacket()); err != nil {
 		return err
 	}
+	c.signalSendWork()
 
 	if err := socksConn.WaitForConnect(ctx, 30*time.Second); err != nil {
 		_ = writeSocksReply(conn, socksReplyGeneralFailure)
@@ -279,6 +280,9 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socks
 		if enqueueErr != nil {
 			return enqueueErr
 		}
+		if enqueued > 0 {
+			c.signalSendWork()
+		}
 	} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
 		if errors.Is(err, io.EOF) {
 			return nil
@@ -312,19 +316,26 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socks
 			if enqueueErr != nil {
 				return enqueueErr
 			}
+			if enqueued > 0 {
+				c.signalSendWork()
+			}
 		}
 
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				socksConn.MarkLocalReadEOF()
-				_ = socksConn.EnqueuePacket(socksConn.BuildSOCKSCloseWritePacket())
+				if enqueueErr := socksConn.EnqueuePacket(socksConn.BuildSOCKSCloseWritePacket()); enqueueErr == nil {
+					c.signalSendWork()
+				}
 				socksConn.WaitUntilClosed(ctx)
 				return nil
 			}
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
 				continue
 			}
-			_ = socksConn.EnqueuePacket(socksConn.BuildSOCKSRSTPacket())
+			if enqueueErr := socksConn.EnqueuePacket(socksConn.BuildSOCKSRSTPacket()); enqueueErr == nil {
+				c.signalSendWork()
+			}
 			return err
 		}
 	}

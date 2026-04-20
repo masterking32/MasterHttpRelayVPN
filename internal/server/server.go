@@ -35,6 +35,7 @@ type ClientSession struct {
 	CreatedAt        time.Time
 	LastActivityAt   time.Time
 	SOCKSConnections map[uint64]*SOCKSState
+	DrainCursor      uint64
 }
 
 type SOCKSState struct {
@@ -342,6 +343,7 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 			packet.SOCKSID, packet.Sequence, session.ClientSessionKey,
 		)
 		_ = socksState.closeUpstream()
+		socksState.release()
 		delete(session.SOCKSConnections, packet.SOCKSID)
 		return &response, nil
 
@@ -426,13 +428,35 @@ func (s *Server) getOrCreateSOCKSStateLocked(session *ClientSession, packet prot
 
 func (s *Server) drainSessionOutboundLocked(session *ClientSession) []protocol.Packet {
 	packets := make([]protocol.Packet, 0)
+	if len(session.SOCKSConnections) == 0 {
+		return packets
+	}
+
+	states := make([]*SOCKSState, 0, len(session.SOCKSConnections))
 	for _, socksState := range session.SOCKSConnections {
-		drained := socksState.drainOutbound(s.cfg.MaxPacketsPerBatch, s.cfg.MaxBatchBytes)
+		states = append(states, socksState)
+	}
+
+	start := 0
+	if len(states) > 1 {
+		start = int(session.DrainCursor % uint64(len(states)))
+		session.DrainCursor++
+	}
+
+	remainingPackets := s.cfg.MaxPacketsPerBatch
+	remainingBytes := s.cfg.MaxBatchBytes
+	for offset := 0; offset < len(states) && remainingPackets > 0 && remainingBytes > 0; offset++ {
+		socksState := states[(start+offset)%len(states)]
+		drained := socksState.drainOutbound(remainingPackets, remainingBytes)
 		if len(drained) > 0 {
 			s.log.Debugf(
 				"<gray>drained outbound queue client_session_key=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> packets=<cyan>%d</cyan></gray>",
 				session.ClientSessionKey, socksState.ID, len(drained),
 			)
+			remainingPackets -= len(drained)
+			for _, packet := range drained {
+				remainingBytes -= len(packet.Payload)
+			}
 		}
 		packets = append(packets, drained...)
 	}
@@ -538,6 +562,17 @@ func (s *SOCKSState) forceResetPacket(clientSessionKey string) {
 	defer s.queueMu.Unlock()
 	s.OutboundQueue = []protocol.Packet{packet}
 	s.QueuedBytes = 0
+}
+
+func (s *SOCKSState) release() {
+	s.queueMu.Lock()
+	for i := range s.OutboundQueue {
+		s.OutboundQueue[i] = protocol.Packet{}
+	}
+	s.OutboundQueue = nil
+	s.QueuedBytes = 0
+	s.queueMu.Unlock()
+	s.Target = nil
 }
 
 func (s *SOCKSState) queueSnapshot() (items int, bytes int) {
@@ -661,9 +696,11 @@ func (s *Server) cleanupExpired() {
 	for clientSessionKey, session := range s.sessions {
 		for socksID, socksState := range session.SOCKSConnections {
 			if now.Sub(socksState.LastActivityAt) > socksTTL {
+				targetAddress := targetAddressForLog(socksState.Target)
 				_ = socksState.closeUpstream()
+				socksState.release()
 				delete(session.SOCKSConnections, socksID)
-				s.log.Debugf("<yellow>expired socks state session=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan></yellow>", clientSessionKey, socksID, targetAddressForLog(socksState.Target))
+				s.log.Debugf("<yellow>expired socks state session=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> target=<cyan>%s</cyan></yellow>", clientSessionKey, socksID, targetAddress)
 			}
 		}
 

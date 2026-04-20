@@ -29,8 +29,10 @@ type Client struct {
 
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
+	workCh chan struct{}
 
 	lastPollUnixMS atomic.Int64
+	batchCursor    atomic.Uint64
 }
 
 func New(cfg config.Config, lg *logger.Logger) *Client {
@@ -43,6 +45,7 @@ func New(cfg config.Config, lg *logger.Logger) *Client {
 		socksConnections: NewSOCKSConnectionStore(),
 		chunkPolicy:      newChunkPolicy(cfg),
 		conns:            make(map[net.Conn]struct{}),
+		workCh:           make(chan struct{}, 1),
 	}
 }
 
@@ -115,6 +118,13 @@ func (c *Client) closeAllConns() {
 
 	for _, conn := range conns {
 		_ = conn.Close()
+	}
+}
+
+func (c *Client) signalSendWork() {
+	select {
+	case c.workCh <- struct{}{}:
+	default:
 	}
 }
 

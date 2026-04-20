@@ -185,6 +185,20 @@ func (s *SOCKSConnection) WaitUntilClosed(ctx context.Context) {
 	}
 }
 
+func (s *SOCKSConnection) ResetTransportState() {
+	s.queueMu.Lock()
+	for i := range s.OutboundQueue {
+		s.OutboundQueue[i] = nil
+	}
+	s.OutboundQueue = nil
+	s.QueuedBytes = 0
+	clear(s.InFlight)
+	s.queueMu.Unlock()
+
+	s.InitialPayload = nil
+	s.BufferedBytes = 0
+}
+
 func (s *SOCKSConnectionStore) Get(id uint64) *SOCKSConnection {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -193,8 +207,14 @@ func (s *SOCKSConnectionStore) Get(id uint64) *SOCKSConnection {
 
 func (s *SOCKSConnectionStore) Delete(id uint64) {
 	s.mu.Lock()
+	item := s.items[id]
 	delete(s.items, id)
 	s.mu.Unlock()
+
+	if item != nil {
+		item.ResetTransportState()
+		_ = item.CloseLocal()
+	}
 }
 
 func (s *SOCKSConnectionStore) CloseAll() {
@@ -207,6 +227,7 @@ func (s *SOCKSConnectionStore) CloseAll() {
 	s.mu.Unlock()
 
 	for _, item := range items {
+		item.ResetTransportState()
 		_ = item.CloseLocal()
 	}
 }

@@ -58,14 +58,14 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 		c.reclaimExpiredInFlight()
 		batch, selected := c.buildNextBatch()
 		if len(batch.Packets) == 0 {
-			time.Sleep(pollInterval)
+			c.waitForSendWork(ctx, pollInterval)
 			continue
 		}
 
 		if err := batch.Validate(); err != nil {
 			c.log.Errorf("<red>worker=<cyan>%d</cyan> invalid batch: <cyan>%v</cyan></red>", w.id, err)
 			c.requeueSelected(selected)
-			time.Sleep(pollInterval)
+			c.waitForSendWork(ctx, pollInterval)
 			continue
 		}
 
@@ -75,14 +75,14 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 		if err != nil {
 			c.log.Errorf("<red>worker=<cyan>%d</cyan> encrypt batch failed: <cyan>%v</cyan></red>", w.id, err)
 			c.requeueSelected(selected)
-			time.Sleep(pollInterval)
+			c.waitForSendWork(ctx, pollInterval)
 			continue
 		}
 
 		if err := w.postBatch(ctx, c, batch, body); err != nil {
 			c.log.Warnf("<yellow>worker=<cyan>%d</cyan> send failed for batch=<cyan>%s</cyan>: <cyan>%v</cyan></yellow>", w.id, batch.BatchID, err)
 			c.requeueSelected(selected)
-			time.Sleep(pollInterval)
+			c.waitForSendWork(ctx, pollInterval)
 			continue
 		}
 
@@ -93,8 +93,28 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 	}
 }
 
+func (c *Client) waitForSendWork(ctx context.Context, interval time.Duration) {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-c.workCh:
+	case <-timer.C:
+	}
+}
+
 func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
 	connections := c.socksConnections.Snapshot()
+	if len(connections) == 0 {
+		return protocol.Batch{}, nil
+	}
+
+	start := 0
+	if len(connections) > 1 {
+		start = int(c.batchCursor.Add(1)-1) % len(connections)
+	}
+
 	selected := make([]dequeuedPacket, 0, c.cfg.MaxPacketsPerBatch)
 	packets := make([]protocol.Packet, 0, c.cfg.MaxPacketsPerBatch)
 	totalBytes := 0
@@ -102,10 +122,12 @@ func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
 	for len(selected) < c.cfg.MaxPacketsPerBatch {
 		progress := false
 
-		for _, socksConn := range connections {
+		for offset := 0; offset < len(connections); offset++ {
 			if len(selected) >= c.cfg.MaxPacketsPerBatch {
 				break
 			}
+
+			socksConn := connections[(start+offset)%len(connections)]
 
 			item := socksConn.DequeuePacket()
 			if item == nil {
@@ -175,6 +197,9 @@ func (c *Client) requeueSelected(selected []dequeuedPacket) {
 	for socksConn, identityKeys := range grouped {
 		socksConn.RequeueInFlightByIdentity(identityKeys)
 	}
+	if len(grouped) > 0 {
+		c.signalSendWork()
+	}
 }
 
 func (c *Client) markSelectedInFlight(selected []dequeuedPacket) {
@@ -196,9 +221,13 @@ func (c *Client) reclaimExpiredInFlight() {
 				"<yellow>socks_id=<cyan>%d</cyan> reclaimed inflight requeued=<cyan>%d</cyan> dropped=<cyan>%d</cyan></yellow>",
 				socksConn.ID, requeued, dropped,
 			)
+			if requeued > 0 {
+				c.signalSendWork()
+			}
 			if dropped > 0 {
 				socksConn.ConnectFailure = "max retry exceeded"
 				socksConn.CompleteConnect(fmt.Errorf("max retry exceeded"))
+				socksConn.ResetTransportState()
 				_ = socksConn.CloseLocal()
 			}
 		}
