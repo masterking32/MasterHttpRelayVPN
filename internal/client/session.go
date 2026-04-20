@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-type Stream struct {
+type SOCKSConnection struct {
 	ID                uint64
 	ClientSessionKey  string
 	CreatedAt         time.Time
@@ -24,35 +24,39 @@ type Stream struct {
 	TargetAddressType byte
 	InitialPayload    []byte
 	BufferedBytes     int
+	NextSequence      uint64
 	SOCKSAuthMethod   byte
 	SOCKSUsername     string
 	HandshakeDone     bool
 	ConnectAccepted   bool
+	CloseReadSent     bool
+	CloseWriteSent    bool
+	ResetSent         bool
 }
 
-func (s *Stream) InitialPayloadHex() string {
+func (s *SOCKSConnection) InitialPayloadHex() string {
 	if len(s.InitialPayload) == 0 {
 		return ""
 	}
 	return hex.EncodeToString(s.InitialPayload)
 }
 
-type StreamStore struct {
+type SOCKSConnectionStore struct {
 	nextID atomic.Uint64
 	mu     sync.RWMutex
-	items  map[uint64]*Stream
+	items  map[uint64]*SOCKSConnection
 }
 
-func NewStreamStore() *StreamStore {
-	return &StreamStore{
-		items: make(map[uint64]*Stream),
+func NewSOCKSConnectionStore() *SOCKSConnectionStore {
+	return &SOCKSConnectionStore{
+		items: make(map[uint64]*SOCKSConnection),
 	}
 }
 
-func (s *StreamStore) New(clientSessionKey string, clientAddress string) *Stream {
+func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string) *SOCKSConnection {
 	id := s.nextID.Add(1)
 	now := time.Now()
-	stream := &Stream{
+	socksConn := &SOCKSConnection{
 		ID:               id,
 		ClientSessionKey: clientSessionKey,
 		CreatedAt:        now,
@@ -61,12 +65,12 @@ func (s *StreamStore) New(clientSessionKey string, clientAddress string) *Stream
 	}
 
 	s.mu.Lock()
-	s.items[id] = stream
+	s.items[id] = socksConn
 	s.mu.Unlock()
-	return stream
+	return socksConn
 }
 
-func (s *StreamStore) Delete(id uint64) {
+func (s *SOCKSConnectionStore) Delete(id uint64) {
 	s.mu.Lock()
 	delete(s.items, id)
 	s.mu.Unlock()

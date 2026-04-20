@@ -23,7 +23,7 @@ type Client struct {
 	cfg              config.Config
 	log              *logger.Logger
 	clientSessionKey string
-	streams          *StreamStore
+	socksConnections *SOCKSConnectionStore
 
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
@@ -36,7 +36,7 @@ func New(cfg config.Config, lg *logger.Logger) *Client {
 		cfg:              cfg,
 		log:              lg,
 		clientSessionKey: clientSessionKey,
-		streams:          NewStreamStore(),
+		socksConnections: NewSOCKSConnectionStore(),
 		conns:            make(map[net.Conn]struct{}),
 	}
 }

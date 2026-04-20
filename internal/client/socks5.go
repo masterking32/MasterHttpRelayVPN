@@ -46,21 +46,21 @@ func (c *Client) handleConn(ctx context.Context, conn net.Conn) {
 	defer c.unregisterConn(conn)
 	defer conn.Close()
 
-	stream := c.streams.New(c.clientSessionKey, conn.RemoteAddr().String())
-	defer c.streams.Delete(stream.ID)
+	socksConn := c.socksConnections.New(c.clientSessionKey, conn.RemoteAddr().String())
+	defer c.socksConnections.Delete(socksConn.ID)
 
 	c.log.Infof(
-		"<green>accepted client <cyan>%s</cyan> stream=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
-		conn.RemoteAddr(), stream.ID, stream.ClientSessionKey,
+		"<green>accepted client <cyan>%s</cyan> socks_id=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
+		conn.RemoteAddr(), socksConn.ID, socksConn.ClientSessionKey,
 	)
 
-	if err := c.handleSOCKS5(ctx, conn, stream); err != nil {
-		c.log.Errorf("<red>stream=<cyan>%d</cyan> closed: <cyan>%v</cyan></red>", stream.ID, err)
+	if err := c.handleSOCKS5(ctx, conn, socksConn); err != nil {
+		c.log.Errorf("<red>socks_id=<cyan>%d</cyan> closed: <cyan>%v</cyan></red>", socksConn.ID, err)
 		return
 	}
 }
 
-func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, stream *Stream) error {
+func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, socksConn *SOCKSConnection) error {
 	version := make([]byte, 1)
 	if _, err := io.ReadFull(conn, version); err != nil {
 		return err
@@ -69,13 +69,13 @@ func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, stream *Stream
 		return fmt.Errorf("<red>unsupported SOCKS version: <cyan>%d</cyan></red>", version[0])
 	}
 
-	method, err := c.negotiateAuth(conn, stream)
+	method, err := c.negotiateAuth(conn, socksConn)
 	if err != nil {
 		return err
 	}
 
 	if method == socksMethodUserPass {
-		if err := c.handleUserPassAuth(conn, stream); err != nil {
+		if err := c.handleUserPassAuth(conn, socksConn); err != nil {
 			return err
 		}
 	}
@@ -85,26 +85,26 @@ func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, stream *Stream
 		return err
 	}
 
-	stream.TargetHost = targetHost
-	stream.TargetPort = targetPort
-	stream.TargetAddressType = atyp
-	stream.ConnectAccepted = true
-	stream.HandshakeDone = true
-	stream.LastActivityAt = time.Now()
+	socksConn.TargetHost = targetHost
+	socksConn.TargetPort = targetPort
+	socksConn.TargetAddressType = atyp
+	socksConn.ConnectAccepted = true
+	socksConn.HandshakeDone = true
+	socksConn.LastActivityAt = time.Now()
 
 	if err := writeSocksReply(conn, socksReplySuccess); err != nil {
 		return err
 	}
 
 	c.log.Infof(
-		"<green>stream=<cyan>%d</cyan> CONNECT target=<cyan>%s:%d</cyan> auth_method=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
-		stream.ID, stream.TargetHost, stream.TargetPort, stream.SOCKSAuthMethod, stream.ClientSessionKey,
+		"<green>socks_id=<cyan>%d</cyan> CONNECT target=<cyan>%s:%d</cyan> auth_method=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
+		socksConn.ID, socksConn.TargetHost, socksConn.TargetPort, socksConn.SOCKSAuthMethod, socksConn.ClientSessionKey,
 	)
 
-	return c.captureInitialPayload(ctx, conn, stream)
+	return c.captureInitialPayload(ctx, conn, socksConn)
 }
 
-func (c *Client) negotiateAuth(conn net.Conn, stream *Stream) (byte, error) {
+func (c *Client) negotiateAuth(conn net.Conn, socksConn *SOCKSConnection) (byte, error) {
 	countBuf := make([]byte, 1)
 	if _, err := io.ReadFull(conn, countBuf); err != nil {
 		return 0, err
@@ -134,11 +134,11 @@ func (c *Client) negotiateAuth(conn net.Conn, stream *Stream) (byte, error) {
 		return 0, errors.New("no acceptable auth method")
 	}
 
-	stream.SOCKSAuthMethod = selected
+	socksConn.SOCKSAuthMethod = selected
 	return selected, nil
 }
 
-func (c *Client) handleUserPassAuth(conn net.Conn, stream *Stream) error {
+func (c *Client) handleUserPassAuth(conn net.Conn, socksConn *SOCKSConnection) error {
 	header := make([]byte, 2)
 	if _, err := io.ReadFull(conn, header); err != nil {
 		return err
@@ -163,7 +163,7 @@ func (c *Client) handleUserPassAuth(conn net.Conn, stream *Stream) error {
 	}
 
 	ok := string(username) == c.cfg.SOCKSUsername && string(password) == c.cfg.SOCKSPassword
-	stream.SOCKSUsername = string(username)
+	socksConn.SOCKSUsername = string(username)
 	if ok {
 		_, err := conn.Write([]byte{socksUserPassVersion, socksAuthSuccess})
 		return err
@@ -247,7 +247,7 @@ func writeSocksReply(conn net.Conn, reply byte) error {
 	return err
 }
 
-func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, stream *Stream) error {
+func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socksConn *SOCKSConnection) error {
 	peekTimeout := 2 * time.Second
 	idleTimeout := 30 * time.Second
 	buf := make([]byte, 32*1024)
@@ -258,12 +258,12 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, strea
 
 	n, err := conn.Read(buf)
 	if err == nil && n > 0 {
-		stream.InitialPayload = append([]byte(nil), buf[:n]...)
-		stream.BufferedBytes += n
-		stream.LastActivityAt = time.Now()
+		socksConn.InitialPayload = append([]byte(nil), buf[:n]...)
+		socksConn.BufferedBytes += n
+		socksConn.LastActivityAt = time.Now()
 		c.log.Debugf(
-			"<green>stream=<cyan>%d</cyan> captured initial payload bytes=<cyan>%d</cyan> target=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan></green>",
-			stream.ID, n, net.JoinHostPort(stream.TargetHost, strconv.Itoa(int(stream.TargetPort))), stream.ClientSessionKey,
+			"<green>socks_id=<cyan>%d</cyan> captured initial payload bytes=<cyan>%d</cyan> target=<cyan>%s</cyan> client_session_key=<cyan>%s</cyan></green>",
+			socksConn.ID, n, net.JoinHostPort(socksConn.TargetHost, strconv.Itoa(int(socksConn.TargetPort))), socksConn.ClientSessionKey,
 		)
 	} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
 		if errors.Is(err, io.EOF) {
@@ -287,11 +287,11 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, strea
 
 		n, err := conn.Read(buf)
 		if n > 0 {
-			stream.BufferedBytes += n
-			stream.LastActivityAt = time.Now()
+			socksConn.BufferedBytes += n
+			socksConn.LastActivityAt = time.Now()
 			c.log.Debugf(
-				"<green>stream=<cyan>%d</cyan> buffered payload chunk=<cyan>%d</cyan> total=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
-				stream.ID, n, stream.BufferedBytes, stream.ClientSessionKey,
+				"<green>socks_id=<cyan>%d</cyan> buffered payload chunk=<cyan>%d</cyan> total=<cyan>%d</cyan> client_session_key=<cyan>%s</cyan></green>",
+				socksConn.ID, n, socksConn.BufferedBytes, socksConn.ClientSessionKey,
 			)
 		}
 
