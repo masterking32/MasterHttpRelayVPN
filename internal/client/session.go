@@ -91,12 +91,17 @@ func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string
 	return socksConn
 }
 
-func (s *SOCKSConnection) WaitForConnect(timeout time.Duration) error {
+func (s *SOCKSConnection) WaitForConnect(ctx context.Context, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
 	select {
 	case err := <-s.connectResultC:
 		return err
-	case <-time.After(timeout):
+	case <-timer.C:
 		return ErrSOCKSConnectTimeout
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -190,6 +195,20 @@ func (s *SOCKSConnectionStore) Delete(id uint64) {
 	s.mu.Lock()
 	delete(s.items, id)
 	s.mu.Unlock()
+}
+
+func (s *SOCKSConnectionStore) CloseAll() {
+	s.mu.Lock()
+	items := make([]*SOCKSConnection, 0, len(s.items))
+	for _, item := range s.items {
+		items = append(items, item)
+	}
+	s.items = make(map[uint64]*SOCKSConnection)
+	s.mu.Unlock()
+
+	for _, item := range items {
+		_ = item.CloseLocal()
+	}
 }
 
 func (s *SOCKSConnectionStore) Snapshot() []*SOCKSConnection {

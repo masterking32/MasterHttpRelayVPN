@@ -102,7 +102,7 @@ func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, socksConn *SOC
 		return err
 	}
 
-	if err := socksConn.WaitForConnect(30 * time.Second); err != nil {
+	if err := socksConn.WaitForConnect(ctx, 30*time.Second); err != nil {
 		_ = writeSocksReply(conn, socksReplyGeneralFailure)
 		return err
 	}

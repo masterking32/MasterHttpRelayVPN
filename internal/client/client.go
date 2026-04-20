@@ -62,6 +62,7 @@ func (c *Client) Run(ctx context.Context) error {
 		c.log.Infof("<yellow>shutdown requested, closing listener and active sessions</yellow>")
 		_ = ln.Close()
 		c.closeAllConns()
+		c.socksConnections.CloseAll()
 	}()
 
 	var wg sync.WaitGroup

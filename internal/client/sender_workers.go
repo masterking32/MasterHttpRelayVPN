@@ -226,6 +226,10 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 	}
 
 	if resp.StatusCode == http.StatusNoContent {
+		c.log.Debugf(
+			"<gray>worker=<cyan>%d</cyan> batch=<cyan>%s</cyan> got no-content response</gray>",
+			w.id, batch.BatchID,
+		)
 		return nil
 	}
 
@@ -241,6 +245,10 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 	if err != nil {
 		return err
 	}
+	c.log.Debugf(
+		"<gray>worker=<cyan>%d</cyan> received response batch=<cyan>%s</cyan> packets=<cyan>%d</cyan> bytes=<cyan>%d</cyan></gray>",
+		w.id, responseBatch.BatchID, len(responseBatch.Packets), len(respBody),
+	)
 	if err := c.applyResponseBatch(responseBatch); err != nil {
 		return err
 	}
@@ -249,6 +257,10 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 
 func (c *Client) applyResponseBatch(batch protocol.Batch) error {
 	for _, packet := range batch.Packets {
+		c.log.Debugf(
+			"<gray>apply response packet=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> payload_bytes=<cyan>%d</cyan> final=<cyan>%t</cyan></gray>",
+			packet.Type, packet.SOCKSID, packet.Sequence, len(packet.Payload), packet.Final,
+		)
 		if err := c.applyResponsePacket(packet); err != nil {
 			return err
 		}
@@ -272,6 +284,10 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 		_ = socksConn.AckPacket(packet)
 		socksConn.ConnectAccepted = true
 		socksConn.LastActivityAt = time.Now()
+		c.log.Debugf(
+			"<gray>connect ack applied socks_id=<cyan>%d</cyan></gray>",
+			socksConn.ID,
+		)
 		socksConn.CompleteConnect(nil)
 		return nil
 
@@ -291,6 +307,10 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 		}
 		_ = socksConn.AckPacket(packet)
 		socksConn.ConnectFailure = message
+		c.log.Warnf(
+			"<yellow>connect failure applied socks_id=<cyan>%d</cyan> reason=<cyan>%s</cyan></yellow>",
+			socksConn.ID, message,
+		)
 		socksConn.CompleteConnect(fmt.Errorf("%s", message))
 		_ = socksConn.CloseLocal()
 		return nil
@@ -298,15 +318,27 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 	case protocol.PacketTypeSOCKSDataAck:
 		_ = socksConn.AckPacket(packet)
 		socksConn.LastActivityAt = time.Now()
+		c.log.Debugf(
+			"<gray>data ack applied socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan></gray>",
+			socksConn.ID, packet.Sequence,
+		)
 		return nil
 
 	case protocol.PacketTypeSOCKSData:
 		socksConn.LastActivityAt = time.Now()
+		c.log.Debugf(
+			"<gray>writing to local socket socks_id=<cyan>%d</cyan> bytes=<cyan>%d</cyan></gray>",
+			socksConn.ID, len(packet.Payload),
+		)
 		return socksConn.WriteToLocal(packet.Payload)
 
 	case protocol.PacketTypeSOCKSCloseRead:
 		_ = socksConn.AckPacket(packet)
 		socksConn.LastActivityAt = time.Now()
+		c.log.Debugf(
+			"<gray>close_read applied socks_id=<cyan>%d</cyan></gray>",
+			socksConn.ID,
+		)
 		if err := socksConn.CloseLocalWrite(); err != nil {
 			return err
 		}
@@ -318,6 +350,10 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 	case protocol.PacketTypeSOCKSCloseWrite:
 		_ = socksConn.AckPacket(packet)
 		socksConn.LastActivityAt = time.Now()
+		c.log.Debugf(
+			"<gray>close_write applied socks_id=<cyan>%d</cyan></gray>",
+			socksConn.ID,
+		)
 		if socksConn.BothLocalSidesClosed() {
 			return socksConn.CloseLocal()
 		}
@@ -326,6 +362,10 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 	case protocol.PacketTypeSOCKSRST:
 		_ = socksConn.AckPacket(packet)
 		socksConn.LastActivityAt = time.Now()
+		c.log.Warnf(
+			"<yellow>rst applied socks_id=<cyan>%d</cyan></yellow>",
+			socksConn.ID,
+		)
 		return socksConn.CloseLocal()
 
 	default:
