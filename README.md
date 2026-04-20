@@ -2,210 +2,189 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-MasterHttpRelayVPN-blue?logo=github)](https://github.com/masterking32/MasterHttpRelayVPN)
 
-A local HTTP proxy that bypasses DPI (Deep Packet Inspection) censorship using **domain fronting**. The proxy tunnels all browser traffic through a CDN — the TLS SNI shows an allowed domain (e.g. `www.google.com`) while the encrypted HTTP Host header routes to your relay endpoint.
+**[🇮🇷 راهنمای فارسی (Persian)](README_FA.md)**
 
-> **Branch:** `python_testing` — Python implementation
+A free tool that lets you access the internet freely by hiding your traffic behind trusted websites like Google. No VPS or server needed — just a free Google account.
+
+> **How it works in simple terms:** Your browser talks to this tool on your computer. This tool disguises your traffic to look like normal Google traffic. The firewall/filter sees "google.com" and lets it pass. Behind the scenes, a free Google Apps Script relay fetches the real website for you.
+
+---
 
 ## How It Works
 
 ```
-Browser ──► Local Proxy ──► CDN (TLS SNI: www.google.com) ──► Your Relay ──► Target Website
-                              DPI sees: "www.google.com" ✓
-                              Actual destination: hidden
+Browser -> Local Proxy -> Google/CDN front -> Your relay -> Target website
+             |
+             +-> shows google.com to the network filter
 ```
 
-The DPI/firewall only sees the SNI field in the TLS handshake, which shows an innocuous, unblockable domain. The real destination is hidden inside the encrypted HTTP stream.
+In normal use, the browser sends traffic to the proxy running on your computer.
+The proxy sends that traffic through Google-facing infrastructure so the network only sees an allowed domain such as `www.google.com`.
+Your deployed relay then fetches the real website and sends the response back through the same path.
 
-## Supported Modes
+This means the filter sees normal-looking Google traffic, while the actual destination stays hidden inside the relay request.
 
-| Mode | Relay | Description |
-|------|-------|-------------|
-| `apps_script` | Google Apps Script | Fronts through `www.google.com` → `script.google.com`. Free, no server needed. |
-| `google_fronting` | Google Cloud Run | Fronts through Google IP → your Cloud Run service. |
-| `domain_fronting` | Cloudflare Worker | Classic domain fronting via Cloudflare CDN. |
-| `custom_domain` | Custom domain on CF | Direct connection to your custom domain on Cloudflare. |
+---
 
-## Quick Start
+## Step-by-Step Setup Guide
 
-### 1. Install
+### Step 1: Download This Project
 
 ```bash
-# Clone the repository
 git clone -b python_testing https://github.com/masterking32/MasterHttpRelayVPN.git
 cd MasterHttpRelayVPN
-
-# (Optional) Create a virtual environment
-python -m venv venv
-source venv/bin/activate   # Linux/macOS
-venv\Scripts\activate      # Windows
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-> **Note:** Python 3.10+ is required. Core functionality has no external dependencies. The optional packages (`cryptography`, `h2`) enable MITM interception and HTTP/2 multiplexing for the `apps_script` mode.
+Or download the ZIP from [GitHub](https://github.com/masterking32/MasterHttpRelayVPN/tree/python_testing) and extract it.
 
-### 2. Deploy the Relay (Code.gs — Google Apps Script)
+### Step 2: Set Up the Google Relay (Code.gs)
 
-Before running the local proxy, you need a relay endpoint. The easiest (free) option is Google Apps Script using the included `Code.gs` file.
+This is the "relay" that sits on Google's servers and fetches websites for you. It's free.
 
-1. Go to [Google Apps Script](https://script.google.com/) and create a **New project**.
-2. Delete the default code in the editor.
-3. Copy the entire contents of the [`Code.gs`](Code.gs) file from this repository and paste it into the Apps Script editor.
-4. **Change the `AUTH_KEY`** at the top of the script to your own strong secret:
+1. Open [Google Apps Script](https://script.google.com/) and sign in with your Google account.
+2. Click **New project**.
+3. **Delete** all the default code in the editor.
+4. Open the [`Code.gs`](Code.gs) file from this project, **copy everything**, and paste it into the Apps Script editor.
+5. **Important:** Change the password on this line to something only you know:
    ```javascript
-   const AUTH_KEY = "your-strong-secret-key";
+   const AUTH_KEY = "your-secret-password-here";
    ```
-5. Click **Deploy → New deployment**.
-6. Set the deployment type to **Web app**:
+6. Click **Deploy** → **New deployment**.
+7. Choose **Web app** as the type.
+8. Set:
    - **Execute as:** Me
    - **Who has access:** Anyone
-7. Click **Deploy** and copy the **Deployment ID** (not the URL).
-8. Paste the Deployment ID into your `config.json` as the `script_id` value.
+9. Click **Deploy**.
+10. **Copy the Deployment ID** (it looks like a long random string). You'll need it in the next step.
 
-> **Important:** The `AUTH_KEY` in `Code.gs` must match the `auth_key` in your `config.json` exactly.
+> ⚠️ Remember the password you set in step 5. You'll use the same password in the config file below.
 
-#### How Code.gs Works
+### Step 3: Configure
 
-`Code.gs` is a Google Apps Script relay that receives HTTP requests from the local proxy (via domain fronting) and forwards them to the actual target websites. It supports two modes:
+1. Copy the example config file:
+   ```bash
+   cp config.example.json config.json
+   ```
+   On Windows, you can also just copy & rename the file manually.
 
-| Mode | Request Format | Description |
-|------|---------------|-------------|
-| **Single** | `{ k, m, u, h, b, ct, r }` | Fetches one URL and returns `{ s, h, b }` (status, headers, body) |
-| **Batch** | `{ k, q: [{m,u,h,b,ct,r}, ...] }` | Fetches multiple URLs **in parallel** using `UrlFetchApp.fetchAll()` and returns `{ q: [{s,h,b}, ...] }` |
+2. Open `config.json` in any text editor and fill in your values:
+   ```json
+   {
+     "mode": "apps_script",
+     "google_ip": "216.239.38.120",
+     "front_domain": "www.google.com",
+     "script_id": "PASTE_YOUR_DEPLOYMENT_ID_HERE",
+     "auth_key": "your-secret-password-here",
+     "listen_host": "127.0.0.1",
+     "listen_port": 8085,
+     "log_level": "INFO",
+     "verify_ssl": true
+   }
+   ```
+   - `script_id` → Paste the Deployment ID from Step 2.
+   - `auth_key` → The **same password** you set in `Code.gs`.
 
-**Request fields:**
-- `k` — Auth key (must match `AUTH_KEY`)
-- `m` — HTTP method (`GET`, `POST`, etc.)
-- `u` — Target URL
-- `h` — Request headers (object)
-- `b` — Request body (base64-encoded)
-- `ct` — Content-Type
-- `r` — Follow redirects (`true`/`false`)
-
-**Response fields:**
-- `s` — HTTP status code
-- `h` — Response headers
-- `b` — Response body (base64-encoded)
-- `e` — Error message (if any)
-
-#### Updating Code.gs
-
-When you update `Code.gs`, you must create a **new deployment** in Apps Script (Deploy → New deployment) and update the `script_id` in your `config.json` with the new Deployment ID. Editing the code alone does not update a live deployment.
-
-### 3. Configure the Local Proxy
-
-```bash
-cp config.example.json config.json
-```
-
-Edit `config.json` with your values:
-
-```json
-{
-  "mode": "apps_script",
-  "google_ip": "216.239.38.120",
-  "front_domain": "www.google.com",
-  "script_id": "YOUR_APPS_SCRIPT_DEPLOYMENT_ID",
-  "auth_key": "your-strong-secret-key",
-  "listen_host": "127.0.0.1",
-  "listen_port": 8085,
-  "log_level": "INFO",
-  "verify_ssl": true
-}
-```
-
-### 4. Run
+### Step 4: Run
 
 ```bash
 python main.py
 ```
 
-### 5. Configure Your Browser
+You should see a message saying the proxy is running on `127.0.0.1:8085`.
 
-Set your browser's HTTP proxy to `127.0.0.1:8085` (or whatever `listen_host`:`listen_port` you configured).
+### Step 5: Set Up Your Browser
 
-For `apps_script` mode, you also need to install the generated CA certificate (`ca/ca.crt`) in your browser's trusted root CAs.
+Set your browser to use the proxy:
 
-## Configuration Reference
+- **Proxy Address:** `127.0.0.1`
+- **Proxy Port:** `8085`
+- **Type:** HTTP
 
-### Required Fields
+**How to set proxy in common browsers:**
+- **Firefox:** Settings → General → Network Settings → Manual proxy → enter `127.0.0.1` port `8085` for HTTP Proxy → check "Also use this proxy for HTTPS"
+- **Chrome/Edge:** Uses system proxy. Go to Windows Settings → Network → Proxy → Manual setup → enter `127.0.0.1:8085`
+- **Or** use extensions like [FoxyProxy](https://addons.mozilla.org/en-US/firefox/addon/foxyproxy-standard/) or [SwitchyOmega](https://chrome.google.com/webstore/detail/proxy-switchyomega/) for easier switching.
 
-| Field | Description |
-|-------|-------------|
-| `mode` | One of: `apps_script`, `google_fronting`, `domain_fronting`, `custom_domain` |
-| `auth_key` | Shared secret between the proxy and your relay endpoint (must match `AUTH_KEY` in `Code.gs`) |
+### Step 6: Install the CA Certificate (Required for HTTPS)
 
-### Mode-Specific Fields
+When using `apps_script` mode, the tool needs to decrypt and re-encrypt HTTPS traffic locally. It generates a CA certificate on first run. **You must install it** or you'll see security warnings on every website.
 
-| Field | Modes | Description |
-|-------|-------|-------------|
-| `script_id` | `apps_script` | Your deployed Apps Script Deployment ID (or array of IDs for load balancing) |
-| `worker_host` | `domain_fronting`, `google_fronting` | Your Worker/Cloud Run hostname |
-| `custom_domain` | `custom_domain` | Your custom domain on Cloudflare |
-| `front_domain` | `domain_fronting`, `google_fronting`, `apps_script` | The domain shown in TLS SNI (default: `www.google.com`) |
-| `google_ip` | `google_fronting`, `apps_script` | Google IP to connect to (default: `216.239.38.120`) |
+The certificate file is created at `ca/ca.crt` inside the project folder after the first run.
 
-### Optional Fields
+#### Windows
+1. Double-click `ca/ca.crt`.
+2. Click **Install Certificate**.
+3. Choose **Current User** (or Local Machine for all users).
+4. Select **Place all certificates in the following store** → click **Browse** → choose **Trusted Root Certification Authorities**.
+5. Click **Next** → **Finish**.
+6. Restart your browser.
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `listen_host` | `127.0.0.1` | Local proxy bind address |
-| `listen_port` | `8080` | Local proxy port |
-| `log_level` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+#### macOS
+1. Double-click `ca/ca.crt` — it opens in Keychain Access.
+2. It goes into the **login** keychain.
+3. Find the certificate, double-click it.
+4. Expand **Trust** → set **When using this certificate** to **Always Trust**.
+5. Close and enter your password. Restart your browser.
+
+#### Linux (Ubuntu/Debian)
+```bash
+sudo cp ca/ca.crt /usr/local/share/ca-certificates/masterhttp-relay.crt
+sudo update-ca-certificates
+```
+Restart your browser.
+
+#### Firefox (All Platforms)
+Firefox uses its own certificate store, so even after OS-level install you need to do this:
+1. Go to **Settings** → **Privacy & Security** → **Certificates** → **View Certificates**.
+2. Go to the **Authorities** tab → click **Import**.
+3. Select `ca/ca.crt` from the project folder.
+4. Check **Trust this CA to identify websites** → click **OK**.
+
+> ⚠️ **Security note:** This certificate only works locally on your machine. Don't share the `ca/` folder with anyone. If you want to start fresh, delete the `ca/` folder and the tool will generate a new one.
+
+---
+
+## Modes Overview
+
+| Mode | What You Need | Description |
+|------|--------------|-------------|
+| `apps_script` | Free Google account | **Easiest.** Uses Google Apps Script as relay. No server needed. |
+| `google_fronting` | Google Cloud Run service | Uses your own Cloud Run service behind Google's CDN. |
+| `domain_fronting` | Cloudflare Worker | Uses a Cloudflare Worker as relay. |
+| `custom_domain` | Custom domain on Cloudflare | Connects directly to your domain on Cloudflare. |
+
+Most users should use **`apps_script`** mode — it's free and requires no server.
+
+---
+
+## Configuration Options
+
+### Main Settings
+
+| Setting | What It Does |
+|---------|-------------|
+| `mode` | Which relay type to use (see table above) |
+| `auth_key` | Password shared between your computer and the relay |
+| `script_id` | Your Google Apps Script Deployment ID |
+| `listen_host` | Where to listen (`127.0.0.1` = only this computer) |
+| `listen_port` | Which port to listen on (default: `8085`) |
+| `log_level` | How much detail to show: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+
+### Advanced Settings
+
+| Setting | Default | What It Does |
+|---------|---------|-------------|
+| `google_ip` | `216.239.38.120` | Google IP address to connect through |
+| `front_domain` | `www.google.com` | Domain shown to the firewall/filter |
 | `verify_ssl` | `true` | Verify TLS certificates |
-| `worker_path` | `""` | URL path prefix for the worker |
-| `script_ids` | — | Array of Apps Script IDs for round-robin load balancing |
+| `worker_host` | — | Hostname for Cloudflare/Cloud Run modes |
+| `custom_domain` | — | Your custom domain on Cloudflare |
+| `script_ids` | — | Multiple Script IDs for load balancing (array) |
 
-## Environment Variables
+### Load Balancing
 
-All settings can be overridden via environment variables (useful for containers/CI):
-
-| Variable | Overrides |
-|----------|-----------|
-| `DFT_CONFIG` | Config file path |
-| `DFT_AUTH_KEY` | `auth_key` |
-| `DFT_SCRIPT_ID` | `script_id` |
-| `DFT_PORT` | `listen_port` |
-| `DFT_HOST` | `listen_host` |
-| `DFT_LOG_LEVEL` | `log_level` |
-
-## CLI Usage
-
-```
-usage: domainfront-tunnel [-h] [-c CONFIG] [-p PORT] [--host HOST]
-                          [--log-level {DEBUG,INFO,WARNING,ERROR}] [-v]
-
-options:
-  -c, --config CONFIG   Path to config file (default: config.json)
-  -p, --port PORT       Override listen port
-  --host HOST           Override listen host
-  --log-level LEVEL     Override log level
-  -v, --version         Show version and exit
-```
-
-### Examples
-
-```bash
-# Basic usage
-python main.py
-
-# Custom config file
-python main.py -c /path/to/my-config.json
-
-# Override port
-python main.py -p 9090
-
-# Debug logging
-python main.py --log-level DEBUG
-
-# Using environment variables
-DFT_AUTH_KEY=my-secret DFT_PORT=9090 python main.py
-```
-
-## Multiple Script IDs (Load Balancing)
-
-For higher throughput, deploy multiple copies of `Code.gs` to separate Apps Script projects and use an array:
+To increase speed, deploy `Code.gs` multiple times to different Apps Script projects and use all their IDs:
 
 ```json
 {
@@ -217,7 +196,24 @@ For higher throughput, deploy multiple copies of `Code.gs` to separate Apps Scri
 }
 ```
 
-The proxy will distribute requests across all IDs in round-robin fashion.
+---
+
+## Updating the Google Relay
+
+If you change `Code.gs`, you must **create a new deployment** in Google Apps Script (Deploy → New deployment) and **update the `script_id`** in your `config.json`. Just editing the code does not update the live version.
+
+---
+
+## Command Line Options
+
+```bash
+python main.py                          # Normal start
+python main.py -p 9090                  # Use port 9090 instead
+python main.py --log-level DEBUG        # Show detailed logs
+python main.py -c /path/to/config.json  # Use a different config file
+```
+
+---
 
 ## Architecture
 
@@ -230,36 +226,43 @@ The proxy will distribute requests across all IDs in round-robin fashion.
                   MITM (optional)      Host: relay          Return response
 ```
 
-### Project Structure
+---
 
-| File | Purpose |
-|------|---------|
-| `main.py` | Entry point, config loading, CLI |
-| `proxy_server.py` | Local HTTP/CONNECT proxy server |
-| `domain_fronter.py` | Domain fronting engine, connection pooling, relay logic |
-| `h2_transport.py` | HTTP/2 multiplexed transport (optional, for performance) |
-| `mitm.py` | MITM certificate manager for HTTPS interception |
-| `ws.py` | WebSocket frame encoder/decoder (RFC 6455) |
-| `Code.gs` | Google Apps Script relay — deploy this to Apps Script as your relay endpoint |
-| `config.example.json` | Example configuration file — copy to `config.json` |
-| `requirements.txt` | Python dependencies |
+## Project Files
 
-## Performance Features
+| File | What It Does |
+|------|-------------|
+| `main.py` | Starts the proxy |
+| `proxy_server.py` | Handles browser connections |
+| `domain_fronter.py` | Disguises traffic through CDN/Google |
+| `h2_transport.py` | Faster connections using HTTP/2 (optional) |
+| `mitm.py` | Handles HTTPS certificate generation |
+| `ws.py` | WebSocket support |
+| `Code.gs` | The relay script you deploy to Google Apps Script |
+| `config.example.json` | Example config — copy to `config.json` |
 
-- **HTTP/2 multiplexing**: Single TLS connection handles 100+ concurrent requests
-- **Connection pooling**: Pre-warmed TLS connection pool with automatic maintenance
-- **Request batching**: Groups concurrent requests into single relay calls (uses batch mode in `Code.gs`)
-- **Request coalescing**: Deduplicates identical concurrent GET requests
-- **Parallel range downloads**: Splits large downloads into concurrent chunks
-- **Response caching**: LRU cache for static assets (configurable, 50 MB default)
+---
 
-## Security Notes
+## Troubleshooting
 
-- **Never commit `config.json`** — it contains your `auth_key`. The `.gitignore` excludes it.
-- **Change the default `AUTH_KEY` in `Code.gs`** before deploying — the default value is not secure.
-- The `ca/` directory contains your generated CA private key. Keep it secure.
-- Use a strong, unique `auth_key` to prevent unauthorized use of your relay.
-- Set `listen_host` to `127.0.0.1` (not `0.0.0.0`) unless you need LAN access.
+| Problem | Solution |
+|---------|----------|
+| "Config not found" | Copy `config.example.json` to `config.json` and fill in your values |
+| Browser shows certificate errors | Install the CA certificate (see Step 6 above) |
+| "unauthorized" error | Make sure `auth_key` in `config.json` matches `AUTH_KEY` in `Code.gs` exactly |
+| Connection timeout | Try a different `google_ip` or check your internet connection |
+| Slow browsing | Deploy multiple `Code.gs` copies and use `script_ids` array for load balancing |
+
+---
+
+## Security Tips
+
+- **Never share your `config.json`** — it has your password in it.
+- **Change the default `AUTH_KEY`** in `Code.gs` before deploying.
+- **Don't share the `ca/` folder** — it contains your private certificate key.
+- Keep `listen_host` as `127.0.0.1` so only your computer can use the proxy.
+
+---
 
 ## Special Thanks
 
