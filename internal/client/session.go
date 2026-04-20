@@ -42,6 +42,7 @@ type SOCKSConnection struct {
 	queueMu        sync.Mutex
 	OutboundQueue  []*SOCKSOutboundQueueItem
 	QueuedBytes    int
+	InFlight       map[string]*SOCKSOutboundQueueItem
 }
 
 func (s *SOCKSConnection) InitialPayloadHex() string {
@@ -74,6 +75,7 @@ func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string
 		LastActivityAt:   now,
 		ClientAddress:    clientAddress,
 		connectResultC:   make(chan error, 1),
+		InFlight:         make(map[string]*SOCKSOutboundQueueItem),
 	}
 
 	s.mu.Lock()

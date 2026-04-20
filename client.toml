@@ -17,4 +17,6 @@ WORKER_COUNT = 4
 HTTP_REQUEST_TIMEOUT_MS = 15000
 WORKER_POLL_INTERVAL_MS = 200
 MAX_QUEUE_BYTES_PER_SOCKS = 1048576
+ACK_TIMEOUT_MS = 5000
+MAX_RETRY_COUNT = 5
 # ==============================================================================

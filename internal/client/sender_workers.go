@@ -55,6 +55,7 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 		default:
 		}
 
+		c.reclaimExpiredInFlight()
 		batch, selected := c.buildNextBatch()
 		if len(batch.Packets) == 0 {
 			time.Sleep(pollInterval)
@@ -67,6 +68,8 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 			time.Sleep(pollInterval)
 			continue
 		}
+
+		c.markSelectedInFlight(selected)
 
 		body, err := protocol.EncryptBatch(batch, c.cfg.AESEncryptionKey)
 		if err != nil {
@@ -164,13 +167,41 @@ func (c *Client) buildPollBatch(connections []*SOCKSConnection) (protocol.Batch,
 }
 
 func (c *Client) requeueSelected(selected []dequeuedPacket) {
+	grouped := make(map[*SOCKSConnection][]string)
+	for _, entry := range selected {
+		grouped[entry.socksConn] = append(grouped[entry.socksConn], entry.item.IdentityKey)
+	}
+
+	for socksConn, identityKeys := range grouped {
+		socksConn.RequeueInFlightByIdentity(identityKeys)
+	}
+}
+
+func (c *Client) markSelectedInFlight(selected []dequeuedPacket) {
 	grouped := make(map[*SOCKSConnection][]*SOCKSOutboundQueueItem)
 	for _, entry := range selected {
 		grouped[entry.socksConn] = append(grouped[entry.socksConn], entry.item)
 	}
-
 	for socksConn, items := range grouped {
-		socksConn.RequeueFront(items)
+		socksConn.MarkInFlight(items)
+	}
+}
+
+func (c *Client) reclaimExpiredInFlight() {
+	ackTimeout := time.Duration(c.cfg.AckTimeoutMS) * time.Millisecond
+	for _, socksConn := range c.socksConnections.Snapshot() {
+		requeued, dropped := socksConn.ReclaimExpiredInFlight(ackTimeout, c.cfg.MaxRetryCount)
+		if requeued > 0 || dropped > 0 {
+			c.log.Warnf(
+				"<yellow>socks_id=<cyan>%d</cyan> reclaimed inflight requeued=<cyan>%d</cyan> dropped=<cyan>%d</cyan></yellow>",
+				socksConn.ID, requeued, dropped,
+			)
+			if dropped > 0 {
+				socksConn.ConnectFailure = "max retry exceeded"
+				socksConn.CompleteConnect(fmt.Errorf("max retry exceeded"))
+				_ = socksConn.CloseLocal()
+			}
+		}
 	}
 }
 
@@ -227,7 +258,7 @@ func (c *Client) applyResponseBatch(batch protocol.Batch) error {
 
 func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 	switch packet.Type {
-	case protocol.PacketTypePing, protocol.PacketTypePong, protocol.PacketTypeSOCKSDataAck:
+	case protocol.PacketTypePing, protocol.PacketTypePong:
 		return nil
 	}
 
@@ -238,6 +269,7 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 
 	switch packet.Type {
 	case protocol.PacketTypeSOCKSConnectAck:
+		_ = socksConn.AckPacket(packet)
 		socksConn.ConnectAccepted = true
 		socksConn.LastActivityAt = time.Now()
 		socksConn.CompleteConnect(nil)
@@ -257,9 +289,15 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 		if len(packet.Payload) > 0 {
 			message = string(packet.Payload)
 		}
+		_ = socksConn.AckPacket(packet)
 		socksConn.ConnectFailure = message
 		socksConn.CompleteConnect(fmt.Errorf("%s", message))
 		_ = socksConn.CloseLocal()
+		return nil
+
+	case protocol.PacketTypeSOCKSDataAck:
+		_ = socksConn.AckPacket(packet)
+		socksConn.LastActivityAt = time.Now()
 		return nil
 
 	case protocol.PacketTypeSOCKSData:
@@ -267,6 +305,7 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 		return socksConn.WriteToLocal(packet.Payload)
 
 	case protocol.PacketTypeSOCKSCloseRead, protocol.PacketTypeSOCKSCloseWrite, protocol.PacketTypeSOCKSRST:
+		_ = socksConn.AckPacket(packet)
 		socksConn.LastActivityAt = time.Now()
 		return socksConn.CloseLocal()
 
