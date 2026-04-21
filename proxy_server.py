@@ -12,6 +12,7 @@ Supports:
 import asyncio
 import logging
 import re
+import ssl
 import time
 
 from domain_fronter import DomainFronter
@@ -113,6 +114,10 @@ class ProxyServer:
         self._http_tunnels: dict = {}
         self._tunnel_lock = asyncio.Lock()
 
+        # hosts override — DNS fake-map: domain/suffix → IP
+        # Checked before any real DNS lookup; supports exact and suffix matching.
+        self._hosts: dict[str, str] = config.get("hosts", {})
+
         if self.mode == "apps_script":
             try:
                 from mitm import MITMCertManager
@@ -185,9 +190,16 @@ class ProxyServer:
         await writer.drain()
 
         if self.mode == "apps_script":
-            # Google services: tunnel directly (no MITM) to avoid
-            # Google's anti-bot detection from Apps Script IPs/UA.
-            if self._is_google_domain(host):
+            override_ip = self._sni_rewrite_ip(host)
+            if override_ip:
+                # SNI-blocked domain: MITM-decrypt from browser, then
+                # re-connect to the override IP with SNI=front_domain so
+                # the ISP never sees the blocked hostname in the TLS handshake.
+                log.info("SNI-rewrite tunnel → %s via %s (SNI: %s)",
+                         host, override_ip, self.fronter.sni_host)
+                await self._do_sni_rewrite_tunnel(host, port, reader, writer,
+                                                  connect_ip=override_ip)
+            elif self._is_google_domain(host):
                 log.info("Direct tunnel → %s (Google domain, skipping relay)", host)
                 await self._do_direct_tunnel(host, port, reader, writer)
             else:
@@ -195,11 +207,70 @@ class ProxyServer:
         else:
             await self.fronter.tunnel(host, port, reader, writer)
 
+    # ── Hosts override (fake DNS) ─────────────────────────────────
+
+    # Built-in list of domains that must be reached via Google's frontend IP
+    # with SNI rewritten to `front_domain` (default: www.google.com).
+    # These are Google-owned services whose real SNI is DPI-blocked in some
+    # countries, but that Google serves from the same edge IP as www.google.com.
+    # Users don't need to configure anything — any host matching one of these
+    # suffixes is transparently SNI-rewritten to the configured `google_ip`.
+    # Config's "hosts" map still takes precedence (for custom overrides).
+    _SNI_REWRITE_SUFFIXES = (
+        "youtube.com",
+        "youtu.be",
+        "youtube-nocookie.com",
+        "ytimg.com",
+        "ggpht.com",
+        "gvt1.com",
+        "gvt2.com",
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "google-analytics.com",
+        "googletagmanager.com",
+        "googletagservices.com",
+        "fonts.googleapis.com",
+    )
+
+    def _sni_rewrite_ip(self, host: str) -> str | None:
+        """Return the IP to SNI-rewrite `host` through, or None.
+
+        Order of precedence:
+          1. Explicit entry in config `hosts` map (exact or suffix match).
+          2. Built-in `_SNI_REWRITE_SUFFIXES` → mapped to config `google_ip`.
+        """
+        ip = self._hosts_ip(host)
+        if ip:
+            return ip
+        h = host.lower().rstrip(".")
+        for suffix in self._SNI_REWRITE_SUFFIXES:
+            if h == suffix or h.endswith("." + suffix):
+                return self.fronter.connect_host  # configured google_ip
+        return None
+
+    def _hosts_ip(self, host: str) -> str | None:
+        """Return override IP for host if defined in config 'hosts', else None.
+
+        Supports exact match and suffix match (e.g. 'youtube.com' matches
+        'www.youtube.com', 'm.youtube.com', etc.).
+        """
+        h = host.lower().rstrip(".")
+        if h in self._hosts:
+            return self._hosts[h]
+        # suffix match: check every parent label
+        parts = h.split(".")
+        for i in range(1, len(parts)):
+            parent = ".".join(parts[i:])
+            if parent in self._hosts:
+                return self._hosts[parent]
+        return None
+
     # ── Google domain detection ───────────────────────────────────
 
-    # Only domains whose SNI the ISP does NOT block.
-    # YouTube/googlevideo are blocked by SNI inspection in Iran,
-    # so they MUST go through the MITM relay (domain-fronted).
+    # Only domains whose SNI the ISP does NOT block — direct tunnel is safe.
+    # YouTube/googlevideo SNIs are blocked; they go through _do_sni_rewrite_tunnel
+    # via the hosts map instead.
     _GOOGLE_SUFFIXES = (
         ".google.com", ".google.co",
         ".googleapis.com", ".gstatic.com",
@@ -223,21 +294,22 @@ class ProxyServer:
 
     async def _do_direct_tunnel(self, host: str, port: int,
                                 reader: asyncio.StreamReader,
-                                writer: asyncio.StreamWriter):
+                                writer: asyncio.StreamWriter,
+                                connect_ip: str | None = None):
         """Pipe raw TLS bytes directly to the target server.
 
-        Used for Google domains: the browser's TLS goes end-to-end
-        with Google, preserving real User-Agent and avoiding
-        Apps Script IP/bot-detection issues.
+        connect_ip overrides DNS: the TCP connection goes to that IP
+        while the browser's TLS (SNI=host) is piped through unchanged.
+        Defaults to the configured google_ip for Google-category domains.
         """
-        google_ip = self.fronter.connect_host
+        target_ip = connect_ip or self.fronter.connect_host
         try:
             r_remote, w_remote = await asyncio.wait_for(
-                asyncio.open_connection(google_ip, port), timeout=10
+                asyncio.open_connection(target_ip, port), timeout=10
             )
         except Exception as e:
             log.error("Direct tunnel connect failed (%s via %s): %s",
-                      host, google_ip, e)
+                      host, target_ip, e)
             return
 
         async def pipe(src, dst, label):
@@ -261,6 +333,76 @@ class ProxyServer:
         await asyncio.gather(
             pipe(reader, w_remote, f"client→{host}"),
             pipe(r_remote, writer, f"{host}→client"),
+        )
+
+    # ── SNI-rewrite tunnel ────────────────────────────────────────
+
+    async def _do_sni_rewrite_tunnel(self, host: str, port: int, reader, writer,
+                                     connect_ip: str | None = None):
+        """MITM-decrypt TLS from browser, then re-encrypt toward connect_ip
+        using SNI=front_domain (e.g. www.google.com).
+
+        The ISP only ever sees SNI=www.google.com in the outgoing handshake,
+        hiding the blocked hostname (e.g. www.youtube.com).
+        """
+        target_ip = connect_ip or self.fronter.connect_host
+        sni_out   = self.fronter.sni_host  # e.g. "www.google.com"
+
+        # Step 1: MITM — accept TLS from the browser
+        ssl_ctx_server = self.mitm.get_server_context(host)
+        loop = asyncio.get_event_loop()
+        transport = writer.transport
+        protocol  = transport.get_protocol()
+        try:
+            new_transport = await loop.start_tls(
+                transport, protocol, ssl_ctx_server, server_side=True,
+            )
+        except Exception as e:
+            log.debug("SNI-rewrite TLS accept failed (%s): %s", host, e)
+            return
+        writer._transport = new_transport
+
+        # Step 2: open outgoing TLS to target IP with the safe SNI
+        ssl_ctx_client = ssl.create_default_context()
+        if not self.fronter.verify_ssl:
+            ssl_ctx_client.check_hostname = False
+            ssl_ctx_client.verify_mode = ssl.CERT_NONE
+        try:
+            r_out, w_out = await asyncio.wait_for(
+                asyncio.open_connection(
+                    target_ip, port,
+                    ssl=ssl_ctx_client,
+                    server_hostname=sni_out,
+                ),
+                timeout=10,
+            )
+        except Exception as e:
+            log.error("SNI-rewrite outbound connect failed (%s via %s): %s",
+                      host, target_ip, e)
+            return
+
+        # Step 3: pipe application-layer bytes between the two TLS sessions
+        async def pipe(src, dst, label):
+            try:
+                while True:
+                    data = await src.read(65536)
+                    if not data:
+                        break
+                    dst.write(data)
+                    await dst.drain()
+            except (ConnectionError, asyncio.CancelledError):
+                pass
+            except Exception as exc:
+                log.debug("Pipe %s ended: %s", label, exc)
+            finally:
+                try:
+                    dst.close()
+                except Exception:
+                    pass
+
+        await asyncio.gather(
+            pipe(reader, w_out, f"client→{host}"),
+            pipe(r_out,  writer, f"{host}→client"),
         )
 
     # ── MITM CONNECT (apps_script mode) ───────────────────────────
@@ -430,44 +572,61 @@ class ProxyServer:
 
     @staticmethod
     def _inject_cors_headers(response: bytes, origin: str) -> bytes:
-        """Overwrite any existing CORS headers and inject permissive ones."""
+        """Inject CORS headers only if the upstream response lacks them.
+
+        We must NOT overwrite the origin server's CORS headers: sites like
+        x.com return carefully-scoped Access-Control-Allow-Headers that list
+        specific custom headers (e.g. x-csrf-token). Replacing them with
+        wildcards together with Allow-Credentials: true makes browsers
+        reject the response (per the Fetch spec, "*" is literal when
+        credentials are included), which the site then blames on privacy
+        extensions. So we only fill in what the server omitted.
+        """
         sep = b"\r\n\r\n"
         if sep not in response:
             return response
         header_section, body = response.split(sep, 1)
         lines = header_section.decode(errors="replace").split("\r\n")
-        # Drop existing Access-Control-* headers
-        lines = [ln for ln in lines if not ln.lower().startswith("access-control-")]
+
+        existing = {ln.split(":", 1)[0].strip().lower()
+                    for ln in lines if ":" in ln}
+
+        # If the upstream already handled CORS, leave it completely alone.
+        if "access-control-allow-origin" in existing:
+            return response
+
+        # Otherwise inject a minimal, credential-safe set (no wildcards,
+        # since wildcards combined with credentials are invalid).
         allow_origin = origin or "*"
-        lines += [
-            f"Access-Control-Allow-Origin: {allow_origin}",
-            "Access-Control-Allow-Credentials: true",
-            "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS",
-            "Access-Control-Allow-Headers: *",
-            "Access-Control-Expose-Headers: *",
-        ]
-        return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
+        additions = [f"Access-Control-Allow-Origin: {allow_origin}"]
+        if allow_origin != "*":
+            additions.append("Access-Control-Allow-Credentials: true")
+            additions.append("Vary: Origin")
+        return ("\r\n".join(lines + additions) + "\r\n\r\n").encode() + body
 
     async def _relay_smart(self, method, url, headers, body):
         """Choose optimal relay strategy based on request type.
 
-        ALL GET requests go through relay_parallel: it does one probe
-        request and only splits into parallel chunks if the response
-        is large and the server supports ranges. Small responses still
-        use a single request (no overhead).
+        - GET requests for likely-large downloads use parallel-range.
+        - All other requests (API calls, HTML, JSON, XHR) go through the
+          single-request relay. This avoids injecting a synthetic Range
+          header on normal traffic, which some origins honor by returning
+          206 — breaking fetch()/XHR on sites like x.com or Cloudflare
+          challenge pages.
         """
         if method == "GET" and not body:
-            # Skip parallel-range if the client already sent a Range header
-            # (we must forward it verbatim, not modify it).
+            # Respect client's own Range header verbatim.
             if headers:
                 for k in headers:
                     if k.lower() == "range":
                         return await self.fronter.relay(
                             method, url, headers, body
                         )
-            return await self.fronter.relay_parallel(
-                method, url, headers, body
-            )
+            # Only probe with Range when the URL looks like a big file.
+            if self._is_likely_download(url, headers):
+                return await self.fronter.relay_parallel(
+                    method, url, headers, body
+                )
         return await self.fronter.relay(method, url, headers, body)
 
     def _is_likely_download(self, url: str, headers: dict) -> bool:

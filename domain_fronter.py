@@ -319,7 +319,8 @@ class DomainFronter:
         """Send periodic pings to keep Apps Script warm + H2 connection alive."""
         while True:
             try:
-                await asyncio.sleep(180)  # 3 minutes (ahead of Google's ~4min timeout)
+                await asyncio.sleep(240)  # 4 minutes — saves ~90 quota hits/day vs 180s
+                                          # Google's container timeout is ~5 min idle
                 if not self._h2 or not self._h2.is_connected:
                     try:
                         await self._h2.reconnect()
@@ -581,7 +582,9 @@ class DomainFronter:
 
         status, resp_hdrs, resp_body = self._split_raw_response(first_resp)
 
-        # No range support → return the single response as-is
+        # No range support → return the single response as-is (status 200
+        # from the origin). The client sent a plain GET, so 200 is what it
+        # expects.
         if status != 206:
             return first_resp
 
@@ -589,12 +592,16 @@ class DomainFronter:
         content_range = resp_hdrs.get("content-range", "")
         m = re.search(r"/(\d+)", content_range)
         if not m:
-            return first_resp
+            # Can't parse — downgrade to 200 so the client (which sent a
+            # plain GET) doesn't get confused by 206 + Content-Range.
+            return self._rewrite_206_to_200(first_resp)
         total_size = int(m.group(1))
 
-        # Small file: probe already fetched it all
+        # Small file: probe already fetched it all. MUST rewrite to 200
+        # because the client never sent a Range header — a stray 206 here
+        # breaks fetch()/XHR on sites like x.com and Cloudflare challenges.
         if total_size <= chunk_size or len(resp_body) >= total_size:
-            return first_resp
+            return self._rewrite_206_to_200(first_resp)
 
         # Calculate remaining ranges
         ranges = []
@@ -664,6 +671,40 @@ class DomainFronter:
         result += f"Content-Length: {len(full_body)}\r\n"
         result += "\r\n"
         return result.encode() + full_body
+
+    @staticmethod
+    def _rewrite_206_to_200(raw: bytes) -> bytes:
+        """Rewrite a 206 Partial Content response to 200 OK.
+
+        Used when we probed with a synthetic Range header but the client
+        never asked for one. Handing a 206 back to the browser for a plain
+        GET breaks XHR/fetch on sites like x.com and Cloudflare challenges
+        (they see it as an aborted/partial response). We drop the
+        Content-Range header and set Content-Length to the body size.
+        """
+        sep = b"\r\n\r\n"
+        if sep not in raw:
+            return raw
+        header_section, body = raw.split(sep, 1)
+        lines = header_section.decode(errors="replace").split("\r\n")
+        if not lines:
+            return raw
+        # Replace status line
+        first = lines[0]
+        if " 206" in first:
+            lines[0] = first.replace(" 206 Partial Content", " 200 OK")\
+                             .replace(" 206", " 200 OK")
+        # Drop Content-Range and recalculate Content-Length
+        filtered = [lines[0]]
+        for ln in lines[1:]:
+            low = ln.lower()
+            if low.startswith("content-range:"):
+                continue
+            if low.startswith("content-length:"):
+                continue
+            filtered.append(ln)
+        filtered.append(f"Content-Length: {len(body)}")
+        return ("\r\n".join(filtered) + "\r\n\r\n").encode() + body
 
     def _build_payload(self, method, url, headers, body):
         """Build the JSON relay payload dict."""
@@ -1127,11 +1168,41 @@ class DomainFronter:
         skip = {"transfer-encoding", "connection", "keep-alive",
                 "content-length", "content-encoding"}
         for k, v in resp_headers.items():
-            if k.lower() not in skip:
-                result += f"{k}: {v}\r\n"
+            if k.lower() in skip:
+                continue
+            # Apps Script returns multi-valued headers (e.g. Set-Cookie) as a
+            # JavaScript array. Emit each value as its own header line.
+            # A single string that holds multiple Set-Cookie values joined
+            # with ", " also needs to be split, otherwise the browser sees
+            # one malformed cookie and sites like x.com fail.
+            values = v if isinstance(v, list) else [v]
+            if k.lower() == "set-cookie":
+                expanded = []
+                for item in values:
+                    expanded.extend(self._split_set_cookie(str(item)))
+                values = expanded
+            for val in values:
+                result += f"{k}: {val}\r\n"
         result += f"Content-Length: {len(resp_body)}\r\n"
         result += "\r\n"
         return result.encode() + resp_body
+
+    @staticmethod
+    def _split_set_cookie(blob: str) -> list[str]:
+        """Split a Set-Cookie string that may contain multiple cookies.
+
+        Apps Script sometimes joins multiple Set-Cookie values with ", ",
+        which collides with the comma that legitimately appears inside the
+        `Expires` attribute (e.g. "Expires=Wed, 21 Oct 2026 ..."). We split
+        only on commas that are immediately followed by a cookie name=value
+        pair (token '=' ...), leaving date commas intact.
+        """
+        if not blob:
+            return []
+        # Split on ", " but only when the following text looks like the start
+        # of a new cookie (a token followed by '=').
+        parts = re.split(r",\s*(?=[A-Za-z0-9!#$%&'*+\-.^_`|~]+=)", blob)
+        return [p.strip() for p in parts if p.strip()]
 
     def _split_raw_response(self, raw: bytes):
         """Split a raw HTTP response into (status, headers_dict, body)."""

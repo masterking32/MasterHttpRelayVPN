@@ -8,5 +8,7 @@
 	"listen_host": "127.0.0.1",
 	"listen_port": 8085,
 	"log_level": "INFO",
-	"verify_ssl": true
+	"verify_ssl": true,
+	"_hosts_comment": "Optional SNI-rewrite overrides. YouTube, googlevideo, gstatic, fonts.googleapis.com, ytimg, ggpht, doubleclick, etc. are ALREADY handled automatically (routed via google_ip with SNI=front_domain, same trick as the Xray MITM-DomainFronting config). Add entries here only for custom domains, e.g. \"example.com\": \"216.239.38.120\".",
+	"hosts": {}
 }
