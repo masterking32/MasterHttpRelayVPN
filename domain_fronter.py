@@ -19,6 +19,7 @@ Mode 4 (apps_script):
 
 import asyncio
 import base64
+import hashlib
 import gzip
 import json
 import logging
@@ -34,6 +35,12 @@ log = logging.getLogger("Fronter")
 
 
 class DomainFronter:
+    _STATIC_EXTS = (
+        ".css", ".js", ".mjs", ".woff", ".woff2", ".ttf", ".eot",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
+        ".mp3", ".mp4", ".webm", ".wasm", ".avif",
+    )
+
     def __init__(self, config: dict):
         mode = config.get("mode", "domain_fronting")
 
@@ -170,9 +177,34 @@ class DomainFronter:
         self._script_idx += 1
         return sid
 
-    def _exec_path(self) -> str:
-        """Get the next Apps Script endpoint path (/dev or /exec)."""
-        sid = self._next_script_id()
+    @staticmethod
+    def _host_key(url_or_host: str | None) -> str:
+        """Return a stable routing key for a URL or host string."""
+        if not url_or_host:
+            return ""
+        parsed = urlparse(url_or_host if "://" in url_or_host else f"https://{url_or_host}")
+        host = parsed.hostname or url_or_host
+        return host.lower().rstrip(".")
+
+    def _script_id_for_key(self, key: str | None = None) -> str:
+        """Pick a stable Apps Script ID for a host or fallback to round-robin.
+
+        When multiple deployments are configured, using a stable mapping per
+        host reduces IP/session churn for sites that are sensitive to endpoint
+        changes. If no key is available, we keep the older round-robin fallback
+        so warmup/keepalive traffic still distributes normally.
+        """
+        if len(self._script_ids) == 1:
+            return self._script_ids[0]
+        if not key:
+            return self._next_script_id()
+        digest = hashlib.sha1(key.encode("utf-8")).digest()
+        idx = int.from_bytes(digest[:4], "big") % len(self._script_ids)
+        return self._script_ids[idx]
+
+    def _exec_path(self, url_or_host: str | None = None) -> str:
+        """Get the Apps Script endpoint path (/dev or /exec)."""
+        sid = self._script_id_for_key(self._host_key(url_or_host))
         return f"/macros/s/{sid}/{'dev' if self._dev_available else 'exec'}"
 
     async def _flush_pool(self):
@@ -332,7 +364,7 @@ class DomainFronter:
 
                 # Apps Script keepalive — warm the container
                 payload = {"m": "HEAD", "u": "http://example.com/", "k": self.auth_key}
-                path = self._exec_path()
+                path = self._exec_path("example.com")
                 t0 = time.perf_counter()
                 await asyncio.wait_for(
                     self._h2.request(
@@ -513,6 +545,11 @@ class DomainFronter:
             await self._warm_pool()
 
         payload = self._build_payload(method, url, headers, body)
+
+        # Stateful/browser-navigation requests should preserve exact ordering
+        # and header context; batching/coalescing is reserved for static fetches.
+        if self._is_stateful_request(method, url, headers, body):
+            return await self._relay_with_retry(payload)
 
         # Coalesce concurrent GETs for the same URL.
         # CRITICAL: do NOT coalesce when a Range header is present —
@@ -711,7 +748,8 @@ class DomainFronter:
         payload = {
             "m": method,
             "u": url,
-            "r": True,
+            # Let the browser/app see origin redirects and cookies directly.
+            "r": False,
         }
         if headers:
             # Strip Accept-Encoding: Apps Script auto-decompresses gzip
@@ -725,6 +763,46 @@ class DomainFronter:
             if ct:
                 payload["ct"] = ct
         return payload
+
+    @classmethod
+    def _is_static_asset_url(cls, url: str) -> bool:
+        path = urlparse(url).path.lower()
+        return any(path.endswith(ext) for ext in cls._STATIC_EXTS)
+
+    @staticmethod
+    def _header_value(headers: dict | None, name: str) -> str:
+        if not headers:
+            return ""
+        for key, value in headers.items():
+            if key.lower() == name:
+                return str(value)
+        return ""
+
+    @classmethod
+    def _is_stateful_request(cls, method: str, url: str,
+                             headers: dict | None, body: bytes) -> bool:
+        method = method.upper()
+        if method not in {"GET", "HEAD"} or body:
+            return True
+
+        if headers:
+            for name in (
+                "cookie", "authorization", "proxy-authorization",
+                "origin", "referer", "if-none-match", "if-modified-since",
+                "cache-control", "pragma",
+            ):
+                if cls._header_value(headers, name):
+                    return True
+
+            accept = cls._header_value(headers, "accept").lower()
+            if "text/html" in accept or "application/json" in accept:
+                return True
+
+            fetch_mode = cls._header_value(headers, "sec-fetch-mode").lower()
+            if fetch_mode in {"navigate", "cors"}:
+                return True
+
+        return not cls._is_static_asset_url(url)
 
     # ── Batch collector ───────────────────────────────────────────
 
@@ -866,7 +944,7 @@ class DomainFronter:
         full_payload["k"] = self.auth_key
         json_body = json.dumps(full_payload).encode()
 
-        path = self._exec_path()
+        path = self._exec_path(payload.get("u"))
 
         status, headers, body = await self._h2.request(
             method="POST", path=path, host=self.http_host,
@@ -883,7 +961,7 @@ class DomainFronter:
         full_payload["k"] = self.auth_key
         json_body = json.dumps(full_payload).encode()
 
-        path = self._exec_path()
+        path = self._exec_path(payload.get("u"))
         reader, writer, created = await self._acquire()
 
         try:
@@ -911,14 +989,22 @@ class DomainFronter:
 
                 parsed = urlparse(location)
                 rpath = parsed.path + ("?" + parsed.query if parsed.query else "")
-                request = (
-                    f"GET {rpath} HTTP/1.1\r\n"
-                    f"Host: {parsed.netloc}\r\n"
-                    f"Accept-Encoding: gzip\r\n"
-                    f"Connection: keep-alive\r\n"
-                    f"\r\n"
-                )
-                writer.write(request.encode())
+                if status in (307, 308):
+                    redirect_method = "POST"
+                    redirect_body = json_body
+                else:
+                    redirect_method = "GET"
+                    redirect_body = b""
+                request_lines = [
+                    f"{redirect_method} {rpath} HTTP/1.1",
+                    f"Host: {parsed.netloc}",
+                    "Accept-Encoding: gzip",
+                    "Connection: keep-alive",
+                ]
+                if redirect_body:
+                    request_lines.append(f"Content-Length: {len(redirect_body)}")
+                request = "\r\n".join(request_lines) + "\r\n\r\n"
+                writer.write(request.encode() + redirect_body)
                 await writer.drain()
                 status, resp_headers, resp_body = await self._read_http_response(reader)
 
@@ -939,7 +1025,7 @@ class DomainFronter:
             "q": payloads,
         }
         json_body = json.dumps(batch_payload).encode()
-        path = self._exec_path()
+        path = self._exec_path(payloads[0].get("u") if payloads else None)
 
         # Try HTTP/2 first
         if self._h2 and self._h2.is_connected:
@@ -983,14 +1069,22 @@ class DomainFronter:
                         break
                     parsed = urlparse(location)
                     rpath = parsed.path + ("?" + parsed.query if parsed.query else "")
-                    request = (
-                        f"GET {rpath} HTTP/1.1\r\n"
-                        f"Host: {parsed.netloc}\r\n"
-                        f"Accept-Encoding: gzip\r\n"
-                        f"Connection: keep-alive\r\n"
-                        f"\r\n"
-                    )
-                    writer.write(request.encode())
+                    if status in (307, 308):
+                        redirect_method = "POST"
+                        redirect_body = json_body
+                    else:
+                        redirect_method = "GET"
+                        redirect_body = b""
+                    request_lines = [
+                        f"{redirect_method} {rpath} HTTP/1.1",
+                        f"Host: {parsed.netloc}",
+                        "Accept-Encoding: gzip",
+                        "Connection: keep-alive",
+                    ]
+                    if redirect_body:
+                        request_lines.append(f"Content-Length: {len(redirect_body)}")
+                    request = "\r\n".join(request_lines) + "\r\n\r\n"
+                    writer.write(request.encode() + redirect_body)
                     await writer.drain()
                     status, resp_headers, resp_body = await self._read_http_response(reader)
 
