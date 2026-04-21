@@ -539,7 +539,7 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 		return nil
 	}
 
-	if isReorderSequencedPacket(packet.Type) {
+	if protocol.IsReorderSequencedPacket(packet.Type) {
 		readyPackets, duplicate, overflow := socksConn.queueInboundPacket(packet, c.cfg.MaxReorderBufferPackets)
 		if duplicate {
 			c.log.Debugf(

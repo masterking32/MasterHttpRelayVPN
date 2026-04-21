@@ -69,7 +69,7 @@ func TestDrainSessionOutboundLockedRespectsGlobalLimits(t *testing.T) {
 func TestSOCKSStateInboundReorderQueuesUntilGapFilled(t *testing.T) {
 	socksState := &SOCKSState{
 		ConnectAcked:   true,
-		PendingInbound: make(map[uint64][]PendingInboundPacket),
+		PendingInbound: make(map[uint64][]protocol.PendingPacket),
 		MaxQueueBytes:  1024,
 	}
 
@@ -97,9 +97,9 @@ func TestSOCKSStateInboundReorderQueuesUntilGapFilled(t *testing.T) {
 
 func TestSOCKSStateInboundGapTimeout(t *testing.T) {
 	socksState := &SOCKSState{
-		PendingInbound: make(map[uint64][]PendingInboundPacket),
+		PendingInbound: make(map[uint64][]protocol.PendingPacket),
 	}
-	socksState.PendingInbound[3] = []PendingInboundPacket{{
+	socksState.PendingInbound[3] = []protocol.PendingPacket{{
 		Packet:   testDataPacket("client-session", 1, 3, "late"),
 		QueuedAt: time.Now().Add(-2 * time.Second),
 	}}
@@ -114,7 +114,7 @@ func TestSOCKSStateInboundGapTimeout(t *testing.T) {
 
 func TestSOCKSStateInboundDataWaitsForConnect(t *testing.T) {
 	socksState := &SOCKSState{
-		PendingInbound: make(map[uint64][]PendingInboundPacket),
+		PendingInbound: make(map[uint64][]protocol.PendingPacket),
 	}
 
 	packet1 := testDataPacket("client-session", 1, 1, "one")
@@ -139,7 +139,7 @@ func TestSOCKSStateInboundDataWaitsForConnect(t *testing.T) {
 func TestSOCKSStateInboundReorderAllowsMultiplePacketTypesPerSequence(t *testing.T) {
 	socksState := &SOCKSState{
 		ConnectAcked:   true,
-		PendingInbound: make(map[uint64][]PendingInboundPacket),
+		PendingInbound: make(map[uint64][]protocol.PendingPacket),
 	}
 
 	closeWrite := protocol.NewPacket("client-session", protocol.PacketTypeSOCKSCloseWrite)

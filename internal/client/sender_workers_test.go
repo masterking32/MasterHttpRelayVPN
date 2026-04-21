@@ -88,7 +88,7 @@ func TestSOCKSConnectionStoreDeleteClearsTransportState(t *testing.T) {
 func TestSOCKSConnectionInboundReorderQueuesAndDrainsInOrder(t *testing.T) {
 	socksConn := &SOCKSConnection{
 		ConnectAccepted: true,
-		PendingInbound:  make(map[uint64][]PendingInboundPacket),
+		PendingInbound:  make(map[uint64][]protocol.PendingPacket),
 	}
 
 	packet2 := protocol.NewPacket("client-session", protocol.PacketTypeSOCKSData)
@@ -123,9 +123,9 @@ func TestSOCKSConnectionInboundReorderQueuesAndDrainsInOrder(t *testing.T) {
 
 func TestSOCKSConnectionInboundGapTimeout(t *testing.T) {
 	socksConn := &SOCKSConnection{
-		PendingInbound: make(map[uint64][]PendingInboundPacket),
+		PendingInbound: make(map[uint64][]protocol.PendingPacket),
 	}
-	socksConn.PendingInbound[5] = []PendingInboundPacket{{
+	socksConn.PendingInbound[5] = []protocol.PendingPacket{{
 		Packet:   protocol.Packet{Sequence: 5},
 		QueuedAt: time.Now().Add(-2 * time.Second),
 	}}
@@ -140,7 +140,7 @@ func TestSOCKSConnectionInboundGapTimeout(t *testing.T) {
 
 func TestSOCKSConnectionInboundDataWaitsForConnectAck(t *testing.T) {
 	socksConn := &SOCKSConnection{
-		PendingInbound: make(map[uint64][]PendingInboundPacket),
+		PendingInbound: make(map[uint64][]protocol.PendingPacket),
 	}
 
 	packet1 := protocol.NewPacket("client-session", protocol.PacketTypeSOCKSData)
