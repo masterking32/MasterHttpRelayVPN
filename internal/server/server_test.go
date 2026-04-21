@@ -1,10 +1,13 @@
 package server
 
 import (
+	"errors"
+	"net"
 	"testing"
 	"time"
 
 	"masterhttprelayvpn/internal/config"
+	"masterhttprelayvpn/internal/logger"
 	"masterhttprelayvpn/internal/protocol"
 )
 
@@ -186,6 +189,70 @@ func TestSOCKSStateReleaseClearsQueueState(t *testing.T) {
 	}
 	if socksState.QueuedBytes != 0 {
 		t.Fatalf("expected queued bytes to be reset, got %d", socksState.QueuedBytes)
+	}
+}
+
+func TestProcessBatchBlockedSessionDoesNotBlockOtherSessions(t *testing.T) {
+	dialStarted := make(chan struct{})
+	releaseDial := make(chan struct{})
+
+	srv := New(config.Config{
+		MaxPacketsPerBatch:      8,
+		MaxBatchBytes:           1024,
+		MaxReorderBufferPackets: 8,
+		MaxServerQueueBytes:     1024,
+	}, logger.New("server-test", "ERROR"))
+	srv.dialUpstream = func(network string, address string, timeout time.Duration) (net.Conn, error) {
+		if address != "slow.example:80" {
+			return nil, errors.New("unexpected dial target")
+		}
+		close(dialStarted)
+		<-releaseDial
+		return nil, errors.New("forced dial failure")
+	}
+
+	connect := protocol.NewPacket("session-a", protocol.PacketTypeSOCKSConnect)
+	connect.SOCKSID = 1
+	connect.Sequence = 0
+	connect.Target = &protocol.Target{Host: "slow.example", Port: 80}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := srv.processBatch(protocol.NewBatch("session-a", "batch-a", []protocol.Packet{connect}))
+		errCh <- err
+	}()
+
+	select {
+	case <-dialStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected slow session dial to start")
+	}
+
+	ping := protocol.NewPacket("session-b", protocol.PacketTypePing)
+	done := make(chan error, 1)
+	go func() {
+		_, err := srv.processBatch(protocol.NewBatch("session-b", "batch-b", []protocol.Packet{ping}))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected unrelated session batch to complete, got error: %v", err)
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("expected unrelated session batch to complete while first session dial is blocked")
+	}
+
+	close(releaseDial)
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected blocked session batch to convert dial failure into response, got error: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected blocked session batch to finish after releasing dial")
 	}
 }
 
