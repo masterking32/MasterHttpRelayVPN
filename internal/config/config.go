@@ -16,97 +16,113 @@ import (
 )
 
 type Config struct {
-	AESEncryptionKey           string
-	RelayURL                   string
-	HTTPUserAgentsFile         string
-	HTTPHeaderProfile          string
-	HTTPRandomizeHeaders       bool
-	HTTPPaddingHeader          string
-	HTTPPaddingMinBytes        int
-	HTTPPaddingMaxBytes        int
-	HTTPReferer                string
-	HTTPAcceptLanguage         string
-	HTTPRandomizeQuerySuffix   bool
-	HTTPTimingJitterMS         int
-	HTTPBatchRandomize         bool
-	HTTPBatchPacketsJitter     int
-	HTTPBatchBytesJitter       int
-	ServerHost                 string
-	ServerPort                 int
-	SOCKSHost                  string
-	SOCKSPort                  int
-	SOCKSAuth                  bool
-	SOCKSUsername              string
-	SOCKSPassword              string
-	LogLevel                   string
-	MaxChunkSize               int
-	MaxPacketsPerBatch         int
-	MaxBatchBytes              int
-	WorkerCount                int
-	MaxConcurrentBatches       int
-	MaxPacketsPerSOCKSPerBatch int
-	MuxRotateEveryBatches      int
-	MuxBurstThresholdBytes     int
-	HTTPRequestTimeoutMS       int
-	WorkerPollIntervalMS       int
-	IdlePollIntervalMS         int
-	PingWarmThresholdMS        int
-	PingBackoffBaseMS          int
-	PingBackoffStepMS          int
-	PingMaxIntervalMS          int
-	MaxQueueBytesPerSOCKS      int
-	AckTimeoutMS               int
-	MaxRetryCount              int
-	ReorderTimeoutMS           int
-	MaxReorderBufferPackets    int
-	SessionIdleTimeoutMS       int
-	SOCKSIdleTimeoutMS         int
-	ReadBodyLimitBytes         int
-	MaxServerQueueBytes        int
+	AESEncryptionKey             string
+	RelayURL                     string
+	HTTPUserAgentsFile           string
+	HTTPHeaderProfile            string
+	HTTPRandomizeHeaders         bool
+	HTTPRandomizeTransport       bool
+	HTTPPaddingHeader            string
+	HTTPPaddingMinBytes          int
+	HTTPPaddingMaxBytes          int
+	HTTPReferer                  string
+	HTTPAcceptLanguage           string
+	HTTPRandomizeQuerySuffix     bool
+	HTTPTimingJitterMS           int
+	HTTPIdleConnTimeoutMinMS     int
+	HTTPIdleConnTimeoutMaxMS     int
+	HTTPTransportReuseMin        int
+	HTTPTransportReuseMax        int
+	HTTPBatchRandomize           bool
+	HTTPBatchPacketsJitter       int
+	HTTPBatchBytesJitter         int
+	ServerHost                   string
+	ServerPort                   int
+	SOCKSHost                    string
+	SOCKSPort                    int
+	SOCKSAuth                    bool
+	SOCKSUsername                string
+	SOCKSPassword                string
+	LogLevel                     string
+	MaxChunkSize                 int
+	MaxPacketsPerBatch           int
+	MaxBatchBytes                int
+	WorkerCount                  int
+	MaxConcurrentBatches         int
+	MaxPacketsPerSOCKSPerBatch   int
+	MuxRotateEveryBatches        int
+	MuxRotateJitterBatches       int
+	MuxBurstThresholdBytes       int
+	MuxBurstThresholdJitterBytes int
+	HTTPRequestTimeoutMS         int
+	WorkerPollIntervalMS         int
+	IdlePollIntervalMS           int
+	PingIntervalJitterMS         int
+	PingWarmThresholdMS          int
+	PingBackoffBaseMS            int
+	PingBackoffStepMS            int
+	PingMaxIntervalMS            int
+	MaxQueueBytesPerSOCKS        int
+	AckTimeoutMS                 int
+	MaxRetryCount                int
+	ReorderTimeoutMS             int
+	MaxReorderBufferPackets      int
+	SessionIdleTimeoutMS         int
+	SOCKSIdleTimeoutMS           int
+	ReadBodyLimitBytes           int
+	MaxServerQueueBytes          int
 }
 
 func Load(path string) (Config, error) {
 	cfg := Config{
-		SOCKSHost:                  "127.0.0.1",
-		SOCKSPort:                  1080,
-		HTTPUserAgentsFile:         "user-agents.txt",
-		HTTPHeaderProfile:          "browser",
-		HTTPRandomizeHeaders:       true,
-		HTTPPaddingHeader:          "X-Padding",
-		HTTPPaddingMinBytes:        16,
-		HTTPPaddingMaxBytes:        48,
-		HTTPRandomizeQuerySuffix:   false,
-		HTTPTimingJitterMS:         50,
-		HTTPBatchRandomize:         true,
-		HTTPBatchPacketsJitter:     4,
-		HTTPBatchBytesJitter:       32768,
-		ServerHost:                 "127.0.0.1",
-		ServerPort:                 28080,
-		LogLevel:                   "INFO",
-		MaxChunkSize:               16 * 1024,
-		MaxPacketsPerBatch:         32,
-		MaxBatchBytes:              256 * 1024,
-		WorkerCount:                4,
-		MaxConcurrentBatches:       4,
-		MaxPacketsPerSOCKSPerBatch: 2,
-		MuxRotateEveryBatches:      1,
-		MuxBurstThresholdBytes:     128 * 1024,
-		HTTPRequestTimeoutMS:       15000,
-		WorkerPollIntervalMS:       200,
-		IdlePollIntervalMS:         1000,
-		PingWarmThresholdMS:        5000,
-		PingBackoffBaseMS:          5000,
-		PingBackoffStepMS:          5000,
-		PingMaxIntervalMS:          60000,
-		MaxQueueBytesPerSOCKS:      1024 * 1024,
-		AckTimeoutMS:               5000,
-		MaxRetryCount:              5,
-		ReorderTimeoutMS:           5000,
-		MaxReorderBufferPackets:    128,
-		SessionIdleTimeoutMS:       5 * 60 * 1000,
-		SOCKSIdleTimeoutMS:         2 * 60 * 1000,
-		ReadBodyLimitBytes:         2 * 1024 * 1024,
-		MaxServerQueueBytes:        2 * 1024 * 1024,
+		SOCKSHost:                    "127.0.0.1",
+		SOCKSPort:                    1080,
+		HTTPUserAgentsFile:           "user-agents.txt",
+		HTTPHeaderProfile:            "browser",
+		HTTPRandomizeHeaders:         true,
+		HTTPRandomizeTransport:       false,
+		HTTPPaddingHeader:            "X-Padding",
+		HTTPPaddingMinBytes:          16,
+		HTTPPaddingMaxBytes:          48,
+		HTTPRandomizeQuerySuffix:     false,
+		HTTPTimingJitterMS:           50,
+		HTTPIdleConnTimeoutMinMS:     15000,
+		HTTPIdleConnTimeoutMaxMS:     45000,
+		HTTPTransportReuseMin:        8,
+		HTTPTransportReuseMax:        24,
+		HTTPBatchRandomize:           true,
+		HTTPBatchPacketsJitter:       4,
+		HTTPBatchBytesJitter:         32768,
+		ServerHost:                   "127.0.0.1",
+		ServerPort:                   28080,
+		LogLevel:                     "INFO",
+		MaxChunkSize:                 16 * 1024,
+		MaxPacketsPerBatch:           32,
+		MaxBatchBytes:                256 * 1024,
+		WorkerCount:                  4,
+		MaxConcurrentBatches:         4,
+		MaxPacketsPerSOCKSPerBatch:   2,
+		MuxRotateEveryBatches:        1,
+		MuxRotateJitterBatches:       0,
+		MuxBurstThresholdBytes:       128 * 1024,
+		MuxBurstThresholdJitterBytes: 0,
+		HTTPRequestTimeoutMS:         15000,
+		WorkerPollIntervalMS:         200,
+		IdlePollIntervalMS:           1000,
+		PingIntervalJitterMS:         0,
+		PingWarmThresholdMS:          5000,
+		PingBackoffBaseMS:            5000,
+		PingBackoffStepMS:            5000,
+		PingMaxIntervalMS:            60000,
+		MaxQueueBytesPerSOCKS:        1024 * 1024,
+		AckTimeoutMS:                 5000,
+		MaxRetryCount:                5,
+		ReorderTimeoutMS:             5000,
+		MaxReorderBufferPackets:      128,
+		SessionIdleTimeoutMS:         5 * 60 * 1000,
+		SOCKSIdleTimeoutMS:           2 * 60 * 1000,
+		ReadBodyLimitBytes:           2 * 1024 * 1024,
+		MaxServerQueueBytes:          2 * 1024 * 1024,
 	}
 
 	file, err := os.Open(path)
@@ -146,6 +162,13 @@ func Load(path string) (Config, error) {
 			}
 
 			cfg.HTTPRandomizeHeaders = randomize
+		case "HTTP_RANDOMIZE_TRANSPORT":
+			randomize, err := strconv.ParseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_RANDOMIZE_TRANSPORT: %w", err)
+			}
+
+			cfg.HTTPRandomizeTransport = randomize
 		case "HTTP_PADDING_HEADER":
 			cfg.HTTPPaddingHeader = trimString(value)
 		case "HTTP_PADDING_MIN_BYTES":
@@ -180,6 +203,34 @@ func Load(path string) (Config, error) {
 			}
 
 			cfg.HTTPTimingJitterMS = valueInt
+		case "HTTP_IDLE_CONN_TIMEOUT_MIN_MS":
+			valueInt, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_IDLE_CONN_TIMEOUT_MIN_MS: %w", err)
+			}
+
+			cfg.HTTPIdleConnTimeoutMinMS = valueInt
+		case "HTTP_IDLE_CONN_TIMEOUT_MAX_MS":
+			valueInt, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_IDLE_CONN_TIMEOUT_MAX_MS: %w", err)
+			}
+
+			cfg.HTTPIdleConnTimeoutMaxMS = valueInt
+		case "HTTP_TRANSPORT_REUSE_MIN":
+			valueInt, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_TRANSPORT_REUSE_MIN: %w", err)
+			}
+
+			cfg.HTTPTransportReuseMin = valueInt
+		case "HTTP_TRANSPORT_REUSE_MAX":
+			valueInt, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_TRANSPORT_REUSE_MAX: %w", err)
+			}
+
+			cfg.HTTPTransportReuseMax = valueInt
 		case "HTTP_BATCH_RANDOMIZE":
 			randomize, err := strconv.ParseBool(value)
 			if err != nil {
@@ -281,6 +332,13 @@ func Load(path string) (Config, error) {
 			}
 
 			cfg.MuxRotateEveryBatches = count
+		case "MUX_ROTATE_JITTER_BATCHES":
+			count, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MUX_ROTATE_JITTER_BATCHES: %w", err)
+			}
+
+			cfg.MuxRotateJitterBatches = count
 		case "MUX_BURST_THRESHOLD_BYTES":
 			size, err := strconv.Atoi(value)
 			if err != nil {
@@ -288,6 +346,13 @@ func Load(path string) (Config, error) {
 			}
 
 			cfg.MuxBurstThresholdBytes = size
+		case "MUX_BURST_THRESHOLD_JITTER_BYTES":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MUX_BURST_THRESHOLD_JITTER_BYTES: %w", err)
+			}
+
+			cfg.MuxBurstThresholdJitterBytes = size
 		case "HTTP_REQUEST_TIMEOUT_MS":
 			timeout, err := strconv.Atoi(value)
 			if err != nil {
@@ -309,6 +374,13 @@ func Load(path string) (Config, error) {
 			}
 
 			cfg.IdlePollIntervalMS = interval
+		case "PING_INTERVAL_JITTER_MS":
+			interval, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse PING_INTERVAL_JITTER_MS: %w", err)
+			}
+
+			cfg.PingIntervalJitterMS = interval
 		case "PING_WARM_THRESHOLD_MS":
 			threshold, err := strconv.Atoi(value)
 			if err != nil {
@@ -429,20 +501,33 @@ func (c Config) ValidateClient() error {
 	if c.HTTPRequestTimeoutMS < 1 {
 		return fmt.Errorf("invalid HTTP_REQUEST_TIMEOUT_MS: %d", c.HTTPRequestTimeoutMS)
 	}
+
 	if c.MaxConcurrentBatches < 1 {
 		return fmt.Errorf("invalid MAX_CONCURRENT_BATCHES: %d", c.MaxConcurrentBatches)
 	}
+
 	if c.MaxConcurrentBatches > c.WorkerCount {
 		return fmt.Errorf("MAX_CONCURRENT_BATCHES must be <= WORKER_COUNT")
 	}
+
 	if c.MaxPacketsPerSOCKSPerBatch < 1 {
 		return fmt.Errorf("invalid MAX_PACKETS_PER_SOCKS_PER_BATCH: %d", c.MaxPacketsPerSOCKSPerBatch)
 	}
+
 	if c.MuxRotateEveryBatches < 1 {
 		return fmt.Errorf("invalid MUX_ROTATE_EVERY_BATCHES: %d", c.MuxRotateEveryBatches)
 	}
+
+	if c.MuxRotateJitterBatches < 0 {
+		return fmt.Errorf("invalid MUX_ROTATE_JITTER_BATCHES: %d", c.MuxRotateJitterBatches)
+	}
+
 	if c.MuxBurstThresholdBytes < c.MaxChunkSize {
 		return fmt.Errorf("MUX_BURST_THRESHOLD_BYTES must be >= MAX_CHUNK_SIZE")
+	}
+
+	if c.MuxBurstThresholdJitterBytes < 0 {
+		return fmt.Errorf("invalid MUX_BURST_THRESHOLD_JITTER_BYTES: %d", c.MuxBurstThresholdJitterBytes)
 	}
 
 	if c.WorkerPollIntervalMS < 1 {
@@ -452,15 +537,23 @@ func (c Config) ValidateClient() error {
 	if c.IdlePollIntervalMS < c.WorkerPollIntervalMS {
 		return fmt.Errorf("IDLE_POLL_INTERVAL_MS must be >= WORKER_POLL_INTERVAL_MS")
 	}
+
+	if c.PingIntervalJitterMS < 0 {
+		return fmt.Errorf("invalid PING_INTERVAL_JITTER_MS: %d", c.PingIntervalJitterMS)
+	}
+
 	if c.PingWarmThresholdMS < 1 {
 		return fmt.Errorf("invalid PING_WARM_THRESHOLD_MS: %d", c.PingWarmThresholdMS)
 	}
+
 	if c.PingBackoffBaseMS < c.IdlePollIntervalMS {
 		return fmt.Errorf("PING_BACKOFF_BASE_MS must be >= IDLE_POLL_INTERVAL_MS")
 	}
+
 	if c.PingBackoffStepMS < 1 {
 		return fmt.Errorf("invalid PING_BACKOFF_STEP_MS: %d", c.PingBackoffStepMS)
 	}
+
 	if c.PingMaxIntervalMS < c.PingBackoffBaseMS {
 		return fmt.Errorf("PING_MAX_INTERVAL_MS must be >= PING_BACKOFF_BASE_MS")
 	}
@@ -472,9 +565,11 @@ func (c Config) ValidateClient() error {
 	if c.MaxRetryCount < 0 {
 		return fmt.Errorf("invalid MAX_RETRY_COUNT: %d", c.MaxRetryCount)
 	}
+
 	if c.ReorderTimeoutMS < 1 {
 		return fmt.Errorf("invalid REORDER_TIMEOUT_MS: %d", c.ReorderTimeoutMS)
 	}
+
 	if c.MaxReorderBufferPackets < 1 {
 		return fmt.Errorf("invalid MAX_REORDER_BUFFER_PACKETS: %d", c.MaxReorderBufferPackets)
 	}
@@ -490,12 +585,31 @@ func (c Config) ValidateClient() error {
 	if c.HTTPPaddingMaxBytes < c.HTTPPaddingMinBytes {
 		return fmt.Errorf("HTTP_PADDING_MAX_BYTES must be >= HTTP_PADDING_MIN_BYTES")
 	}
+
 	if c.HTTPTimingJitterMS < 0 {
 		return fmt.Errorf("invalid HTTP_TIMING_JITTER_MS: %d", c.HTTPTimingJitterMS)
 	}
+
+	if c.HTTPIdleConnTimeoutMinMS < 1 {
+		return fmt.Errorf("invalid HTTP_IDLE_CONN_TIMEOUT_MIN_MS: %d", c.HTTPIdleConnTimeoutMinMS)
+	}
+
+	if c.HTTPIdleConnTimeoutMaxMS < c.HTTPIdleConnTimeoutMinMS {
+		return fmt.Errorf("HTTP_IDLE_CONN_TIMEOUT_MAX_MS must be >= HTTP_IDLE_CONN_TIMEOUT_MIN_MS")
+	}
+
+	if c.HTTPTransportReuseMin < 1 {
+		return fmt.Errorf("invalid HTTP_TRANSPORT_REUSE_MIN: %d", c.HTTPTransportReuseMin)
+	}
+
+	if c.HTTPTransportReuseMax < c.HTTPTransportReuseMin {
+		return fmt.Errorf("HTTP_TRANSPORT_REUSE_MAX must be >= HTTP_TRANSPORT_REUSE_MIN")
+	}
+
 	if c.HTTPBatchPacketsJitter < 0 {
 		return fmt.Errorf("invalid HTTP_BATCH_PACKETS_JITTER: %d", c.HTTPBatchPacketsJitter)
 	}
+
 	if c.HTTPBatchBytesJitter < 0 {
 		return fmt.Errorf("invalid HTTP_BATCH_BYTES_JITTER: %d", c.HTTPBatchBytesJitter)
 	}
@@ -523,9 +637,11 @@ func (c Config) ValidateServer() error {
 	if c.SOCKSIdleTimeoutMS < 1 {
 		return fmt.Errorf("invalid SOCKS_IDLE_TIMEOUT_MS: %d", c.SOCKSIdleTimeoutMS)
 	}
+
 	if c.ReorderTimeoutMS < 1 {
 		return fmt.Errorf("invalid REORDER_TIMEOUT_MS: %d", c.ReorderTimeoutMS)
 	}
+
 	if c.MaxReorderBufferPackets < 1 {
 		return fmt.Errorf("invalid MAX_REORDER_BUFFER_PACKETS: %d", c.MaxReorderBufferPackets)
 	}

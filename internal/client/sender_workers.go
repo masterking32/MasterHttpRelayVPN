@@ -18,12 +18,16 @@ import (
 	"sync"
 	"time"
 
+	"masterhttprelayvpn/internal/config"
 	"masterhttprelayvpn/internal/protocol"
 )
 
 type sendWorker struct {
-	id         int
-	httpClient *http.Client
+	id                  int
+	httpClient          *http.Client
+	httpTransport       *http.Transport
+	transportUseCount   int
+	transportReuseLimit int
 }
 
 type dequeuedPacket struct {
@@ -35,10 +39,8 @@ func (c *Client) startSendWorkers(ctx context.Context, wg *sync.WaitGroup) {
 	for i := 0; i < c.cfg.WorkerCount; i++ {
 		worker := &sendWorker{
 			id: i + 1,
-			httpClient: &http.Client{
-				Timeout: time.Duration(c.cfg.HTTPRequestTimeoutMS) * time.Millisecond,
-			},
 		}
+		worker.resetHTTPClient(c.cfg)
 
 		wg.Add(1)
 		go func(w *sendWorker) {
@@ -137,12 +139,15 @@ func (c *Client) buildNextBatch(connections []*SOCKSConnection, totalQueuedBytes
 		})
 	}
 	if len(connections) > 1 {
-		rotationEvery := c.cfg.MuxRotateEveryBatches
+		rotationEvery := c.effectiveMuxRotateEveryBatches()
 		if rotationEvery < 1 {
 			rotationEvery = 1
 		}
 		turn := c.batchCursor.Add(1) - 1
 		start = int((turn / uint64(rotationEvery)) % uint64(len(connections)))
+		if offset := c.randomMuxStartOffset(len(connections)); offset > 0 {
+			start = (start + offset) % len(connections)
+		}
 	}
 	maxPackets, maxBatchBytes := c.effectiveBatchLimits(totalQueuedBytes)
 	maxPerSOCKS := c.cfg.MaxPacketsPerSOCKSPerBatch
@@ -245,7 +250,7 @@ func (c *Client) shouldSendPing(connections []*SOCKSConnection, totalQueuedBytes
 func (c *Client) effectiveBatchLimits(totalQueuedBytes int) (int, int) {
 	maxPackets := c.cfg.MaxPacketsPerBatch
 	maxBatchBytes := c.cfg.MaxBatchBytes
-	if totalQueuedBytes < c.cfg.MuxBurstThresholdBytes {
+	if totalQueuedBytes < c.effectiveBurstThresholdBytes() {
 		if reducedPackets := maxPackets / 2; reducedPackets >= 1 {
 			maxPackets = reducedPackets
 		}
@@ -276,7 +281,7 @@ func (c *Client) effectiveBatchLimits(totalQueuedBytes int) (int, int) {
 
 func (c *Client) effectiveWaitInterval(totalQueuedBytes int) time.Duration {
 	interval := time.Duration(c.cfg.WorkerPollIntervalMS) * time.Millisecond
-	if totalQueuedBytes >= c.cfg.MuxBurstThresholdBytes {
+	if totalQueuedBytes >= c.effectiveBurstThresholdBytes() {
 		if burst := interval / 2; burst >= 25*time.Millisecond {
 			return burst
 		}
@@ -286,7 +291,7 @@ func (c *Client) effectiveWaitInterval(totalQueuedBytes int) time.Duration {
 }
 
 func (c *Client) effectiveConcurrentBatches(totalQueuedBytes int) int {
-	if totalQueuedBytes >= c.cfg.MuxBurstThresholdBytes {
+	if totalQueuedBytes >= c.effectiveBurstThresholdBytes() {
 		return c.cfg.MaxConcurrentBatches
 	}
 	return 1
@@ -360,6 +365,46 @@ func (c *Client) jitterDuration(base time.Duration) time.Duration {
 
 	jitter := time.Duration(randomIndex(c.cfg.HTTPTimingJitterMS+1)) * time.Millisecond
 	return base + jitter
+}
+
+func (c *Client) pingIntervalWithJitter(base time.Duration) time.Duration {
+	if base <= 0 || !c.cfg.HTTPRandomizeTransport || c.cfg.PingIntervalJitterMS <= 0 {
+		return base
+	}
+
+	jitter := time.Duration(randomIndex(c.cfg.PingIntervalJitterMS+1)) * time.Millisecond
+	return base + jitter
+}
+
+func (c *Client) effectiveBurstThresholdBytes() int {
+	threshold := c.cfg.MuxBurstThresholdBytes
+	if !c.cfg.HTTPRandomizeTransport || c.cfg.MuxBurstThresholdJitterBytes <= 0 {
+		return threshold
+	}
+
+	delta := randomIndex(c.cfg.MuxBurstThresholdJitterBytes + 1)
+	if randomIndex(2) == 0 {
+		if adjusted := threshold - delta; adjusted >= c.cfg.MaxChunkSize {
+			return adjusted
+		}
+		return c.cfg.MaxChunkSize
+	}
+	return threshold + delta
+}
+
+func (c *Client) effectiveMuxRotateEveryBatches() int {
+	rotationEvery := c.cfg.MuxRotateEveryBatches
+	if !c.cfg.HTTPRandomizeTransport || c.cfg.MuxRotateJitterBatches <= 0 {
+		return rotationEvery
+	}
+	return rotationEvery + randomIndex(c.cfg.MuxRotateJitterBatches+1)
+}
+
+func (c *Client) randomMuxStartOffset(connectionCount int) int {
+	if !c.cfg.HTTPRandomizeTransport || connectionCount <= 1 {
+		return 0
+	}
+	return randomIndex(connectionCount)
 }
 
 func (c *Client) requeueSelected(selected []dequeuedPacket) {
@@ -450,6 +495,7 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 	}
 
 	resp, err := w.httpClient.Do(req)
+	w.recordTransportUse(c.cfg)
 	if err != nil {
 		if pingOnly {
 			c.failPing()
@@ -510,6 +556,56 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 	}
 
 	return nil
+}
+
+func (w *sendWorker) resetHTTPClient(cfg config.Config) {
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        32,
+		MaxIdleConnsPerHost: 8,
+		IdleConnTimeout:     w.randomizedIdleConnTimeout(cfg),
+	}
+
+	w.httpTransport = transport
+	w.httpClient = &http.Client{
+		Timeout:   time.Duration(cfg.HTTPRequestTimeoutMS) * time.Millisecond,
+		Transport: transport,
+	}
+	w.transportUseCount = 0
+	w.transportReuseLimit = w.nextTransportReuseLimit(cfg)
+}
+
+func (w *sendWorker) recordTransportUse(cfg config.Config) {
+	if !cfg.HTTPRandomizeTransport {
+		return
+	}
+
+	w.transportUseCount++
+	if w.transportReuseLimit > 0 && w.transportUseCount >= w.transportReuseLimit {
+		if w.httpTransport != nil {
+			w.httpTransport.CloseIdleConnections()
+		}
+		w.resetHTTPClient(cfg)
+	}
+}
+
+func (w *sendWorker) randomizedIdleConnTimeout(cfg config.Config) time.Duration {
+	minTimeout := cfg.HTTPIdleConnTimeoutMinMS
+	maxTimeout := cfg.HTTPIdleConnTimeoutMaxMS
+	if !cfg.HTTPRandomizeTransport || maxTimeout <= minTimeout {
+		return time.Duration(minTimeout) * time.Millisecond
+	}
+
+	return time.Duration(minTimeout+randomIndex(maxTimeout-minTimeout+1)) * time.Millisecond
+}
+
+func (w *sendWorker) nextTransportReuseLimit(cfg config.Config) int {
+	if !cfg.HTTPRandomizeTransport || cfg.HTTPTransportReuseMax <= cfg.HTTPTransportReuseMin {
+		return cfg.HTTPTransportReuseMin
+	}
+
+	return cfg.HTTPTransportReuseMin + randomIndex(cfg.HTTPTransportReuseMax-cfg.HTTPTransportReuseMin+1)
 }
 
 func (c *Client) applyResponseBatch(batch protocol.Batch) error {

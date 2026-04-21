@@ -196,11 +196,11 @@ func (c *Client) idleIntervalForStreak(streak int64) time.Duration {
 	if interval > c.cfg.PingMaxIntervalMS {
 		interval = c.cfg.PingMaxIntervalMS
 	}
-	return time.Duration(interval) * time.Millisecond
+	return c.pingIntervalWithJitter(time.Duration(interval) * time.Millisecond)
 }
 
 func (c *Client) scheduleAggressivePing(now time.Time) {
-	c.nextPingDueUnixMS.Store(now.Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+	c.nextPingDueUnixMS.Store(now.Add(c.pingIntervalWithJitter(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond)).UnixMilli())
 }
 
 func (c *Client) setPingState(state int32) {

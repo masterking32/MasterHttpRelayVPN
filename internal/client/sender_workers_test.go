@@ -27,6 +27,10 @@ func testClientConfig() config.Config {
 		PingMaxIntervalMS:          60000,
 		MaxQueueBytesPerSOCKS:      4096,
 		HTTPBatchRandomize:         false,
+		HTTPIdleConnTimeoutMinMS:   15000,
+		HTTPIdleConnTimeoutMaxMS:   45000,
+		HTTPTransportReuseMin:      8,
+		HTTPTransportReuseMax:      24,
 	}
 }
 
@@ -251,6 +255,56 @@ func TestEffectiveConcurrentBatchesUsesBurstThreshold(t *testing.T) {
 	}
 	if got := client.effectiveConcurrentBatches(4096); got != 3 {
 		t.Fatalf("expected burst concurrency of 3, got %d", got)
+	}
+}
+
+func TestEffectiveBurstThresholdBytesStaysWithinConfiguredJitterRange(t *testing.T) {
+	cfg := testClientConfig()
+	cfg.HTTPRandomizeTransport = true
+	cfg.MuxBurstThresholdBytes = 4096
+	cfg.MuxBurstThresholdJitterBytes = 512
+
+	client := New(cfg, nil)
+	for i := 0; i < 50; i++ {
+		got := client.effectiveBurstThresholdBytes()
+		if got < cfg.MaxChunkSize {
+			t.Fatalf("expected threshold >= max chunk size, got %d", got)
+		}
+		if got < cfg.MuxBurstThresholdBytes-cfg.MuxBurstThresholdJitterBytes || got > cfg.MuxBurstThresholdBytes+cfg.MuxBurstThresholdJitterBytes {
+			t.Fatalf("threshold %d outside jitter range", got)
+		}
+	}
+}
+
+func TestPingIntervalWithJitterStaysWithinConfiguredRange(t *testing.T) {
+	cfg := testClientConfig()
+	cfg.HTTPRandomizeTransport = true
+	cfg.PingIntervalJitterMS = 250
+
+	client := New(cfg, nil)
+	base := 2 * time.Second
+	for i := 0; i < 50; i++ {
+		got := client.pingIntervalWithJitter(base)
+		if got < base || got > base+250*time.Millisecond {
+			t.Fatalf("ping interval %v outside expected jitter range", got)
+		}
+	}
+}
+
+func TestSendWorkerTransportReuseLimitStaysWithinConfiguredRange(t *testing.T) {
+	cfg := testClientConfig()
+	cfg.HTTPRandomizeTransport = true
+	cfg.HTTPTransportReuseMin = 3
+	cfg.HTTPTransportReuseMax = 7
+	cfg.HTTPIdleConnTimeoutMinMS = 1000
+	cfg.HTTPIdleConnTimeoutMaxMS = 2000
+
+	worker := &sendWorker{id: 1}
+	for i := 0; i < 50; i++ {
+		limit := worker.nextTransportReuseLimit(cfg)
+		if limit < cfg.HTTPTransportReuseMin || limit > cfg.HTTPTransportReuseMax {
+			t.Fatalf("reuse limit %d outside expected range", limit)
+		}
 	}
 }
 

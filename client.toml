@@ -58,6 +58,17 @@ HTTP_HEADER_PROFILE = "browser"
 # Allowed: true, false
 HTTP_RANDOMIZE_HEADERS = true
 
+# HTTP_RANDOMIZE_TRANSPORT:
+# Enables bounded transport-level randomization so request behavior is not too
+# fixed over time. When enabled, the client may vary:
+# - mux burst threshold
+# - mux rotation cadence
+# - ping intervals
+# - HTTP connection reuse lifetime
+# Default: false
+# Allowed: true, false
+HTTP_RANDOMIZE_TRANSPORT = false
+
 # HTTP_PADDING_HEADER:
 # Name of the extra padding header added when HTTP_RANDOMIZE_HEADERS=true.
 # The client fills it with random hex text.
@@ -112,6 +123,23 @@ HTTP_RANDOMIZE_QUERY_SUFFIX = false
 # Default: 50
 # Allowed: integer >= 0
 HTTP_TIMING_JITTER_MS = 50
+
+# HTTP_IDLE_CONN_TIMEOUT_MIN_MS / HTTP_IDLE_CONN_TIMEOUT_MAX_MS:
+# When HTTP_RANDOMIZE_TRANSPORT=true, each sender worker picks an idle keepalive
+# timeout inside this range for its HTTP transport.
+# Default: 15000..45000
+# Allowed: integer >= 1, and MAX >= MIN
+HTTP_IDLE_CONN_TIMEOUT_MIN_MS = 15000
+HTTP_IDLE_CONN_TIMEOUT_MAX_MS = 45000
+
+# HTTP_TRANSPORT_REUSE_MIN / HTTP_TRANSPORT_REUSE_MAX:
+# When HTTP_RANDOMIZE_TRANSPORT=true, each worker reuses its HTTP transport for
+# a random number of requests inside this range before recycling idle connections
+# and refreshing the transport profile.
+# Default: 8..24
+# Allowed: integer >= 1, and MAX >= MIN
+HTTP_TRANSPORT_REUSE_MIN = 8
+HTTP_TRANSPORT_REUSE_MAX = 24
 
 # HTTP_BATCH_RANDOMIZE:
 # Enables slight randomization of effective batch size and packet count per send.
@@ -231,6 +259,13 @@ MAX_PACKETS_PER_SOCKS_PER_BATCH = 2
 # Allowed: integer >= 1
 MUX_ROTATE_EVERY_BATCHES = 1
 
+# MUX_ROTATE_JITTER_BATCHES:
+# Extra random batches added on top of MUX_ROTATE_EVERY_BATCHES when
+# HTTP_RANDOMIZE_TRANSPORT=true.
+# Default: 0
+# Allowed: integer >= 0
+MUX_ROTATE_JITTER_BATCHES = 0
+
 # MUX_BURST_THRESHOLD_BYTES:
 # Total queued outbound payload bytes across all active SOCKS connections that
 # triggers burst mode. Below this threshold the client behaves conservatively
@@ -240,6 +275,14 @@ MUX_ROTATE_EVERY_BATCHES = 1
 # Default: 131072 (128 KiB)
 # Allowed: integer >= MAX_CHUNK_SIZE
 MUX_BURST_THRESHOLD_BYTES = 131072
+
+# MUX_BURST_THRESHOLD_JITTER_BYTES:
+# Random plus/minus jitter applied to MUX_BURST_THRESHOLD_BYTES when
+# HTTP_RANDOMIZE_TRANSPORT=true. The effective threshold never goes below
+# MAX_CHUNK_SIZE.
+# Default: 0
+# Allowed: integer >= 0
+MUX_BURST_THRESHOLD_JITTER_BYTES = 0
 
 # HTTP_REQUEST_TIMEOUT_MS:
 # Timeout for a single relay HTTP request.
@@ -262,6 +305,13 @@ WORKER_POLL_INTERVAL_MS = 200
 # Default: 1000
 # Allowed: integer >= WORKER_POLL_INTERVAL_MS
 IDLE_POLL_INTERVAL_MS = 1000
+
+# PING_INTERVAL_JITTER_MS:
+# Extra random delay added to aggressive idle ping intervals and ping backoff
+# intervals when HTTP_RANDOMIZE_TRANSPORT=true.
+# Default: 0
+# Allowed: integer >= 0
+PING_INTERVAL_JITTER_MS = 0
 
 # PING_WARM_THRESHOLD_MS:
 # If no real non-ping traffic has been seen for at least this long, the client
