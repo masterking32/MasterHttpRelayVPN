@@ -33,6 +33,7 @@ type Client struct {
 	workCh chan struct{}
 
 	lastPollUnixMS atomic.Int64
+	activeBatches  atomic.Int64
 	batchCursor    atomic.Uint64
 }
 

@@ -151,12 +151,16 @@ func TestSOCKSConnectionInboundDataWaitsForConnectAck(t *testing.T) {
 
 func TestBuildNextBatchRotatesAcrossConnections(t *testing.T) {
 	cfg := config.Config{
-		MaxChunkSize:          1024,
-		MaxPacketsPerBatch:    1,
-		MaxBatchBytes:         4096,
-		WorkerCount:           1,
-		MaxQueueBytesPerSOCKS: 4096,
-		HTTPBatchRandomize:    false,
+		MaxChunkSize:               1024,
+		MaxPacketsPerBatch:         1,
+		MaxBatchBytes:              4096,
+		WorkerCount:                1,
+		MaxConcurrentBatches:       1,
+		MaxPacketsPerSOCKSPerBatch: 1,
+		MuxRotateEveryBatches:      1,
+		MuxBurstThresholdBytes:     1024,
+		MaxQueueBytesPerSOCKS:      4096,
+		HTTPBatchRandomize:         false,
 	}
 
 	client := New(cfg, nil)
@@ -174,7 +178,8 @@ func TestBuildNextBatchRotatesAcrossConnections(t *testing.T) {
 
 	seen := make(map[uint64]bool)
 	for i := 0; i < 3; i++ {
-		batch, selected := client.buildNextBatch()
+		connections := client.socksConnections.Snapshot()
+		batch, selected := client.buildNextBatch(connections, queuedBytesAcross(connections))
 		if len(batch.Packets) != 1 || len(selected) != 1 {
 			t.Fatalf("iteration %d: expected one selected packet, got packets=%d selected=%d", i, len(batch.Packets), len(selected))
 		}
@@ -186,5 +191,70 @@ func TestBuildNextBatchRotatesAcrossConnections(t *testing.T) {
 	}
 	if len(seen) != 3 {
 		t.Fatalf("expected all 3 socks connections to be selected once, got %d unique selections", len(seen))
+	}
+}
+
+func TestBuildNextBatchHonorsPerSOCKSPacketLimit(t *testing.T) {
+	cfg := config.Config{
+		MaxChunkSize:               1024,
+		MaxPacketsPerBatch:         4,
+		MaxBatchBytes:              4096,
+		WorkerCount:                2,
+		MaxConcurrentBatches:       2,
+		MaxPacketsPerSOCKSPerBatch: 1,
+		MuxRotateEveryBatches:      1,
+		MuxBurstThresholdBytes:     1024,
+		MaxQueueBytesPerSOCKS:      4096,
+		HTTPBatchRandomize:         false,
+	}
+
+	client := New(cfg, nil)
+	client.chunkPolicy = newChunkPolicy(cfg)
+
+	conn1 := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
+	conn2 := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1002", client.chunkPolicy)
+
+	for i := 0; i < 3; i++ {
+		if err := conn1.EnqueuePacket(conn1.BuildSOCKSDataPacket([]byte("a"), false)); err != nil {
+			t.Fatalf("enqueue conn1 packet %d: %v", i, err)
+		}
+	}
+	if err := conn2.EnqueuePacket(conn2.BuildSOCKSDataPacket([]byte("b"), false)); err != nil {
+		t.Fatalf("enqueue conn2 packet: %v", err)
+	}
+
+	connections := client.socksConnections.Snapshot()
+	batch, selected := client.buildNextBatch(connections, queuedBytesAcross(connections))
+	if len(batch.Packets) != 2 || len(selected) != 2 {
+		t.Fatalf("expected 2 selected packets, got packets=%d selected=%d", len(batch.Packets), len(selected))
+	}
+
+	counts := map[uint64]int{}
+	for _, packet := range batch.Packets {
+		counts[packet.SOCKSID]++
+	}
+	if counts[conn1.ID] != 1 {
+		t.Fatalf("expected conn1 to contribute exactly 1 packet, got %d", counts[conn1.ID])
+	}
+	if counts[conn2.ID] != 1 {
+		t.Fatalf("expected conn2 to contribute exactly 1 packet, got %d", counts[conn2.ID])
+	}
+}
+
+func TestEffectiveConcurrentBatchesUsesBurstThreshold(t *testing.T) {
+	cfg := config.Config{
+		WorkerCount:                4,
+		MaxConcurrentBatches:       3,
+		MaxPacketsPerSOCKSPerBatch: 2,
+		MuxRotateEveryBatches:      1,
+		MuxBurstThresholdBytes:     4096,
+	}
+
+	client := New(cfg, nil)
+	if got := client.effectiveConcurrentBatches(1024); got != 1 {
+		t.Fatalf("expected low-load concurrency of 1, got %d", got)
+	}
+	if got := client.effectiveConcurrentBatches(4096); got != 3 {
+		t.Fatalf("expected burst concurrency of 3, got %d", got)
 	}
 }

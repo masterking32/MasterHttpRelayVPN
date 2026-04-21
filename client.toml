@@ -195,6 +195,41 @@ MAX_BATCH_BYTES = 262144
 # Allowed: integer >= 1
 WORKER_COUNT = 4
 
+# MAX_CONCURRENT_BATCHES:
+# Global cap for how many relay HTTP batches may be in-flight at the same time.
+# Under light load the client intentionally stays at 1 active batch; when queued
+# bytes reach MUX_BURST_THRESHOLD_BYTES it may expand up to this cap.
+# This value must be <= WORKER_COUNT.
+# Default: 4
+# Allowed: integer 1..WORKER_COUNT
+MAX_CONCURRENT_BATCHES = 4
+
+# MAX_PACKETS_PER_SOCKS_PER_BATCH:
+# Fairness limit per mux round. One SOCKS connection may contribute at most this
+# many packets to a single HTTP batch, which prevents a hot stream from filling
+# the whole batch alone.
+# Default: 2
+# Allowed: integer >= 1
+MAX_PACKETS_PER_SOCKS_PER_BATCH = 2
+
+# MUX_ROTATE_EVERY_BATCHES:
+# Controls how often the round-robin batch start cursor moves to the next SOCKS
+# connection. 1 means rotate every batch, 2 means hold the same start point for
+# two batches before moving, and so on.
+# Default: 1
+# Allowed: integer >= 1
+MUX_ROTATE_EVERY_BATCHES = 1
+
+# MUX_BURST_THRESHOLD_BYTES:
+# Total queued outbound payload bytes across all active SOCKS connections that
+# triggers burst mode. Below this threshold the client behaves conservatively
+# with 1 active batch and smaller effective batch shapes; at or above it, the
+# client uses faster polling and may scale up to MAX_CONCURRENT_BATCHES.
+# Must be >= MAX_CHUNK_SIZE.
+# Default: 131072 (128 KiB)
+# Allowed: integer >= MAX_CHUNK_SIZE
+MUX_BURST_THRESHOLD_BYTES = 131072
+
 # HTTP_REQUEST_TIMEOUT_MS:
 # Timeout for a single relay HTTP request.
 # If exceeded, in-flight packets may be retried according to ACK policy.

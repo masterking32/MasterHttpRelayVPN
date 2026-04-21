@@ -16,79 +16,87 @@ import (
 )
 
 type Config struct {
-	AESEncryptionKey       string
-	RelayURL               string
-	HTTPUserAgentsFile     string
-	HTTPHeaderProfile      string
-	HTTPRandomizeHeaders   bool
-	HTTPPaddingHeader      string
-	HTTPPaddingMinBytes    int
-	HTTPPaddingMaxBytes    int
-	HTTPReferer            string
-	HTTPAcceptLanguage     string
-	HTTPTimingJitterMS     int
-	HTTPBatchRandomize     bool
-	HTTPBatchPacketsJitter int
-	HTTPBatchBytesJitter   int
-	ServerHost             string
-	ServerPort             int
-	SOCKSHost              string
-	SOCKSPort              int
-	SOCKSAuth              bool
-	SOCKSUsername          string
-	SOCKSPassword          string
-	LogLevel               string
-	MaxChunkSize           int
-	MaxPacketsPerBatch     int
-	MaxBatchBytes          int
-	WorkerCount            int
-	HTTPRequestTimeoutMS   int
-	WorkerPollIntervalMS   int
-	IdlePollIntervalMS     int
-	MaxQueueBytesPerSOCKS  int
-	AckTimeoutMS           int
-	MaxRetryCount          int
-	ReorderTimeoutMS       int
-	MaxReorderBufferPackets int
-	SessionIdleTimeoutMS   int
-	SOCKSIdleTimeoutMS     int
-	ReadBodyLimitBytes     int
-	MaxServerQueueBytes    int
+	AESEncryptionKey           string
+	RelayURL                   string
+	HTTPUserAgentsFile         string
+	HTTPHeaderProfile          string
+	HTTPRandomizeHeaders       bool
+	HTTPPaddingHeader          string
+	HTTPPaddingMinBytes        int
+	HTTPPaddingMaxBytes        int
+	HTTPReferer                string
+	HTTPAcceptLanguage         string
+	HTTPTimingJitterMS         int
+	HTTPBatchRandomize         bool
+	HTTPBatchPacketsJitter     int
+	HTTPBatchBytesJitter       int
+	ServerHost                 string
+	ServerPort                 int
+	SOCKSHost                  string
+	SOCKSPort                  int
+	SOCKSAuth                  bool
+	SOCKSUsername              string
+	SOCKSPassword              string
+	LogLevel                   string
+	MaxChunkSize               int
+	MaxPacketsPerBatch         int
+	MaxBatchBytes              int
+	WorkerCount                int
+	MaxConcurrentBatches       int
+	MaxPacketsPerSOCKSPerBatch int
+	MuxRotateEveryBatches      int
+	MuxBurstThresholdBytes     int
+	HTTPRequestTimeoutMS       int
+	WorkerPollIntervalMS       int
+	IdlePollIntervalMS         int
+	MaxQueueBytesPerSOCKS      int
+	AckTimeoutMS               int
+	MaxRetryCount              int
+	ReorderTimeoutMS           int
+	MaxReorderBufferPackets    int
+	SessionIdleTimeoutMS       int
+	SOCKSIdleTimeoutMS         int
+	ReadBodyLimitBytes         int
+	MaxServerQueueBytes        int
 }
 
 func Load(path string) (Config, error) {
 	cfg := Config{
-		SOCKSHost:              "127.0.0.1",
-		SOCKSPort:              1080,
-		HTTPUserAgentsFile:     "user-agents.txt",
-		HTTPHeaderProfile:      "browser",
-		HTTPRandomizeHeaders:   true,
-		HTTPPaddingHeader:      "X-Padding",
-		HTTPPaddingMinBytes:    16,
-		HTTPPaddingMaxBytes:    48,
-		HTTPTimingJitterMS:     50,
-		HTTPBatchRandomize:     true,
-		HTTPBatchPacketsJitter: 4,
-		HTTPBatchBytesJitter:   32768,
-		ServerHost:             "127.0.0.1",
-		ServerPort:             28080,
-		LogLevel:               "INFO",
-		MaxChunkSize:           16 * 1024,
-		MaxPacketsPerBatch:     32,
-		MaxBatchBytes:          256 * 1024,
-		WorkerCount:            4,
-		HTTPRequestTimeoutMS:   15000,
-		WorkerPollIntervalMS:   200,
-		IdlePollIntervalMS:     1000,
-		MaxQueueBytesPerSOCKS:  1024 * 1024,
-		AckTimeoutMS:           5000,
-		MaxRetryCount:          5,
-		ReorderTimeoutMS:       5000,
-		MaxReorderBufferPackets: 128,
-		SessionIdleTimeoutMS:   5 * 60 * 1000,
-		SOCKSIdleTimeoutMS:     2 * 60 * 1000,
-		ReadBodyLimitBytes:     2 * 1024 * 1024,
-		MaxServerQueueBytes:    2 * 1024 * 1024,
+		SOCKSHost:                  "127.0.0.1",
+		SOCKSPort:                  1080,
+		HTTPUserAgentsFile:         "user-agents.txt",
+		HTTPHeaderProfile:          "browser",
+		HTTPRandomizeHeaders:       true,
+		HTTPPaddingHeader:          "X-Padding",
+		HTTPPaddingMinBytes:        16,
+		HTTPPaddingMaxBytes:        48,
+		HTTPTimingJitterMS:         50,
+		HTTPBatchRandomize:         true,
+		HTTPBatchPacketsJitter:     4,
+		HTTPBatchBytesJitter:       32768,
+		ServerHost:                 "127.0.0.1",
+		ServerPort:                 28080,
+		LogLevel:                   "INFO",
+		MaxChunkSize:               16 * 1024,
+		MaxPacketsPerBatch:         32,
+		MaxBatchBytes:              256 * 1024,
+		WorkerCount:                4,
+		MaxConcurrentBatches:       4,
+		MaxPacketsPerSOCKSPerBatch: 2,
+		MuxRotateEveryBatches:      1,
+		MuxBurstThresholdBytes:     128 * 1024,
+		HTTPRequestTimeoutMS:       15000,
+		WorkerPollIntervalMS:       200,
+		IdlePollIntervalMS:         1000,
+		MaxQueueBytesPerSOCKS:      1024 * 1024,
+		AckTimeoutMS:               5000,
+		MaxRetryCount:              5,
+		ReorderTimeoutMS:           5000,
+		MaxReorderBufferPackets:    128,
+		SessionIdleTimeoutMS:       5 * 60 * 1000,
+		SOCKSIdleTimeoutMS:         2 * 60 * 1000,
+		ReadBodyLimitBytes:         2 * 1024 * 1024,
+		MaxServerQueueBytes:        2 * 1024 * 1024,
 	}
 
 	file, err := os.Open(path)
@@ -235,6 +243,34 @@ func Load(path string) (Config, error) {
 			}
 
 			cfg.WorkerCount = count
+		case "MAX_CONCURRENT_BATCHES":
+			count, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MAX_CONCURRENT_BATCHES: %w", err)
+			}
+
+			cfg.MaxConcurrentBatches = count
+		case "MAX_PACKETS_PER_SOCKS_PER_BATCH":
+			count, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MAX_PACKETS_PER_SOCKS_PER_BATCH: %w", err)
+			}
+
+			cfg.MaxPacketsPerSOCKSPerBatch = count
+		case "MUX_ROTATE_EVERY_BATCHES":
+			count, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MUX_ROTATE_EVERY_BATCHES: %w", err)
+			}
+
+			cfg.MuxRotateEveryBatches = count
+		case "MUX_BURST_THRESHOLD_BYTES":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MUX_BURST_THRESHOLD_BYTES: %w", err)
+			}
+
+			cfg.MuxBurstThresholdBytes = size
 		case "HTTP_REQUEST_TIMEOUT_MS":
 			timeout, err := strconv.Atoi(value)
 			if err != nil {
@@ -347,6 +383,21 @@ func (c Config) ValidateClient() error {
 
 	if c.HTTPRequestTimeoutMS < 1 {
 		return fmt.Errorf("invalid HTTP_REQUEST_TIMEOUT_MS: %d", c.HTTPRequestTimeoutMS)
+	}
+	if c.MaxConcurrentBatches < 1 {
+		return fmt.Errorf("invalid MAX_CONCURRENT_BATCHES: %d", c.MaxConcurrentBatches)
+	}
+	if c.MaxConcurrentBatches > c.WorkerCount {
+		return fmt.Errorf("MAX_CONCURRENT_BATCHES must be <= WORKER_COUNT")
+	}
+	if c.MaxPacketsPerSOCKSPerBatch < 1 {
+		return fmt.Errorf("invalid MAX_PACKETS_PER_SOCKS_PER_BATCH: %d", c.MaxPacketsPerSOCKSPerBatch)
+	}
+	if c.MuxRotateEveryBatches < 1 {
+		return fmt.Errorf("invalid MUX_ROTATE_EVERY_BATCHES: %d", c.MuxRotateEveryBatches)
+	}
+	if c.MuxBurstThresholdBytes < c.MaxChunkSize {
+		return fmt.Errorf("MUX_BURST_THRESHOLD_BYTES must be >= MAX_CHUNK_SIZE")
 	}
 
 	if c.WorkerPollIntervalMS < 1 {

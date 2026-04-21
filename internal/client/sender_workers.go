@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -46,8 +47,6 @@ func (c *Client) startSendWorkers(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (w *sendWorker) run(ctx context.Context, c *Client) {
-	pollInterval := time.Duration(c.cfg.WorkerPollIntervalMS) * time.Millisecond
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -57,16 +56,27 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 
 		c.reclaimExpiredInFlight()
 		c.reclaimExpiredReorder()
-		batch, selected := c.buildNextBatch()
+		connections := c.socksConnections.Snapshot()
+		totalQueuedBytes := queuedBytesAcross(connections)
+		waitInterval := c.effectiveWaitInterval(totalQueuedBytes)
+
+		if !c.tryAcquireBatchSlot(totalQueuedBytes) {
+			c.waitForSendWork(ctx, c.jitterDuration(waitInterval))
+			continue
+		}
+
+		batch, selected := c.buildNextBatch(connections, totalQueuedBytes)
 		if len(batch.Packets) == 0 {
-			c.waitForSendWork(ctx, c.jitterDuration(pollInterval))
+			c.releaseBatchSlot()
+			c.waitForSendWork(ctx, c.jitterDuration(waitInterval))
 			continue
 		}
 
 		if err := batch.Validate(); err != nil {
 			c.log.Errorf("<red>worker=<cyan>%d</cyan> invalid batch: <cyan>%v</cyan></red>", w.id, err)
 			c.requeueSelected(selected)
-			c.waitForSendWork(ctx, c.jitterDuration(pollInterval))
+			c.releaseBatchSlot()
+			c.waitForSendWork(ctx, c.jitterDuration(waitInterval))
 			continue
 		}
 
@@ -76,16 +86,19 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 		if err != nil {
 			c.log.Errorf("<red>worker=<cyan>%d</cyan> encrypt batch failed: <cyan>%v</cyan></red>", w.id, err)
 			c.requeueSelected(selected)
-			c.waitForSendWork(ctx, c.jitterDuration(pollInterval))
+			c.releaseBatchSlot()
+			c.waitForSendWork(ctx, c.jitterDuration(waitInterval))
 			continue
 		}
 
 		if err := w.postBatch(ctx, c, batch, body); err != nil {
 			c.log.Warnf("<yellow>worker=<cyan>%d</cyan> send failed for batch=<cyan>%s</cyan>: <cyan>%v</cyan></yellow>", w.id, batch.BatchID, err)
 			c.requeueSelected(selected)
-			c.waitForSendWork(ctx, c.jitterDuration(pollInterval))
+			c.releaseBatchSlot()
+			c.waitForSendWork(ctx, c.jitterDuration(waitInterval))
 			continue
 		}
+		c.releaseBatchSlot()
 
 		c.log.Debugf(
 			"<green>worker=<cyan>%d</cyan> sent batch=<cyan>%s</cyan> packets=<cyan>%d</cyan> bytes=<cyan>%d</cyan></green>",
@@ -105,20 +118,30 @@ func (c *Client) waitForSendWork(ctx context.Context, interval time.Duration) {
 	}
 }
 
-func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
-	connections := c.socksConnections.Snapshot()
+func (c *Client) buildNextBatch(connections []*SOCKSConnection, totalQueuedBytes int) (protocol.Batch, []dequeuedPacket) {
 	if len(connections) == 0 {
 		return protocol.Batch{}, nil
 	}
 
+	sort.Slice(connections, func(i, j int) bool {
+		return connections[i].ID < connections[j].ID
+	})
+
 	start := 0
 	if len(connections) > 1 {
-		start = int(c.batchCursor.Add(1)-1) % len(connections)
+		rotationEvery := c.cfg.MuxRotateEveryBatches
+		if rotationEvery < 1 {
+			rotationEvery = 1
+		}
+		turn := c.batchCursor.Add(1) - 1
+		start = int((turn / uint64(rotationEvery)) % uint64(len(connections)))
 	}
-	maxPackets, maxBatchBytes := c.effectiveBatchLimits()
+	maxPackets, maxBatchBytes := c.effectiveBatchLimits(totalQueuedBytes)
+	maxPerSOCKS := c.cfg.MaxPacketsPerSOCKSPerBatch
 
 	selected := make([]dequeuedPacket, 0, maxPackets)
 	packets := make([]protocol.Packet, 0, maxPackets)
+	selectedPerSOCKS := make(map[uint64]int, len(connections))
 	totalBytes := 0
 
 	for len(selected) < maxPackets {
@@ -130,6 +153,9 @@ func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
 			}
 
 			socksConn := connections[(start+offset)%len(connections)]
+			if selectedPerSOCKS[socksConn.ID] >= maxPerSOCKS {
+				continue
+			}
 
 			item := socksConn.DequeuePacket()
 			if item == nil {
@@ -147,6 +173,7 @@ func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
 				item:      item,
 			})
 			packets = append(packets, item.Packet)
+			selectedPerSOCKS[socksConn.ID]++
 			totalBytes += packetBytes
 			progress = true
 		}
@@ -157,7 +184,7 @@ func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
 	}
 
 	if len(packets) == 0 {
-		if pingBatch, ok := c.buildPollBatch(connections); ok {
+		if pingBatch, ok := c.buildPollBatch(connections, totalQueuedBytes); ok {
 			return pingBatch, nil
 		}
 		return protocol.Batch{}, nil
@@ -167,7 +194,7 @@ func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
 	return batch, selected
 }
 
-func (c *Client) buildPollBatch(connections []*SOCKSConnection) (protocol.Batch, bool) {
+func (c *Client) buildPollBatch(connections []*SOCKSConnection, totalQueuedBytes int) (protocol.Batch, bool) {
 	if len(connections) == 0 {
 		return protocol.Batch{}, false
 	}
@@ -175,7 +202,7 @@ func (c *Client) buildPollBatch(connections []*SOCKSConnection) (protocol.Batch,
 	now := time.Now()
 	nowUnixMS := now.UnixMilli()
 	lastUnixMS := c.lastPollUnixMS.Load()
-	minInterval := c.jitterDuration(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond)
+	minInterval := c.jitterDuration(c.effectiveIdlePollInterval(totalQueuedBytes))
 	if lastUnixMS > 0 && nowUnixMS-lastUnixMS < minInterval.Milliseconds() {
 		return protocol.Batch{}, false
 	}
@@ -190,9 +217,17 @@ func (c *Client) buildPollBatch(connections []*SOCKSConnection) (protocol.Batch,
 	return batch, true
 }
 
-func (c *Client) effectiveBatchLimits() (int, int) {
+func (c *Client) effectiveBatchLimits(totalQueuedBytes int) (int, int) {
 	maxPackets := c.cfg.MaxPacketsPerBatch
 	maxBatchBytes := c.cfg.MaxBatchBytes
+	if totalQueuedBytes < c.cfg.MuxBurstThresholdBytes {
+		if reducedPackets := maxPackets / 2; reducedPackets >= 1 {
+			maxPackets = reducedPackets
+		}
+		if reducedBytes := maxBatchBytes / 2; reducedBytes >= c.cfg.MaxChunkSize {
+			maxBatchBytes = reducedBytes
+		}
+	}
 	if !c.cfg.HTTPBatchRandomize {
 		return maxPackets, maxBatchBytes
 	}
@@ -212,6 +247,72 @@ func (c *Client) effectiveBatchLimits() (int, int) {
 	}
 
 	return maxPackets, maxBatchBytes
+}
+
+func (c *Client) effectiveWaitInterval(totalQueuedBytes int) time.Duration {
+	interval := time.Duration(c.cfg.WorkerPollIntervalMS) * time.Millisecond
+	if totalQueuedBytes >= c.cfg.MuxBurstThresholdBytes {
+		if burst := interval / 2; burst >= 25*time.Millisecond {
+			return burst
+		}
+		return 25 * time.Millisecond
+	}
+	return interval
+}
+
+func (c *Client) effectiveIdlePollInterval(totalQueuedBytes int) time.Duration {
+	interval := time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond
+	if totalQueuedBytes >= c.cfg.MuxBurstThresholdBytes {
+		if burst := interval / 2; burst >= time.Duration(c.cfg.WorkerPollIntervalMS)*time.Millisecond {
+			return burst
+		}
+	}
+	return interval
+}
+
+func (c *Client) effectiveConcurrentBatches(totalQueuedBytes int) int {
+	if totalQueuedBytes >= c.cfg.MuxBurstThresholdBytes {
+		return c.cfg.MaxConcurrentBatches
+	}
+	return 1
+}
+
+func (c *Client) tryAcquireBatchSlot(totalQueuedBytes int) bool {
+	limit := c.effectiveConcurrentBatches(totalQueuedBytes)
+	if limit < 1 {
+		limit = 1
+	}
+
+	for {
+		current := c.activeBatches.Load()
+		if int(current) >= limit {
+			return false
+		}
+		if c.activeBatches.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+func (c *Client) releaseBatchSlot() {
+	for {
+		current := c.activeBatches.Load()
+		if current <= 0 {
+			return
+		}
+		if c.activeBatches.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
+}
+
+func queuedBytesAcross(connections []*SOCKSConnection) int {
+	total := 0
+	for _, socksConn := range connections {
+		_, queuedBytes := socksConn.QueueSnapshot()
+		total += queuedBytes
+	}
+	return total
 }
 
 func (c *Client) jitterDuration(base time.Duration) time.Duration {
