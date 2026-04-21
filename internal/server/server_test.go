@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -253,6 +254,68 @@ func TestProcessBatchBlockedSessionDoesNotBlockOtherSessions(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected blocked session batch to finish after releasing dial")
+	}
+}
+
+func TestSOCKSStateNextOutboundSequenceIsConcurrentSafe(t *testing.T) {
+	socksState := &SOCKSState{}
+
+	const workers = 32
+	const iterationsPerWorker = 64
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	results := make(chan uint64, workers*iterationsPerWorker)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < iterationsPerWorker; j++ {
+				results <- socksState.nextOutboundSequence()
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
+	close(results)
+
+	seen := make(map[uint64]struct{}, workers*iterationsPerWorker)
+	var maxSeq uint64
+	for seq := range results {
+		if _, exists := seen[seq]; exists {
+			t.Fatalf("duplicate outbound sequence generated: %d", seq)
+		}
+		seen[seq] = struct{}{}
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+
+	expected := workers * iterationsPerWorker
+	if len(seen) != expected {
+		t.Fatalf("expected %d unique sequences, got %d", expected, len(seen))
+	}
+	if maxSeq != uint64(expected) {
+		t.Fatalf("expected max sequence %d, got %d", expected, maxSeq)
+	}
+}
+
+func TestSOCKSStateCloseUpstreamClearsConnectionSnapshot(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+
+	socksState := &SOCKSState{}
+	socksState.setUpstreamConn(serverConn)
+
+	if err := socksState.closeUpstream(); err != nil {
+		t.Fatalf("expected closeUpstream to succeed, got %v", err)
+	}
+
+	if _, ok := socksState.currentUpstreamConn(); ok {
+		t.Fatal("expected upstream connection snapshot to be cleared after close")
 	}
 }
 
