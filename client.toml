@@ -10,6 +10,10 @@ HTTP_PADDING_MIN_BYTES = 16
 HTTP_PADDING_MAX_BYTES = 48
 HTTP_REFERER = ""
 HTTP_ACCEPT_LANGUAGE = ""
+HTTP_TIMING_JITTER_MS = 50
+HTTP_BATCH_RANDOMIZE = true
+HTTP_BATCH_PACKETS_JITTER = 4
+HTTP_BATCH_BYTES_JITTER = 32768
 # ==============================================================================
 LOG_LEVEL = "DEBUG"
 # ==============================================================================

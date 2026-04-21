@@ -73,6 +73,7 @@ func TestBuildNextBatchRotatesAcrossConnections(t *testing.T) {
 		MaxBatchBytes:         4096,
 		WorkerCount:           1,
 		MaxQueueBytesPerSOCKS: 4096,
+		HTTPBatchRandomize:    false,
 	}
 
 	client := New(cfg, nil)

@@ -16,67 +16,75 @@ import (
 )
 
 type Config struct {
-	AESEncryptionKey      string
-	RelayURL              string
-	HTTPUserAgentsFile    string
-	HTTPHeaderProfile     string
-	HTTPRandomizeHeaders  bool
-	HTTPPaddingHeader     string
-	HTTPPaddingMinBytes   int
-	HTTPPaddingMaxBytes   int
-	HTTPReferer           string
-	HTTPAcceptLanguage    string
-	ServerHost            string
-	ServerPort            int
-	SOCKSHost             string
-	SOCKSPort             int
-	SOCKSAuth             bool
-	SOCKSUsername         string
-	SOCKSPassword         string
-	LogLevel              string
-	MaxChunkSize          int
-	MaxPacketsPerBatch    int
-	MaxBatchBytes         int
-	WorkerCount           int
-	HTTPRequestTimeoutMS  int
-	WorkerPollIntervalMS  int
-	IdlePollIntervalMS    int
-	MaxQueueBytesPerSOCKS int
-	AckTimeoutMS          int
-	MaxRetryCount         int
-	SessionIdleTimeoutMS  int
-	SOCKSIdleTimeoutMS    int
-	ReadBodyLimitBytes    int
-	MaxServerQueueBytes   int
+	AESEncryptionKey       string
+	RelayURL               string
+	HTTPUserAgentsFile     string
+	HTTPHeaderProfile      string
+	HTTPRandomizeHeaders   bool
+	HTTPPaddingHeader      string
+	HTTPPaddingMinBytes    int
+	HTTPPaddingMaxBytes    int
+	HTTPReferer            string
+	HTTPAcceptLanguage     string
+	HTTPTimingJitterMS     int
+	HTTPBatchRandomize     bool
+	HTTPBatchPacketsJitter int
+	HTTPBatchBytesJitter   int
+	ServerHost             string
+	ServerPort             int
+	SOCKSHost              string
+	SOCKSPort              int
+	SOCKSAuth              bool
+	SOCKSUsername          string
+	SOCKSPassword          string
+	LogLevel               string
+	MaxChunkSize           int
+	MaxPacketsPerBatch     int
+	MaxBatchBytes          int
+	WorkerCount            int
+	HTTPRequestTimeoutMS   int
+	WorkerPollIntervalMS   int
+	IdlePollIntervalMS     int
+	MaxQueueBytesPerSOCKS  int
+	AckTimeoutMS           int
+	MaxRetryCount          int
+	SessionIdleTimeoutMS   int
+	SOCKSIdleTimeoutMS     int
+	ReadBodyLimitBytes     int
+	MaxServerQueueBytes    int
 }
 
 func Load(path string) (Config, error) {
 	cfg := Config{
-		SOCKSHost:             "127.0.0.1",
-		SOCKSPort:             1080,
-		HTTPUserAgentsFile:    "user-agents.txt",
-		HTTPHeaderProfile:     "browser",
-		HTTPRandomizeHeaders:  true,
-		HTTPPaddingHeader:     "X-Padding",
-		HTTPPaddingMinBytes:   16,
-		HTTPPaddingMaxBytes:   48,
-		ServerHost:            "127.0.0.1",
-		ServerPort:            28080,
-		LogLevel:              "INFO",
-		MaxChunkSize:          16 * 1024,
-		MaxPacketsPerBatch:    32,
-		MaxBatchBytes:         256 * 1024,
-		WorkerCount:           4,
-		HTTPRequestTimeoutMS:  15000,
-		WorkerPollIntervalMS:  200,
-		IdlePollIntervalMS:    1000,
-		MaxQueueBytesPerSOCKS: 1024 * 1024,
-		AckTimeoutMS:          5000,
-		MaxRetryCount:         5,
-		SessionIdleTimeoutMS:  5 * 60 * 1000,
-		SOCKSIdleTimeoutMS:    2 * 60 * 1000,
-		ReadBodyLimitBytes:    2 * 1024 * 1024,
-		MaxServerQueueBytes:   2 * 1024 * 1024,
+		SOCKSHost:              "127.0.0.1",
+		SOCKSPort:              1080,
+		HTTPUserAgentsFile:     "user-agents.txt",
+		HTTPHeaderProfile:      "browser",
+		HTTPRandomizeHeaders:   true,
+		HTTPPaddingHeader:      "X-Padding",
+		HTTPPaddingMinBytes:    16,
+		HTTPPaddingMaxBytes:    48,
+		HTTPTimingJitterMS:     50,
+		HTTPBatchRandomize:     true,
+		HTTPBatchPacketsJitter: 4,
+		HTTPBatchBytesJitter:   32768,
+		ServerHost:             "127.0.0.1",
+		ServerPort:             28080,
+		LogLevel:               "INFO",
+		MaxChunkSize:           16 * 1024,
+		MaxPacketsPerBatch:     32,
+		MaxBatchBytes:          256 * 1024,
+		WorkerCount:            4,
+		HTTPRequestTimeoutMS:   15000,
+		WorkerPollIntervalMS:   200,
+		IdlePollIntervalMS:     1000,
+		MaxQueueBytesPerSOCKS:  1024 * 1024,
+		AckTimeoutMS:           5000,
+		MaxRetryCount:          5,
+		SessionIdleTimeoutMS:   5 * 60 * 1000,
+		SOCKSIdleTimeoutMS:     2 * 60 * 1000,
+		ReadBodyLimitBytes:     2 * 1024 * 1024,
+		MaxServerQueueBytes:    2 * 1024 * 1024,
 	}
 
 	file, err := os.Open(path)
@@ -114,6 +122,7 @@ func Load(path string) (Config, error) {
 			if err != nil {
 				return Config{}, fmt.Errorf("parse HTTP_RANDOMIZE_HEADERS: %w", err)
 			}
+
 			cfg.HTTPRandomizeHeaders = randomize
 		case "HTTP_PADDING_HEADER":
 			cfg.HTTPPaddingHeader = trimString(value)
@@ -122,17 +131,47 @@ func Load(path string) (Config, error) {
 			if err != nil {
 				return Config{}, fmt.Errorf("parse HTTP_PADDING_MIN_BYTES: %w", err)
 			}
+
 			cfg.HTTPPaddingMinBytes = size
 		case "HTTP_PADDING_MAX_BYTES":
 			size, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse HTTP_PADDING_MAX_BYTES: %w", err)
 			}
+
 			cfg.HTTPPaddingMaxBytes = size
 		case "HTTP_REFERER":
 			cfg.HTTPReferer = trimString(value)
 		case "HTTP_ACCEPT_LANGUAGE":
 			cfg.HTTPAcceptLanguage = trimString(value)
+		case "HTTP_TIMING_JITTER_MS":
+			valueInt, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_TIMING_JITTER_MS: %w", err)
+			}
+
+			cfg.HTTPTimingJitterMS = valueInt
+		case "HTTP_BATCH_RANDOMIZE":
+			randomize, err := strconv.ParseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_BATCH_RANDOMIZE: %w", err)
+			}
+
+			cfg.HTTPBatchRandomize = randomize
+		case "HTTP_BATCH_PACKETS_JITTER":
+			valueInt, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_BATCH_PACKETS_JITTER: %w", err)
+			}
+
+			cfg.HTTPBatchPacketsJitter = valueInt
+		case "HTTP_BATCH_BYTES_JITTER":
+			valueInt, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_BATCH_BYTES_JITTER: %w", err)
+			}
+
+			cfg.HTTPBatchBytesJitter = valueInt
 		case "SERVER_HOST":
 			cfg.ServerHost = trimString(value)
 		case "SERVER_PORT":
@@ -140,6 +179,7 @@ func Load(path string) (Config, error) {
 			if err != nil {
 				return Config{}, fmt.Errorf("parse SERVER_PORT: %w", err)
 			}
+
 			cfg.ServerPort = port
 		case "SOCKS_HOST":
 			cfg.SOCKSHost = trimString(value)
@@ -148,12 +188,14 @@ func Load(path string) (Config, error) {
 			if err != nil {
 				return Config{}, fmt.Errorf("parse SOCKS_PORT: %w", err)
 			}
+
 			cfg.SOCKSPort = port
 		case "SOCKS_AUTH":
 			auth, err := strconv.ParseBool(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse SOCKS_AUTH: %w", err)
 			}
+
 			cfg.SOCKSAuth = auth
 		case "SOCKS_USERNAME":
 			cfg.SOCKSUsername = trimString(value)
@@ -166,60 +208,70 @@ func Load(path string) (Config, error) {
 			if err != nil {
 				return Config{}, fmt.Errorf("parse MAX_CHUNK_SIZE: %w", err)
 			}
+
 			cfg.MaxChunkSize = size
 		case "MAX_PACKETS_PER_BATCH":
 			count, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse MAX_PACKETS_PER_BATCH: %w", err)
 			}
+
 			cfg.MaxPacketsPerBatch = count
 		case "MAX_BATCH_BYTES":
 			size, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse MAX_BATCH_BYTES: %w", err)
 			}
+
 			cfg.MaxBatchBytes = size
 		case "WORKER_COUNT":
 			count, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse WORKER_COUNT: %w", err)
 			}
+
 			cfg.WorkerCount = count
 		case "HTTP_REQUEST_TIMEOUT_MS":
 			timeout, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse HTTP_REQUEST_TIMEOUT_MS: %w", err)
 			}
+
 			cfg.HTTPRequestTimeoutMS = timeout
 		case "WORKER_POLL_INTERVAL_MS":
 			interval, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse WORKER_POLL_INTERVAL_MS: %w", err)
 			}
+
 			cfg.WorkerPollIntervalMS = interval
 		case "IDLE_POLL_INTERVAL_MS":
 			interval, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse IDLE_POLL_INTERVAL_MS: %w", err)
 			}
+
 			cfg.IdlePollIntervalMS = interval
 		case "MAX_QUEUE_BYTES_PER_SOCKS":
 			size, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse MAX_QUEUE_BYTES_PER_SOCKS: %w", err)
 			}
+
 			cfg.MaxQueueBytesPerSOCKS = size
 		case "ACK_TIMEOUT_MS":
 			timeout, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse ACK_TIMEOUT_MS: %w", err)
 			}
+
 			cfg.AckTimeoutMS = timeout
 		case "MAX_RETRY_COUNT":
 			count, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse MAX_RETRY_COUNT: %w", err)
 			}
+
 			cfg.MaxRetryCount = count
 		case "SESSION_IDLE_TIMEOUT_MS":
 			timeout, err := strconv.Atoi(value)
@@ -232,18 +284,21 @@ func Load(path string) (Config, error) {
 			if err != nil {
 				return Config{}, fmt.Errorf("parse SOCKS_IDLE_TIMEOUT_MS: %w", err)
 			}
+
 			cfg.SOCKSIdleTimeoutMS = timeout
 		case "READ_BODY_LIMIT_BYTES":
 			size, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse READ_BODY_LIMIT_BYTES: %w", err)
 			}
+
 			cfg.ReadBodyLimitBytes = size
 		case "MAX_SERVER_QUEUE_BYTES":
 			size, err := strconv.Atoi(value)
 			if err != nil {
 				return Config{}, fmt.Errorf("parse MAX_SERVER_QUEUE_BYTES: %w", err)
 			}
+
 			cfg.MaxServerQueueBytes = size
 		}
 	}
@@ -292,7 +347,7 @@ func (c Config) ValidateClient() error {
 		return fmt.Errorf("invalid MAX_RETRY_COUNT: %d", c.MaxRetryCount)
 	}
 
-	if c.HTTPHeaderProfile != "browser" && c.HTTPHeaderProfile != "minimal" {
+	if c.HTTPHeaderProfile != "browser" && c.HTTPHeaderProfile != "cdn" && c.HTTPHeaderProfile != "api" && c.HTTPHeaderProfile != "minimal" {
 		return fmt.Errorf("invalid HTTP_HEADER_PROFILE: %s", c.HTTPHeaderProfile)
 	}
 
@@ -302,6 +357,15 @@ func (c Config) ValidateClient() error {
 
 	if c.HTTPPaddingMaxBytes < c.HTTPPaddingMinBytes {
 		return fmt.Errorf("HTTP_PADDING_MAX_BYTES must be >= HTTP_PADDING_MIN_BYTES")
+	}
+	if c.HTTPTimingJitterMS < 0 {
+		return fmt.Errorf("invalid HTTP_TIMING_JITTER_MS: %d", c.HTTPTimingJitterMS)
+	}
+	if c.HTTPBatchPacketsJitter < 0 {
+		return fmt.Errorf("invalid HTTP_BATCH_PACKETS_JITTER: %d", c.HTTPBatchPacketsJitter)
+	}
+	if c.HTTPBatchBytesJitter < 0 {
+		return fmt.Errorf("invalid HTTP_BATCH_BYTES_JITTER: %d", c.HTTPBatchBytesJitter)
 	}
 
 	if c.MaxQueueBytesPerSOCKS < c.MaxChunkSize {

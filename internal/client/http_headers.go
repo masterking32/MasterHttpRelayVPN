@@ -42,23 +42,13 @@ func (b *relayHeaderBuilder) Apply(req *http.Request) {
 		req.Header.Set("User-Agent", ua)
 	}
 
-	if b.cfg.HTTPHeaderProfile == "browser" {
-		req.Header.Set("Accept", pickRandomString(
-			"*/*",
-			"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-			"application/json,text/plain,*/*",
-		))
-
-		req.Header.Set("Accept-Language", b.pickAcceptLanguage())
-		req.Header.Set("Cache-Control", pickRandomString("no-cache", "max-age=0", "no-store"))
-		req.Header.Set("Pragma", "no-cache")
-		req.Header.Set("Sec-Fetch-Dest", "empty")
-		req.Header.Set("Sec-Fetch-Mode", "cors")
-		req.Header.Set("Sec-Fetch-Site", pickRandomString("same-origin", "same-site", "cross-site"))
-		req.Header.Set("Priority", pickRandomString("u=0, i", "u=1, i"))
-		if referer := b.pickReferer(); referer != "" {
-			req.Header.Set("Referer", referer)
-		}
+	switch b.cfg.HTTPHeaderProfile {
+	case "browser":
+		b.applyBrowserProfile(req)
+	case "cdn":
+		b.applyCDNProfile(req)
+	case "api":
+		b.applyAPIProfile(req)
 	}
 
 	if b.cfg.HTTPRandomizeHeaders {
@@ -72,6 +62,57 @@ func (b *relayHeaderBuilder) Apply(req *http.Request) {
 		}
 
 		req.Header.Set("X-Request-Nonce", randomHex(8))
+	}
+}
+
+func (b *relayHeaderBuilder) applyBrowserProfile(req *http.Request) {
+	req.Header.Set("Accept", pickRandomString(
+		"*/*",
+		"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		"application/json,text/plain,*/*",
+	))
+	req.Header.Set("Accept-Language", b.pickAcceptLanguage())
+	req.Header.Set("Cache-Control", pickRandomString("no-cache", "max-age=0", "no-store"))
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Site", pickRandomString("same-origin", "same-site", "cross-site"))
+	req.Header.Set("Priority", pickRandomString("u=0, i", "u=1, i"))
+	if maybeTrue() {
+		req.Header.Set("DNT", "1")
+	}
+	if referer := b.pickReferer(); referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+}
+
+func (b *relayHeaderBuilder) applyCDNProfile(req *http.Request) {
+	req.Header.Set("Accept", pickRandomString("*/*", "application/octet-stream,*/*", "application/json,*/*"))
+	req.Header.Set("Accept-Language", b.pickAcceptLanguage())
+	req.Header.Set("Cache-Control", pickRandomString("no-store", "no-cache", "max-age=0"))
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("X-Requested-With", pickRandomString("XMLHttpRequest", "Fetch"))
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", pickRandomString("cors", "same-origin"))
+	req.Header.Set("Sec-Fetch-Site", pickRandomString("same-origin", "same-site"))
+	if referer := b.pickReferer(); referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+}
+
+func (b *relayHeaderBuilder) applyAPIProfile(req *http.Request) {
+	req.Header.Set("Accept", pickRandomString("application/json", "application/octet-stream", "application/json,text/plain,*/*"))
+	req.Header.Set("Cache-Control", pickRandomString("no-store", "no-cache"))
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("X-Requested-With", pickRandomString("XMLHttpRequest", "APIClient"))
+	if maybeTrue() {
+		req.Header.Set("X-Requested-At", randomHex(6))
+	}
+	if b.cfg.HTTPAcceptLanguage != "" {
+		req.Header.Set("Accept-Language", b.pickAcceptLanguage())
+	}
+	if referer := b.pickReferer(); referer != "" && maybeTrue() {
+		req.Header.Set("Referer", referer)
 	}
 }
 
@@ -223,6 +264,10 @@ func randomPadding(minBytes int, maxBytes int) string {
 	}
 
 	return padding
+}
+
+func maybeTrue() bool {
+	return randomIndex(2) == 0
 }
 
 func randomHex(byteCount int) string {
