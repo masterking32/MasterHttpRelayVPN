@@ -114,4 +114,18 @@ READ_BODY_LIMIT_BYTES = 2097152
 # Allowed: integer >= MAX_CHUNK_SIZE
 MAX_SERVER_QUEUE_BYTES = 2097152
 
+# REORDER_TIMEOUT_MS:
+# Maximum time an out-of-order inbound packet may stay buffered waiting for a gap.
+# If the gap is not resolved in time, the server resets that SOCKS state.
+# Default: 5000
+# Allowed: integer >= 1
+REORDER_TIMEOUT_MS = 5000
+
+# MAX_REORDER_BUFFER_PACKETS:
+# Maximum number of out-of-order inbound packets buffered per SOCKS state.
+# If exceeded, the server resets that SOCKS state to cap memory usage.
+# Default: 128
+# Allowed: integer >= 1
+MAX_REORDER_BUFFER_PACKETS = 128
+
 # ==============================================================================

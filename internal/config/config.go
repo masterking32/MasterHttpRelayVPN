@@ -48,6 +48,8 @@ type Config struct {
 	MaxQueueBytesPerSOCKS  int
 	AckTimeoutMS           int
 	MaxRetryCount          int
+	ReorderTimeoutMS       int
+	MaxReorderBufferPackets int
 	SessionIdleTimeoutMS   int
 	SOCKSIdleTimeoutMS     int
 	ReadBodyLimitBytes     int
@@ -81,6 +83,8 @@ func Load(path string) (Config, error) {
 		MaxQueueBytesPerSOCKS:  1024 * 1024,
 		AckTimeoutMS:           5000,
 		MaxRetryCount:          5,
+		ReorderTimeoutMS:       5000,
+		MaxReorderBufferPackets: 128,
 		SessionIdleTimeoutMS:   5 * 60 * 1000,
 		SOCKSIdleTimeoutMS:     2 * 60 * 1000,
 		ReadBodyLimitBytes:     2 * 1024 * 1024,
@@ -273,6 +277,20 @@ func Load(path string) (Config, error) {
 			}
 
 			cfg.MaxRetryCount = count
+		case "REORDER_TIMEOUT_MS":
+			timeout, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse REORDER_TIMEOUT_MS: %w", err)
+			}
+
+			cfg.ReorderTimeoutMS = timeout
+		case "MAX_REORDER_BUFFER_PACKETS":
+			count, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse MAX_REORDER_BUFFER_PACKETS: %w", err)
+			}
+
+			cfg.MaxReorderBufferPackets = count
 		case "SESSION_IDLE_TIMEOUT_MS":
 			timeout, err := strconv.Atoi(value)
 			if err != nil {
@@ -346,6 +364,12 @@ func (c Config) ValidateClient() error {
 	if c.MaxRetryCount < 0 {
 		return fmt.Errorf("invalid MAX_RETRY_COUNT: %d", c.MaxRetryCount)
 	}
+	if c.ReorderTimeoutMS < 1 {
+		return fmt.Errorf("invalid REORDER_TIMEOUT_MS: %d", c.ReorderTimeoutMS)
+	}
+	if c.MaxReorderBufferPackets < 1 {
+		return fmt.Errorf("invalid MAX_REORDER_BUFFER_PACKETS: %d", c.MaxReorderBufferPackets)
+	}
 
 	if c.HTTPHeaderProfile != "browser" && c.HTTPHeaderProfile != "cdn" && c.HTTPHeaderProfile != "api" && c.HTTPHeaderProfile != "minimal" {
 		return fmt.Errorf("invalid HTTP_HEADER_PROFILE: %s", c.HTTPHeaderProfile)
@@ -390,6 +414,12 @@ func (c Config) ValidateServer() error {
 
 	if c.SOCKSIdleTimeoutMS < 1 {
 		return fmt.Errorf("invalid SOCKS_IDLE_TIMEOUT_MS: %d", c.SOCKSIdleTimeoutMS)
+	}
+	if c.ReorderTimeoutMS < 1 {
+		return fmt.Errorf("invalid REORDER_TIMEOUT_MS: %d", c.ReorderTimeoutMS)
+	}
+	if c.MaxReorderBufferPackets < 1 {
+		return fmt.Errorf("invalid MAX_REORDER_BUFFER_PACKETS: %d", c.MaxReorderBufferPackets)
 	}
 
 	if c.ReadBodyLimitBytes < c.MaxChunkSize {

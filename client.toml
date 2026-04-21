@@ -236,4 +236,18 @@ ACK_TIMEOUT_MS = 5000
 # Allowed: integer >= 0
 MAX_RETRY_COUNT = 5
 
+# REORDER_TIMEOUT_MS:
+# Maximum time an out-of-order inbound packet may wait for missing earlier packets.
+# If the gap is not filled before this timeout, the connection is reset.
+# Default: 5000
+# Allowed: integer >= 1
+REORDER_TIMEOUT_MS = 5000
+
+# MAX_REORDER_BUFFER_PACKETS:
+# Maximum number of out-of-order inbound packets buffered per SOCKS connection.
+# If exceeded, the connection is reset to avoid unbounded memory growth.
+# Default: 128
+# Allowed: integer >= 1
+MAX_REORDER_BUFFER_PACKETS = 128
+
 # ==============================================================================

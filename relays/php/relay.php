@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 /*
  * MasterHttpRelayVPN - Simple PHP Relay
+ * Copyright (c) 2026 MasterkinG32.
+ * Github: https://github.com/masterking32/MasterHttpRelayVPN
  *
  * Test relay endpoint:
  * - Accepts the incoming HTTP request

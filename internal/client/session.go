@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"masterhttprelayvpn/internal/protocol"
 )
 
 type SOCKSConnection struct {
@@ -40,6 +42,7 @@ type SOCKSConnection struct {
 	LocalConn      net.Conn
 	localWriteMu   sync.Mutex
 	localCloseMu   sync.Mutex
+	reorderMu      sync.Mutex
 	localReadEOF   bool
 	localWriteEOF  bool
 	closedC        chan struct{}
@@ -49,6 +52,13 @@ type SOCKSConnection struct {
 	OutboundQueue  []*SOCKSOutboundQueueItem
 	QueuedBytes    int
 	InFlight       map[string]*SOCKSOutboundQueueItem
+	NextInboundSequence uint64
+	PendingInbound      map[uint64]PendingInboundPacket
+}
+
+type PendingInboundPacket struct {
+	Packet   protocol.Packet
+	QueuedAt time.Time
 }
 
 func (s *SOCKSConnection) InitialPayloadHex() string {
@@ -83,6 +93,7 @@ func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string
 		closedC:          make(chan struct{}),
 		connectResultC:   make(chan error, 1),
 		InFlight:         make(map[string]*SOCKSOutboundQueueItem),
+		PendingInbound:   make(map[uint64]PendingInboundPacket),
 	}
 
 	s.mu.Lock()
@@ -197,6 +208,10 @@ func (s *SOCKSConnection) ResetTransportState() {
 
 	s.InitialPayload = nil
 	s.BufferedBytes = 0
+	s.reorderMu.Lock()
+	clear(s.PendingInbound)
+	s.NextInboundSequence = 0
+	s.reorderMu.Unlock()
 }
 
 func (s *SOCKSConnectionStore) Get(id uint64) *SOCKSConnection {

@@ -56,6 +56,7 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 		}
 
 		c.reclaimExpiredInFlight()
+		c.reclaimExpiredReorder()
 		batch, selected := c.buildNextBatch()
 		if len(batch.Packets) == 0 {
 			c.waitForSendWork(ctx, c.jitterDuration(pollInterval))
@@ -272,6 +273,22 @@ func (c *Client) reclaimExpiredInFlight() {
 	}
 }
 
+func (c *Client) reclaimExpiredReorder() {
+	timeout := time.Duration(c.cfg.ReorderTimeoutMS) * time.Millisecond
+	for _, socksConn := range c.socksConnections.Snapshot() {
+		if !socksConn.hasExpiredInboundGap(timeout) {
+			continue
+		}
+		c.log.Warnf(
+			"<yellow>socks_id=<cyan>%d</cyan> inbound reorder gap expired, closing connection</yellow>",
+			socksConn.ID,
+		)
+		socksConn.ConnectFailure = "inbound reorder timeout"
+		socksConn.ResetTransportState()
+		_ = socksConn.CloseLocal()
+	}
+}
+
 func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Batch, body []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.RelayURL, bytes.NewReader(body))
 	if err != nil {
@@ -354,6 +371,42 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 		return nil
 	}
 
+	if isReorderSequencedPacket(packet.Type) {
+		readyPackets, duplicate, overflow := socksConn.queueInboundPacket(packet, c.cfg.MaxReorderBufferPackets)
+		if duplicate {
+			c.log.Debugf(
+				"<gray>ignored duplicate inbound packet socks_id=<cyan>%d</cyan> type=<cyan>%s</cyan> seq=<cyan>%d</cyan></gray>",
+				socksConn.ID, packet.Type, packet.Sequence,
+			)
+			return nil
+		}
+		if overflow {
+			c.log.Warnf(
+				"<yellow>inbound reorder buffer overflow socks_id=<cyan>%d</cyan> type=<cyan>%s</cyan> seq=<cyan>%d</cyan></yellow>",
+				socksConn.ID, packet.Type, packet.Sequence,
+			)
+			socksConn.ConnectFailure = "inbound reorder overflow"
+			socksConn.ResetTransportState()
+			_ = socksConn.CloseLocal()
+			return nil
+		}
+		for _, readyPacket := range readyPackets {
+			if err := c.applyOrderedResponsePacket(socksConn, readyPacket); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	return c.applyOrderedResponsePacket(socksConn, packet)
+}
+
+func (c *Client) applyOrderedResponsePacket(socksConn *SOCKSConnection, packet protocol.Packet) error {
+	switch packet.Type {
+	case protocol.PacketTypePing, protocol.PacketTypePong:
+		return nil
+	}
+
 	switch packet.Type {
 	case protocol.PacketTypeSOCKSConnectAck:
 		_ = socksConn.AckPacket(packet)
@@ -364,6 +417,11 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 			socksConn.ID,
 		)
 		socksConn.CompleteConnect(nil)
+		for _, readyPacket := range socksConn.activateInboundDrain() {
+			if err := c.applyOrderedResponsePacket(socksConn, readyPacket); err != nil {
+				return err
+			}
+		}
 		return nil
 
 	case protocol.PacketTypeSOCKSConnectFail,

@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"masterhttprelayvpn/internal/config"
 	"masterhttprelayvpn/internal/protocol"
@@ -58,6 +59,76 @@ func TestDrainSessionOutboundLockedRespectsGlobalLimits(t *testing.T) {
 	}
 	if remainingPackets != 1 {
 		t.Fatalf("expected one packet to remain queued, got %d", remainingPackets)
+	}
+}
+
+func TestSOCKSStateInboundReorderQueuesUntilGapFilled(t *testing.T) {
+	socksState := &SOCKSState{
+		ConnectAcked:    true,
+		PendingInbound:  make(map[uint64]PendingInboundPacket),
+		MaxQueueBytes:   1024,
+	}
+
+	packet2 := testDataPacket("client-session", 1, 2, "two")
+	ready, duplicate, overflow := socksState.queueInboundPacketLocked(packet2, time.Now(), 8)
+	if duplicate || overflow {
+		t.Fatalf("unexpected duplicate=%t overflow=%t", duplicate, overflow)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("expected no ready packets before sequence gap is filled, got %d", len(ready))
+	}
+
+	packet1 := testDataPacket("client-session", 1, 1, "one")
+	ready, duplicate, overflow = socksState.queueInboundPacketLocked(packet1, time.Now(), 8)
+	if duplicate || overflow {
+		t.Fatalf("unexpected duplicate=%t overflow=%t", duplicate, overflow)
+	}
+	if len(ready) != 2 {
+		t.Fatalf("expected 2 ready packets after filling sequence gap, got %d", len(ready))
+	}
+	if ready[0].Sequence != 1 || ready[1].Sequence != 2 {
+		t.Fatalf("expected ordered sequences [1 2], got [%d %d]", ready[0].Sequence, ready[1].Sequence)
+	}
+}
+
+func TestSOCKSStateInboundGapTimeout(t *testing.T) {
+	socksState := &SOCKSState{
+		PendingInbound: make(map[uint64]PendingInboundPacket),
+	}
+	socksState.PendingInbound[3] = PendingInboundPacket{
+		Packet:   testDataPacket("client-session", 1, 3, "late"),
+		QueuedAt: time.Now().Add(-2 * time.Second),
+	}
+
+	if !socksState.hasExpiredInboundGapLocked(time.Now(), 500*time.Millisecond) {
+		t.Fatal("expected inbound gap timeout to trigger")
+	}
+	if len(socksState.PendingInbound) != 0 {
+		t.Fatalf("expected pending inbound buffer to be cleared, got %d items", len(socksState.PendingInbound))
+	}
+}
+
+func TestSOCKSStateInboundDataWaitsForConnect(t *testing.T) {
+	socksState := &SOCKSState{
+		PendingInbound: make(map[uint64]PendingInboundPacket),
+	}
+
+	packet1 := testDataPacket("client-session", 1, 1, "one")
+	ready, duplicate, overflow := socksState.queueInboundPacketLocked(packet1, time.Now(), 8)
+	if duplicate || overflow {
+		t.Fatalf("unexpected duplicate=%t overflow=%t", duplicate, overflow)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("expected packet to stay buffered before connect, got %d ready packets", len(ready))
+	}
+
+	socksState.ConnectAcked = true
+	ready = socksState.drainReadyInboundLocked()
+	if len(ready) != 1 {
+		t.Fatalf("expected 1 ready packet after connect, got %d", len(ready))
+	}
+	if ready[0].Sequence != 1 {
+		t.Fatalf("expected sequence 1, got %d", ready[0].Sequence)
 	}
 }
 

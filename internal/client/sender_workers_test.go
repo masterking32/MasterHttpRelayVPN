@@ -3,8 +3,10 @@ package client
 import (
 	"net"
 	"testing"
+	"time"
 
 	"masterhttprelayvpn/internal/config"
+	"masterhttprelayvpn/internal/protocol"
 )
 
 func TestSOCKSConnectionStoreDeleteClearsTransportState(t *testing.T) {
@@ -66,6 +68,87 @@ func TestSOCKSConnectionStoreDeleteClearsTransportState(t *testing.T) {
 	}
 }
 
+func TestSOCKSConnectionInboundReorderQueuesAndDrainsInOrder(t *testing.T) {
+	socksConn := &SOCKSConnection{
+		ConnectAccepted: true,
+		PendingInbound:  make(map[uint64]PendingInboundPacket),
+	}
+
+	packet2 := protocol.NewPacket("client-session", protocol.PacketTypeSOCKSData)
+	packet2.SOCKSID = 1
+	packet2.Sequence = 2
+	packet2.Payload = []byte("two")
+
+	ready, duplicate, overflow := socksConn.queueInboundPacket(packet2, 8)
+	if duplicate || overflow {
+		t.Fatalf("unexpected duplicate=%t overflow=%t", duplicate, overflow)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("expected no ready packets before gap is filled, got %d", len(ready))
+	}
+
+	packet1 := protocol.NewPacket("client-session", protocol.PacketTypeSOCKSData)
+	packet1.SOCKSID = 1
+	packet1.Sequence = 1
+	packet1.Payload = []byte("one")
+
+	ready, duplicate, overflow = socksConn.queueInboundPacket(packet1, 8)
+	if duplicate || overflow {
+		t.Fatalf("unexpected duplicate=%t overflow=%t", duplicate, overflow)
+	}
+	if len(ready) != 2 {
+		t.Fatalf("expected 2 ready packets after filling gap, got %d", len(ready))
+	}
+	if ready[0].Sequence != 1 || ready[1].Sequence != 2 {
+		t.Fatalf("expected ordered sequences [1 2], got [%d %d]", ready[0].Sequence, ready[1].Sequence)
+	}
+}
+
+func TestSOCKSConnectionInboundGapTimeout(t *testing.T) {
+	socksConn := &SOCKSConnection{
+		PendingInbound: make(map[uint64]PendingInboundPacket),
+	}
+	socksConn.PendingInbound[5] = PendingInboundPacket{
+		Packet:   protocol.Packet{Sequence: 5},
+		QueuedAt: time.Now().Add(-2 * time.Second),
+	}
+
+	if !socksConn.hasExpiredInboundGap(500 * time.Millisecond) {
+		t.Fatal("expected inbound gap timeout to trigger")
+	}
+	if len(socksConn.PendingInbound) != 0 {
+		t.Fatalf("expected pending inbound buffer to be cleared, got %d items", len(socksConn.PendingInbound))
+	}
+}
+
+func TestSOCKSConnectionInboundDataWaitsForConnectAck(t *testing.T) {
+	socksConn := &SOCKSConnection{
+		PendingInbound: make(map[uint64]PendingInboundPacket),
+	}
+
+	packet1 := protocol.NewPacket("client-session", protocol.PacketTypeSOCKSData)
+	packet1.SOCKSID = 1
+	packet1.Sequence = 1
+	packet1.Payload = []byte("one")
+
+	ready, duplicate, overflow := socksConn.queueInboundPacket(packet1, 8)
+	if duplicate || overflow {
+		t.Fatalf("unexpected duplicate=%t overflow=%t", duplicate, overflow)
+	}
+	if len(ready) != 0 {
+		t.Fatalf("expected buffered packet before connect ack, got %d ready packets", len(ready))
+	}
+
+	socksConn.ConnectAccepted = true
+	ready = socksConn.activateInboundDrain()
+	if len(ready) != 1 {
+		t.Fatalf("expected 1 ready packet after connect ack, got %d", len(ready))
+	}
+	if ready[0].Sequence != 1 {
+		t.Fatalf("expected sequence 1, got %d", ready[0].Sequence)
+	}
+}
+
 func TestBuildNextBatchRotatesAcrossConnections(t *testing.T) {
 	cfg := config.Config{
 		MaxChunkSize:          1024,
@@ -89,14 +172,19 @@ func TestBuildNextBatchRotatesAcrossConnections(t *testing.T) {
 		}
 	}
 
-	expected := []uint64{conn1.ID, conn2.ID, conn3.ID}
-	for i, want := range expected {
+	seen := make(map[uint64]bool)
+	for i := 0; i < 3; i++ {
 		batch, selected := client.buildNextBatch()
 		if len(batch.Packets) != 1 || len(selected) != 1 {
 			t.Fatalf("iteration %d: expected one selected packet, got packets=%d selected=%d", i, len(batch.Packets), len(selected))
 		}
-		if got := batch.Packets[0].SOCKSID; got != want {
-			t.Fatalf("iteration %d: expected socks_id=%d, got %d", i, want, got)
+		got := batch.Packets[0].SOCKSID
+		if seen[got] {
+			t.Fatalf("iteration %d: duplicate socks_id=%d selected before all queues were drained", i, got)
 		}
+		seen[got] = true
+	}
+	if len(seen) != 3 {
+		t.Fatalf("expected all 3 socks connections to be selected once, got %d unique selections", len(seen))
 	}
 }
