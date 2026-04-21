@@ -337,6 +337,27 @@ class ProxyServer:
 
                 log.info("MITM → %s %s", method, url)
 
+                # ── CORS: extract relevant request headers ────────────────────
+                origin = next(
+                    (v for k, v in headers.items() if k.lower() == "origin"), ""
+                )
+                acr_method = next(
+                    (v for k, v in headers.items()
+                     if k.lower() == "access-control-request-method"), ""
+                )
+                acr_headers = next(
+                    (v for k, v in headers.items()
+                     if k.lower() == "access-control-request-headers"), ""
+                )
+
+                # CORS preflight — respond directly; UrlFetchApp doesn't
+                # support OPTIONS so forwarding it would always fail.
+                if method.upper() == "OPTIONS" and acr_method:
+                    log.debug("CORS preflight → %s (responding locally)", url[:60])
+                    writer.write(self._cors_preflight_response(origin, acr_method, acr_headers))
+                    await writer.drain()
+                    continue
+
                 # Check local cache first (GET only)
                 response = None
                 if method == "GET" and not body:
@@ -365,6 +386,11 @@ class ProxyServer:
                             self._cache.put(url, response, ttl)
                             log.debug("Cached (%ds): %s", ttl, url[:60])
 
+                # Inject permissive CORS headers whenever the browser
+                # sent an Origin (cross-origin XHR / fetch).
+                if origin and response:
+                    response = self._inject_cors_headers(response, origin)
+
                 writer.write(response)
                 await writer.drain()
 
@@ -377,6 +403,50 @@ class ProxyServer:
             except Exception as e:
                 log.error("MITM handler error (%s): %s", host, e)
                 break
+
+    # ── CORS helpers ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _cors_preflight_response(origin: str, acr_method: str, acr_headers: str) -> bytes:
+        """Return a 204 No Content response that satisfies a CORS preflight."""
+        allow_origin = origin or "*"
+        allow_methods = (
+            f"{acr_method}, GET, POST, PUT, DELETE, PATCH, OPTIONS"
+            if acr_method else
+            "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        )
+        allow_headers = acr_headers or "*"
+        return (
+            "HTTP/1.1 204 No Content\r\n"
+            f"Access-Control-Allow-Origin: {allow_origin}\r\n"
+            f"Access-Control-Allow-Methods: {allow_methods}\r\n"
+            f"Access-Control-Allow-Headers: {allow_headers}\r\n"
+            "Access-Control-Allow-Credentials: true\r\n"
+            "Access-Control-Max-Age: 86400\r\n"
+            "Vary: Origin\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        ).encode()
+
+    @staticmethod
+    def _inject_cors_headers(response: bytes, origin: str) -> bytes:
+        """Overwrite any existing CORS headers and inject permissive ones."""
+        sep = b"\r\n\r\n"
+        if sep not in response:
+            return response
+        header_section, body = response.split(sep, 1)
+        lines = header_section.decode(errors="replace").split("\r\n")
+        # Drop existing Access-Control-* headers
+        lines = [ln for ln in lines if not ln.lower().startswith("access-control-")]
+        allow_origin = origin or "*"
+        lines += [
+            f"Access-Control-Allow-Origin: {allow_origin}",
+            "Access-Control-Allow-Credentials: true",
+            "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS",
+            "Access-Control-Allow-Headers: *",
+            "Access-Control-Expose-Headers: *",
+        ]
+        return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
 
     async def _relay_smart(self, method, url, headers, body):
         """Choose optimal relay strategy based on request type.
@@ -443,6 +513,24 @@ class ProxyServer:
                     k, v = raw_line.decode(errors="replace").split(":", 1)
                     headers[k.strip()] = v.strip()
 
+            # ── CORS preflight over plain HTTP ────────────────────────────
+            origin = next(
+                (v for k, v in headers.items() if k.lower() == "origin"), ""
+            )
+            acr_method = next(
+                (v for k, v in headers.items()
+                 if k.lower() == "access-control-request-method"), ""
+            )
+            acr_headers_val = next(
+                (v for k, v in headers.items()
+                 if k.lower() == "access-control-request-headers"), ""
+            )
+            if method.upper() == "OPTIONS" and acr_method:
+                log.debug("CORS preflight (HTTP) → %s (responding locally)", url[:60])
+                writer.write(self._cors_preflight_response(origin, acr_method, acr_headers_val))
+                await writer.drain()
+                return
+
             # Cache check for GET
             response = None
             if method == "GET" and not body:
@@ -457,6 +545,10 @@ class ProxyServer:
                     ttl = ResponseCache.parse_ttl(response, url)
                     if ttl > 0:
                         self._cache.put(url, response, ttl)
+
+            # Inject CORS headers for cross-origin requests
+            if origin and response:
+                response = self._inject_cors_headers(response, origin)
         elif self.mode in ("google_fronting", "custom_domain", "domain_fronting"):
             # Use WebSocket tunnel for ALL traffic (much faster than forward())
             response = await self._tunnel_http(header_block, body)
