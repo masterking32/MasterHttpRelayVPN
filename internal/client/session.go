@@ -8,7 +8,6 @@ package client
 
 import (
 	"context"
-	"encoding/hex"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -27,7 +26,6 @@ type SOCKSConnection struct {
 	TargetHost        string
 	TargetPort        uint16
 	TargetAddressType byte
-	InitialPayload    []byte
 	BufferedBytes     int
 	NextSequence      uint64
 	SOCKSAuthMethod   byte
@@ -59,13 +57,6 @@ type SOCKSConnection struct {
 type PendingInboundPacket struct {
 	Packet   protocol.Packet
 	QueuedAt time.Time
-}
-
-func (s *SOCKSConnection) InitialPayloadHex() string {
-	if len(s.InitialPayload) == 0 {
-		return ""
-	}
-	return hex.EncodeToString(s.InitialPayload)
 }
 
 type SOCKSConnectionStore struct {
@@ -206,7 +197,6 @@ func (s *SOCKSConnection) ResetTransportState() {
 	clear(s.InFlight)
 	s.queueMu.Unlock()
 
-	s.InitialPayload = nil
 	s.BufferedBytes = 0
 	s.reorderMu.Lock()
 	clear(s.PendingInbound)

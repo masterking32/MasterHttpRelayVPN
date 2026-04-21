@@ -45,8 +45,7 @@ func TestSOCKSConnectionStoreDeleteClearsTransportState(t *testing.T) {
 
 	socksConn := store.New("client-session", "127.0.0.1:1000", chunkPolicy)
 	socksConn.LocalConn = localConn
-	socksConn.InitialPayload = []byte("initial-payload")
-	socksConn.BufferedBytes = len(socksConn.InitialPayload)
+	socksConn.BufferedBytes = len("initial-payload")
 
 	if err := socksConn.EnqueuePacket(socksConn.BuildSOCKSDataPacket([]byte("hello"), false)); err != nil {
 		t.Fatalf("enqueue first packet: %v", err)
@@ -74,9 +73,6 @@ func TestSOCKSConnectionStoreDeleteClearsTransportState(t *testing.T) {
 	}
 	if len(socksConn.InFlight) != 0 {
 		t.Fatalf("expected empty inflight map, got %d items", len(socksConn.InFlight))
-	}
-	if socksConn.InitialPayload != nil {
-		t.Fatal("expected initial payload to be cleared")
 	}
 	if socksConn.BufferedBytes != 0 {
 		t.Fatalf("expected buffered bytes to be reset, got %d", socksConn.BufferedBytes)

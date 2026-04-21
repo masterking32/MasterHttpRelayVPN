@@ -112,7 +112,7 @@ func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, socksConn *SOC
 		return err
 	}
 
-	return c.captureInitialPayload(ctx, conn, socksConn)
+	return c.relayLocalPayload(ctx, conn, socksConn)
 }
 
 func (c *Client) negotiateAuth(conn net.Conn, socksConn *SOCKSConnection) (byte, error) {
@@ -258,7 +258,7 @@ func writeSocksReply(conn net.Conn, reply byte) error {
 	return err
 }
 
-func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socksConn *SOCKSConnection) error {
+func (c *Client) relayLocalPayload(ctx context.Context, conn net.Conn, socksConn *SOCKSConnection) error {
 	peekTimeout := 2 * time.Second
 	idleTimeout := 2 * time.Second
 	buf := make([]byte, 32*1024)
@@ -269,7 +269,6 @@ func (c *Client) captureInitialPayload(ctx context.Context, conn net.Conn, socks
 
 	n, err := conn.Read(buf)
 	if err == nil && n > 0 {
-		socksConn.InitialPayload = append([]byte(nil), buf[:n]...)
 		socksConn.BufferedBytes += n
 		socksConn.LastActivityAt = time.Now()
 		enqueued, enqueueErr := socksConn.EnqueuePayloadChunks(buf[:n], false)

@@ -21,9 +21,6 @@ func (s *SOCKSConnection) BuildSOCKSConnectPacket() protocol.Packet {
 		Port:        s.TargetPort,
 		AddressType: s.TargetAddressType,
 	}
-	if len(s.InitialPayload) > 0 {
-		packet.Payload = append([]byte(nil), s.InitialPayload...)
-	}
 	return packet
 }
 
