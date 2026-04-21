@@ -26,6 +26,7 @@ type Config struct {
 	HTTPPaddingMaxBytes        int
 	HTTPReferer                string
 	HTTPAcceptLanguage         string
+	HTTPRandomizeQuerySuffix   bool
 	HTTPTimingJitterMS         int
 	HTTPBatchRandomize         bool
 	HTTPBatchPacketsJitter     int
@@ -74,6 +75,7 @@ func Load(path string) (Config, error) {
 		HTTPPaddingHeader:          "X-Padding",
 		HTTPPaddingMinBytes:        16,
 		HTTPPaddingMaxBytes:        48,
+		HTTPRandomizeQuerySuffix:   false,
 		HTTPTimingJitterMS:         50,
 		HTTPBatchRandomize:         true,
 		HTTPBatchPacketsJitter:     4,
@@ -164,6 +166,13 @@ func Load(path string) (Config, error) {
 			cfg.HTTPReferer = trimString(value)
 		case "HTTP_ACCEPT_LANGUAGE":
 			cfg.HTTPAcceptLanguage = trimString(value)
+		case "HTTP_RANDOMIZE_QUERY_SUFFIX":
+			randomize, err := strconv.ParseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_RANDOMIZE_QUERY_SUFFIX: %w", err)
+			}
+
+			cfg.HTTPRandomizeQuerySuffix = randomize
 		case "HTTP_TIMING_JITTER_MS":
 			valueInt, err := strconv.Atoi(value)
 			if err != nil {

@@ -92,6 +92,17 @@ HTTP_REFERER = ""
 # Allowed: empty string, or any valid Accept-Language header value
 HTTP_ACCEPT_LANGUAGE = ""
 
+# HTTP_RANDOMIZE_QUERY_SUFFIX:
+# If true, the client appends a randomized query parameter to RELAY_URL on each
+# outbound relay request. This can produce patterns such as:
+# - ?webhe=abc123-9kf83d-72jf0a4x-zz91m3e8c2
+# - ?r=<random>
+# - ?_=<random>
+# Existing query parameters in RELAY_URL are preserved.
+# Default: false
+# Allowed: true, false
+HTTP_RANDOMIZE_QUERY_SUFFIX = false
+
 # ==============================================================================
 # HTTP TIMING / BATCH SHAPE RANDOMIZATION
 # ------------------------------------------------------------------------------

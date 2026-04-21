@@ -65,6 +65,26 @@ func (b *relayHeaderBuilder) Apply(req *http.Request) {
 	}
 }
 
+func (b *relayHeaderBuilder) BuildRelayURL(rawURL string) string {
+	if !b.cfg.HTTPRandomizeQuerySuffix {
+		return rawURL
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+
+	query := parsed.Query()
+	key, value := b.randomQuerySuffix()
+	if key == "" || value == "" {
+		return rawURL
+	}
+	query.Set(key, value)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
 func (b *relayHeaderBuilder) applyBrowserProfile(req *http.Request) {
 	req.Header.Set("Accept", pickRandomString(
 		"*/*",
@@ -281,4 +301,46 @@ func randomHex(byteCount int) string {
 	}
 
 	return hex.EncodeToString(raw)
+}
+
+func (b *relayHeaderBuilder) randomQuerySuffix() (string, string) {
+	patterns := []struct {
+		key   string
+		value func() string
+	}{
+		{key: "webhe", value: func() string { return randomTokenPattern(6, 8, 10) }},
+		{key: "r", value: func() string { return randomHex(12) }},
+		{key: "_", value: func() string { return randomAlphaNumeric(18) }},
+		{key: "cache_bust", value: func() string { return randomTokenPattern(8, 6, 8) }},
+		{key: "v", value: func() string { return randomTokenPattern(4, 4, 6) }},
+	}
+
+	pattern := patterns[randomIndex(len(patterns))]
+	return pattern.key, pattern.value()
+}
+
+func randomTokenPattern(parts ...int) string {
+	if len(parts) == 0 {
+		return ""
+	}
+
+	values := make([]string, 0, len(parts))
+	for _, partLength := range parts {
+		values = append(values, randomAlphaNumeric(partLength))
+	}
+	return strings.Join(values, "-")
+}
+
+func randomAlphaNumeric(length int) string {
+	if length <= 0 {
+		return ""
+	}
+
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	var builder strings.Builder
+	builder.Grow(length)
+	for i := 0; i < length; i++ {
+		builder.WriteByte(alphabet[randomIndex(len(alphabet))])
+	}
+	return builder.String()
 }

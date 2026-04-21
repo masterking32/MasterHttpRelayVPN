@@ -430,7 +430,12 @@ func (c *Client) reclaimExpiredReorder() {
 
 func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Batch, body []byte) error {
 	pingOnly := isPingOnlyBatch(batch)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.RelayURL, bytes.NewReader(body))
+	relayURL := c.cfg.RelayURL
+	if c.headerBuilder != nil {
+		relayURL = c.headerBuilder.BuildRelayURL(relayURL)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, relayURL, bytes.NewReader(body))
 	if err != nil {
 		if pingOnly {
 			c.failPing()

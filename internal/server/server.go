@@ -107,6 +107,8 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
+	applyRelayResponseHeaders(w.Header())
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -165,6 +167,13 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Relay-Version", fmt.Sprintf("%d", protocol.CurrentVersion))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(encrypted)
+}
+
+func applyRelayResponseHeaders(header http.Header) {
+	header.Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	header.Set("Pragma", "no-cache")
+	header.Set("Expires", "0")
+	header.Set("X-Accel-Buffering", "no")
 }
 
 func (s *Server) processBatch(batch protocol.Batch) (protocol.Batch, error) {

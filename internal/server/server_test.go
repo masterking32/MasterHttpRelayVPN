@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -316,6 +317,27 @@ func TestSOCKSStateCloseUpstreamClearsConnectionSnapshot(t *testing.T) {
 
 	if _, ok := socksState.currentUpstreamConn(); ok {
 		t.Fatal("expected upstream connection snapshot to be cleared after close")
+	}
+}
+
+func TestHandleRelayAppliesAntiBufferingHeaders(t *testing.T) {
+	srv := New(config.Config{}, nil)
+	request := httptest.NewRequest("GET", "/relay", nil)
+	recorder := httptest.NewRecorder()
+
+	srv.handleRelay(recorder, request)
+
+	if got := recorder.Header().Get("X-Accel-Buffering"); got != "no" {
+		t.Fatalf("expected X-Accel-Buffering=no, got %q", got)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store, no-cache, must-revalidate" {
+		t.Fatalf("unexpected Cache-Control header: %q", got)
+	}
+	if got := recorder.Header().Get("Pragma"); got != "no-cache" {
+		t.Fatalf("unexpected Pragma header: %q", got)
+	}
+	if got := recorder.Header().Get("Expires"); got != "0" {
+		t.Fatalf("unexpected Expires header: %q", got)
 	}
 }
 
