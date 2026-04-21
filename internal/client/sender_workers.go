@@ -475,7 +475,7 @@ func (c *Client) reclaimExpiredReorder() {
 
 func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Batch, body []byte) error {
 	pingOnly := isPingOnlyBatch(batch)
-	relayURL := c.cfg.RelayURL
+	relayURL := c.nextRelayURL()
 	if c.headerBuilder != nil {
 		relayURL = c.headerBuilder.BuildRelayURL(relayURL)
 	}

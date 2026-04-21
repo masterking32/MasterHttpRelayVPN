@@ -224,18 +224,29 @@ func buildRefererCandidates(cfg config.Config) []string {
 		return []string{cfg.HTTPReferer}
 	}
 
-	relayURL, err := url.Parse(cfg.RelayURL)
-	if err != nil || relayURL.Scheme == "" || relayURL.Host == "" {
-		return nil
-	}
+	candidates := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, rawRelayURL := range cfg.RelayEndpointURLs() {
+		relayURL, err := url.Parse(rawRelayURL)
+		if err != nil || relayURL.Scheme == "" || relayURL.Host == "" {
+			continue
+		}
 
-	base := relayURL.Scheme + "://" + relayURL.Host
-	return []string{
-		base + "/",
-		base + "/index.html",
-		base + "/home",
-		base + "/api/status",
+		base := relayURL.Scheme + "://" + relayURL.Host
+		for _, candidate := range []string{
+			base + "/",
+			base + "/index.html",
+			base + "/home",
+			base + "/api/status",
+		} {
+			if _, exists := seen[candidate]; exists {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			candidates = append(candidates, candidate)
+		}
 	}
+	return candidates
 }
 
 func pickRandomString(values ...string) string {

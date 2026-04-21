@@ -18,6 +18,8 @@ import (
 type Config struct {
 	AESEncryptionKey             string
 	RelayURL                     string
+	RelayURLs                    []string
+	RelayURLSelection            string
 	HTTPUserAgentsFile           string
 	HTTPHeaderProfile            string
 	HTTPRandomizeHeaders         bool
@@ -77,6 +79,7 @@ func Load(path string) (Config, error) {
 	cfg := Config{
 		SOCKSHost:                    "127.0.0.1",
 		SOCKSPort:                    1080,
+		RelayURLSelection:            "round_robin",
 		HTTPUserAgentsFile:           "user-agents.txt",
 		HTTPHeaderProfile:            "browser",
 		HTTPRandomizeHeaders:         true,
@@ -151,6 +154,10 @@ func Load(path string) (Config, error) {
 			cfg.AESEncryptionKey = trimString(value)
 		case "RELAY_URL":
 			cfg.RelayURL = trimString(value)
+		case "RELAY_URLS":
+			cfg.RelayURLs = parseStringArray(value)
+		case "RELAY_URL_SELECTION":
+			cfg.RelayURLSelection = strings.ToLower(trimString(value))
 		case "HTTP_USER_AGENTS_FILE":
 			cfg.HTTPUserAgentsFile = trimString(value)
 		case "HTTP_HEADER_PROFILE":
@@ -495,7 +502,18 @@ func (c Config) ValidateClient() error {
 	}
 
 	if strings.TrimSpace(c.RelayURL) == "" {
-		return fmt.Errorf("RELAY_URL is required")
+		if len(c.RelayURLs) == 0 {
+			return fmt.Errorf("RELAY_URL or RELAY_URLS is required")
+		}
+	}
+
+	relayURLs := c.RelayEndpointURLs()
+	if len(relayURLs) == 0 {
+		return fmt.Errorf("at least one relay URL is required")
+	}
+
+	if c.RelayURLSelection != "round_robin" && c.RelayURLSelection != "random" {
+		return fmt.Errorf("invalid RELAY_URL_SELECTION: %s", c.RelayURLSelection)
 	}
 
 	if c.HTTPRequestTimeoutMS < 1 {
@@ -655,6 +673,68 @@ func (c Config) ValidateServer() error {
 	}
 
 	return nil
+}
+
+func (c Config) RelayEndpointURLs() []string {
+	urls := make([]string, 0, len(c.RelayURLs)+1)
+	for _, relayURL := range c.RelayURLs {
+		relayURL = strings.TrimSpace(relayURL)
+		if relayURL == "" {
+			continue
+		}
+		urls = append(urls, relayURL)
+	}
+	if len(urls) > 0 {
+		return urls
+	}
+	if relayURL := strings.TrimSpace(c.RelayURL); relayURL != "" {
+		return []string{relayURL}
+	}
+	return nil
+}
+
+func parseCommaSeparatedStrings(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		values = append(values, part)
+	}
+	return values
+}
+
+func parseStringArray(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+
+	if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {
+		body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(raw, "["), "]"))
+		if body == "" {
+			return nil
+		}
+
+		parts := strings.Split(body, ",")
+		values := make([]string, 0, len(parts))
+		for _, part := range parts {
+			part = trimString(strings.TrimSpace(part))
+			if part == "" {
+				continue
+			}
+			values = append(values, part)
+		}
+		return values
+	}
+
+	return parseCommaSeparatedStrings(trimString(raw))
 }
 
 func (c Config) validateShared() error {

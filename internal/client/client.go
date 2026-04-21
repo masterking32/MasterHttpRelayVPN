@@ -33,6 +33,7 @@ type Client struct {
 	socksConnections *SOCKSConnectionStore
 	chunkPolicy      ChunkPolicy
 	headerBuilder    *relayHeaderBuilder
+	relayURLs        []string
 
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
@@ -46,6 +47,7 @@ type Client struct {
 	idlePongStreak               atomic.Int64
 	pingState                    atomic.Int32
 	batchCursor                  atomic.Uint64
+	relayURLCursor               atomic.Uint64
 }
 
 func New(cfg config.Config, lg *logger.Logger) *Client {
@@ -58,6 +60,7 @@ func New(cfg config.Config, lg *logger.Logger) *Client {
 		socksConnections: NewSOCKSConnectionStore(),
 		chunkPolicy:      newChunkPolicy(cfg),
 		headerBuilder:    newRelayHeaderBuilder(cfg, lg),
+		relayURLs:        cfg.RelayEndpointURLs(),
 		conns:            make(map[net.Conn]struct{}),
 		workCh:           make(chan struct{}, 1),
 	}
@@ -215,4 +218,23 @@ func generateClientSessionKey() string {
 	}
 
 	return fmt.Sprintf("%s_%s", now, hex.EncodeToString(random))
+}
+
+func (c *Client) nextRelayURL() string {
+	if len(c.relayURLs) == 0 {
+		return c.cfg.RelayURL
+	}
+	if len(c.relayURLs) == 1 {
+		return c.relayURLs[0]
+	}
+
+	switch c.cfg.RelayURLSelection {
+	case "random":
+		return c.relayURLs[randomIndex(len(c.relayURLs))]
+	case "round_robin":
+		fallthrough
+	default:
+		index := c.relayURLCursor.Add(1) - 1
+		return c.relayURLs[index%uint64(len(c.relayURLs))]
+	}
 }

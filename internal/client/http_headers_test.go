@@ -51,3 +51,36 @@ func TestBuildRelayURLAddsRandomQuerySuffixWhenEnabled(t *testing.T) {
 		t.Fatalf("expected one randomized query suffix key, got query %q", parsed.RawQuery)
 	}
 }
+
+func TestBuildRefererCandidatesIncludesAllRelayHosts(t *testing.T) {
+	cfg := config.Config{
+		RelayURLs: []string{
+			"https://relay-a.example/relay",
+			"https://relay-b.example/relay",
+		},
+	}
+
+	candidates := buildRefererCandidates(cfg)
+	expected := map[string]bool{
+		"https://relay-a.example/":           false,
+		"https://relay-a.example/index.html": false,
+		"https://relay-a.example/home":       false,
+		"https://relay-a.example/api/status": false,
+		"https://relay-b.example/":           false,
+		"https://relay-b.example/index.html": false,
+		"https://relay-b.example/home":       false,
+		"https://relay-b.example/api/status": false,
+	}
+
+	for _, candidate := range candidates {
+		if _, ok := expected[candidate]; ok {
+			expected[candidate] = true
+		}
+	}
+
+	for candidate, seen := range expected {
+		if !seen {
+			t.Fatalf("expected referer candidate %q to be present", candidate)
+		}
+	}
+}

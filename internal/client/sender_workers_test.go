@@ -308,6 +308,53 @@ func TestSendWorkerTransportReuseLimitStaysWithinConfiguredRange(t *testing.T) {
 	}
 }
 
+func TestNextRelayURLUsesRoundRobinByDefault(t *testing.T) {
+	cfg := testClientConfig()
+	cfg.RelayURLs = []string{
+		"https://relay-a.example/relay",
+		"https://relay-b.example/relay",
+		"https://relay-c.example/relay",
+	}
+	cfg.RelayURLSelection = "round_robin"
+
+	client := New(cfg, nil)
+	expected := []string{
+		"https://relay-a.example/relay",
+		"https://relay-b.example/relay",
+		"https://relay-c.example/relay",
+		"https://relay-a.example/relay",
+	}
+
+	for i, want := range expected {
+		if got := client.nextRelayURL(); got != want {
+			t.Fatalf("iteration %d: expected %q, got %q", i, want, got)
+		}
+	}
+}
+
+func TestNextRelayURLRandomChoosesConfiguredRelaySet(t *testing.T) {
+	cfg := testClientConfig()
+	cfg.RelayURLs = []string{
+		"https://relay-a.example/relay",
+		"https://relay-b.example/relay",
+		"https://relay-c.example/relay",
+	}
+	cfg.RelayURLSelection = "random"
+
+	client := New(cfg, nil)
+	allowed := map[string]bool{
+		"https://relay-a.example/relay": true,
+		"https://relay-b.example/relay": true,
+		"https://relay-c.example/relay": true,
+	}
+
+	for i := 0; i < 50; i++ {
+		if got := client.nextRelayURL(); !allowed[got] {
+			t.Fatalf("unexpected relay URL selected: %q", got)
+		}
+	}
+}
+
 func TestBuildPollBatchSkipsWhenTransportBusy(t *testing.T) {
 	cfg := testClientConfig()
 	client := New(cfg, nil)

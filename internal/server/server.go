@@ -355,8 +355,6 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 	default:
 		return nil, fmt.Errorf("unsupported packet type: %s", packet.Type)
 	}
-
-	return nil, nil
 }
 
 func (s *Server) getOrCreateSession(clientSessionKey string) *ClientSession {

@@ -23,12 +23,23 @@
 # Allowed: any non-empty string
 AES_ENCRYPTION_KEY = "c4710a45afed2fdc00e0522c70802e71"
 
-# RELAY_URL:
-# The final HTTP or HTTPS endpoint used by the client for sending encrypted batches.
-# This can point directly to the Go server or to a PHP relay/fronting endpoint.
-# Default: none, required
-# Allowed: any non-empty http:// or https:// URL
-RELAY_URL = "http://127.0.0.1/relay.php"
+# RELAY_URLS:
+# Array of relay endpoints used by the client for sending encrypted batches.
+# Each entry can point directly to the Go server or to a PHP relay/fronting endpoint.
+# The client chooses one endpoint per request using RELAY_URL_SELECTION.
+# Example:
+# RELAY_URLS = ["https://a.example/relay.php", "https://b.example/relay.php"]
+# Default: one local relay URL
+# Allowed: one or more http:// / https:// URLs
+RELAY_URLS = ["http://127.0.0.1/relay.php"]
+
+# RELAY_URL_SELECTION:
+# Selection algorithm used when RELAY_URLS contains more than one endpoint.
+# "round_robin" = rotate endpoints in order per request
+# "random"      = choose a random endpoint per request
+# Default: "round_robin"
+# Allowed: "round_robin", "random"
+RELAY_URL_SELECTION = "round_robin"
 
 # ==============================================================================
 # HTTP DISGUISE / HEADER SHAPE
