@@ -103,8 +103,31 @@ def main():
             config = json.load(f)
     except FileNotFoundError:
         print(f"Config not found: {config_path}")
-        print("Copy config.example.json to config.json and fill in your values.")
-        sys.exit(1)
+        # Offer the interactive wizard if it's available and we're on a TTY.
+        wizard = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup.py")
+        if os.path.exists(wizard) and sys.stdin.isatty():
+            try:
+                answer = input("Run the interactive setup wizard now? [Y/n]: ").strip().lower()
+            except EOFError:
+                answer = "n"
+            if answer in ("", "y", "yes"):
+                import subprocess
+                rc = subprocess.call([sys.executable, wizard])
+                if rc != 0:
+                    sys.exit(rc)
+                try:
+                    with open(config_path) as f:
+                        config = json.load(f)
+                except Exception as e:
+                    print(f"Could not load config after setup: {e}")
+                    sys.exit(1)
+            else:
+                print("Copy config.example.json to config.json and fill in your values,")
+                print("or run: python setup.py")
+                sys.exit(1)
+        else:
+            print("Run: python setup.py   (or copy config.example.json to config.json)")
+            sys.exit(1)
     except json.JSONDecodeError as e:
         print(f"Invalid JSON in config: {e}")
         sys.exit(1)

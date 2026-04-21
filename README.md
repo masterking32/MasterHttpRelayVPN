@@ -45,12 +45,42 @@ This means the filter sees normal-looking Google traffic, while the actual desti
 
 ---
 
-## Step-by-Step Setup Guide
+## Quick Start (Recommended)
+
+One command sets up a virtualenv, installs dependencies, launches an interactive
+config wizard, and starts the proxy.
+
+**Windows:**
+```cmd
+git clone https://github.com/masterking32/MasterHttpRelayVPN.git
+cd MasterHttpRelayVPN
+start.bat
+```
+
+**Linux / macOS:**
+```bash
+git clone https://github.com/masterking32/MasterHttpRelayVPN.git
+cd MasterHttpRelayVPN
+chmod +x start.sh
+./start.sh
+```
+
+The first time it runs, the wizard asks for your Google Apps Script Deployment ID
+and generates a strong random password for you. Follow the Apps Script deployment
+instructions in **Step 2** below before running the wizard so you have a
+Deployment ID ready.
+
+After it's running, jump to **Step 5** (browser proxy) and **Step 6** (CA
+certificate).
+
+---
+
+## Step-by-Step Setup Guide (Manual)
 
 ### Step 1: Download This Project
 
 ```bash
-git clone -b python_testing https://github.com/masterking32/MasterHttpRelayVPN.git
+git clone https://github.com/masterking32/MasterHttpRelayVPN.git
 cd MasterHttpRelayVPN
 pip install -r requirements.txt
 ```
@@ -60,7 +90,7 @@ pip install -r requirements.txt
 > pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
 > ```
 
-Or download the ZIP from [GitHub](https://github.com/masterking32/MasterHttpRelayVPN/tree/python_testing) and extract it.
+Or download the ZIP from [GitHub](https://github.com/masterking32/MasterHttpRelayVPN) and extract it.
 
 ### Step 2: Set Up the Google Relay (Code.gs)
 
@@ -85,6 +115,15 @@ This is the "relay" that sits on Google's servers and fetches websites for you. 
 > ⚠️ Remember the password you set in step 5. You'll use the same password in the config file below.
 
 ### Step 3: Configure
+
+**Option A — interactive wizard (recommended):**
+```bash
+python setup.py
+```
+It'll prompt for your Deployment ID, generate a random `auth_key`, and write
+`config.json` for you.
+
+**Option B — manual:**
 
 1. Copy the example config file:
    ```bash
@@ -273,8 +312,10 @@ python3 main.py --no-cert-check          # Skip automatic CA install check on st
 ```
 MasterHttpRelayVPN/
 ├── main.py                    # Entry point: starts the proxy
+├── setup.py                   # Interactive wizard — writes config.json
+├── start.bat / start.sh       # One-click launcher (venv + deps + wizard + run)
 ├── config.example.json        # Copy to config.json and fill in your values
-├── requirements.txt           # Optional Python dependencies
+├── requirements.txt           # Python dependencies
 ├── apps_script/
 │   └── Code.gs                # The relay script you deploy to Google Apps Script
 ├── ca/                        # Generated MITM CA (do NOT share)
