@@ -10,6 +10,7 @@ Supports:
 """
 
 import asyncio
+import ipaddress
 import logging
 import re
 import ssl
@@ -104,6 +105,7 @@ class ProxyServer:
     def __init__(self, config: dict):
         self.host = config.get("listen_host", "127.0.0.1")
         self.port = config.get("listen_port", 8080)
+        self.socks5_port = config.get("socks5_port", self.port + 1)
         self.mode = config.get("mode", "domain_fronting")
         self.fronter = DomainFronter(config)
         self.mitm = None
@@ -128,13 +130,18 @@ class ProxyServer:
                 raise SystemExit(1)
 
     async def start(self):
-        srv = await asyncio.start_server(self._on_client, self.host, self.port)
+        http_srv = await asyncio.start_server(self._on_client, self.host, self.port)
+        socks_srv = await asyncio.start_server(self._on_socks5_client, self.host, self.socks5_port)
         log.info(
-            "Listening on %s:%d — configure your browser HTTP proxy to this address",
+            "Listening HTTP  on %s:%d — configure your HTTP proxy to this address",
             self.host, self.port,
         )
-        async with srv:
-            await srv.serve_forever()
+        log.info(
+            "Listening SOCKS5 on %s:%d — configure your SOCKS5 proxy to this address",
+            self.host, self.socks5_port,
+        )
+        async with http_srv, socks_srv:
+            await asyncio.gather(http_srv.serve_forever(), socks_srv.serve_forever())
 
     # ── client handler ────────────────────────────────────────────
 
@@ -206,6 +213,152 @@ class ProxyServer:
                 await self._do_mitm_connect(host, port, reader, writer)
         else:
             await self.fronter.tunnel(host, port, reader, writer)
+
+    # ── SOCKS5 (RFC 1928 CONNECT) ─────────────────────────────────
+
+    async def _on_socks5_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        addr = writer.get_extra_info("peername")
+        try:
+            ver_nmethods = await asyncio.wait_for(reader.readexactly(2), timeout=30)
+            ver, nmethods = ver_nmethods[0], ver_nmethods[1]
+            if ver != 5:
+                log.debug("SOCKS5 invalid version from %s: %s", addr, ver)
+                return
+
+            methods = await asyncio.wait_for(reader.readexactly(nmethods), timeout=10)
+            if 0x00 not in methods:
+                writer.write(b"\x05\xff")
+                await writer.drain()
+                return
+
+            writer.write(b"\x05\x00")
+            await writer.drain()
+
+            req_hdr = await asyncio.wait_for(reader.readexactly(4), timeout=10)
+            ver, cmd, _, atyp = req_hdr
+            if ver != 5 or cmd != 1:
+                # Only CONNECT is supported.
+                writer.write(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
+                await writer.drain()
+                return
+
+            if atyp == 0x01:  # IPv4
+                host_raw = await asyncio.wait_for(reader.readexactly(4), timeout=10)
+                host = ".".join(str(b) for b in host_raw)
+            elif atyp == 0x03:  # Domain
+                ln = (await asyncio.wait_for(reader.readexactly(1), timeout=10))[0]
+                host = (await asyncio.wait_for(reader.readexactly(ln), timeout=10)).decode(errors="replace")
+            elif atyp == 0x04:  # IPv6
+                host_raw = await asyncio.wait_for(reader.readexactly(16), timeout=10)
+                groups = [f"{host_raw[i] << 8 | host_raw[i+1]:x}" for i in range(0, 16, 2)]
+                host = ":".join(groups)
+            else:
+                writer.write(b"\x05\x08\x00\x01\x00\x00\x00\x00\x00\x00")
+                await writer.drain()
+                return
+
+            port_raw = await asyncio.wait_for(reader.readexactly(2), timeout=10)
+            port = (port_raw[0] << 8) | port_raw[1]
+            log.info("SOCKS5 CONNECT → %s:%d", host, port)
+
+            # Success reply: BND.ADDR/BND.PORT are set to zeroes.
+            writer.write(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+            await writer.drain()
+
+            await self._do_socks5_tunnel(host, port, reader, writer)
+        except asyncio.TimeoutError:
+            log.debug("SOCKS5 timeout: %s", addr)
+        except asyncio.IncompleteReadError:
+            pass
+        except Exception as e:
+            log.error("SOCKS5 error (%s): %s", addr, e)
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+    async def _do_socks5_tunnel(self, host: str, port: int, reader, writer):
+        if self.mode == "apps_script":
+            if self._is_ip_literal(host):
+                if port == 80:
+                    http_ok = await self._relay_http_stream(host, port, reader, writer, scheme="http")
+                    if http_ok:
+                        return
+                else:
+                    tls_ok = await self._do_mitm_connect(host, port, reader, writer)
+                    if tls_ok:
+                        return
+                    http_ok = await self._relay_http_stream(host, port, reader, writer, scheme="http")
+                    if http_ok:
+                        return
+                await self._do_plain_tcp_tunnel(host, port, reader, writer)
+                return
+
+            override_ip = self._sni_rewrite_ip(host)
+            if override_ip:
+                log.info("SOCKS5 SNI-rewrite tunnel → %s via %s", host, override_ip)
+                await self._do_sni_rewrite_tunnel(host, port, reader, writer, connect_ip=override_ip)
+                return
+            if self._is_google_domain(host):
+                log.info("SOCKS5 direct tunnel → %s (Google domain)", host)
+                await self._do_direct_tunnel(host, port, reader, writer)
+                return
+            tls_ok = await self._do_mitm_connect(host, port, reader, writer)
+            if tls_ok:
+                return
+            http_ok = await self._relay_http_stream(host, port, reader, writer, scheme="http")
+            if http_ok:
+                return
+            await self._do_plain_tcp_tunnel(host, port, reader, writer)
+            return
+        await self.fronter.tunnel(host, port, reader, writer)
+
+    @staticmethod
+    def _is_ip_literal(host: str) -> bool:
+        h = host.strip("[]")
+        try:
+            ipaddress.ip_address(h)
+            return True
+        except ValueError:
+            return False
+
+    async def _do_plain_tcp_tunnel(self, host: str, port: int, reader, writer):
+        try:
+            r_remote, w_remote = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=10
+            )
+        except Exception as e:
+            if isinstance(e, OSError) and getattr(e, "winerror", None) == 1231:
+                log.debug("SOCKS5 IPv6 route unavailable (%s:%d): %s", host, port, e)
+            else:
+                msg = str(e) or repr(e)
+                log.error("SOCKS5 outbound connect failed (%s:%d): %s", host, port, msg)
+            return
+
+        async def pipe(src, dst, label):
+            try:
+                while True:
+                    data = await src.read(65536)
+                    if not data:
+                        break
+                    dst.write(data)
+                    await dst.drain()
+            except (ConnectionError, asyncio.CancelledError):
+                pass
+            except Exception as exc:
+                log.debug("Pipe %s ended: %s", label, exc)
+            finally:
+                try:
+                    dst.close()
+                except Exception:
+                    pass
+
+        await asyncio.gather(
+            pipe(reader, w_remote, f"socks-client→{host}"),
+            pipe(r_remote, writer, f"{host}→socks-client"),
+        )
 
     # ── Hosts override (fake DNS) ─────────────────────────────────
 
@@ -407,8 +560,12 @@ class ProxyServer:
 
     # ── MITM CONNECT (apps_script mode) ───────────────────────────
 
-    async def _do_mitm_connect(self, host: str, port: int, reader, writer):
-        """Intercept TLS, decrypt HTTP, and relay through Apps Script."""
+    async def _do_mitm_connect(self, host: str, port: int, reader, writer) -> bool:
+        """Intercept TLS, decrypt HTTP, and relay through Apps Script.
+
+        Returns True if TLS handshake succeeded (the stream was handled as HTTPS),
+        otherwise False.
+        """
         ssl_ctx = self.mitm.get_server_context(host)
 
         # Upgrade the existing connection to TLS (we are the server)
@@ -428,17 +585,31 @@ class ProxyServer:
                 log.debug("TLS handshake skipped for %s:%d (non-HTTPS): %s", host, port, e)
             else:
                 log.debug("TLS handshake failed for %s: %s", host, e)
-            return
+            return False
 
         # Update writer to use the new TLS transport
         writer._transport = new_transport
 
-        # Read and relay HTTP requests from the browser (now decrypted)
+        await self._relay_http_stream(host, port, reader, writer, scheme="https")
+        return True
+
+    async def _relay_http_stream(self, host: str, port: int, reader, writer, scheme: str) -> bool:
+        """Read HTTP requests from an established stream and relay them.
+
+        Returns True when the stream looked like HTTP and was processed.
+        Returns False when the first bytes did not look like HTTP.
+        """
+        handled_any = False
         while True:
             try:
                 first_line = await asyncio.wait_for(reader.readline(), timeout=120)
                 if not first_line:
                     break
+
+                # If the first bytes are not an HTTP request line, this is
+                # likely a non-HTTP protocol over SOCKS; let caller fallback.
+                if b" " not in first_line and not handled_any:
+                    return False
 
                 header_block = first_line
                 while True:
@@ -459,10 +630,14 @@ class ProxyServer:
                 request_line = first_line.decode(errors="replace").strip()
                 parts = request_line.split(" ", 2)
                 if len(parts) < 2:
+                    if not handled_any:
+                        return False
                     break
 
                 method = parts[0]
                 path = parts[1]
+                if not method.isalpha() and not handled_any:
+                    return False
 
                 # Parse headers
                 headers = {}
@@ -471,11 +646,12 @@ class ProxyServer:
                         k, v = raw_line.decode(errors="replace").split(":", 1)
                         headers[k.strip()] = v.strip()
 
-                # Build full URL (browser sends just the path in CONNECT)
-                if port == 443:
-                    url = f"https://{host}{path}"
+                # Build full URL (client sends path-only after CONNECT).
+                default_port = 443 if scheme == "https" else 80
+                if port == default_port:
+                    url = f"{scheme}://{host}{path}"
                 else:
-                    url = f"https://{host}:{port}{path}"
+                    url = f"{scheme}://{host}:{port}{path}"
 
                 log.info("MITM → %s %s", method, url)
 
@@ -535,6 +711,7 @@ class ProxyServer:
 
                 writer.write(response)
                 await writer.drain()
+                handled_any = True
 
             except asyncio.TimeoutError:
                 break
@@ -543,8 +720,9 @@ class ProxyServer:
             except ConnectionError:
                 break
             except Exception as e:
-                log.error("MITM handler error (%s): %s", host, e)
+                log.error("HTTP relay stream error (%s): %s", host, e)
                 break
+        return handled_any
 
     # ── CORS helpers ──────────────────────────────────────────────────────────
 

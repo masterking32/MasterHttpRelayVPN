@@ -192,7 +192,11 @@ def main():
         log.info("Front domain (SNI) : %s", config.get("front_domain", "?"))
         log.info("Worker host (Host) : %s", config.get("worker_host", "?"))
 
-    log.info("Proxy address      : %s:%d", config.get("listen_host", "127.0.0.1"), config.get("listen_port", 8080))
+    listen_host = config.get("listen_host", "127.0.0.1")
+    listen_port = config.get("listen_port", 8080)
+    socks5_port = config.get("socks5_port", listen_port + 1)
+    log.info("HTTP proxy address : %s:%d", listen_host, listen_port)
+    log.info("SOCKS5 proxy addr  : %s:%d", listen_host, socks5_port)
 
     try:
         asyncio.run(ProxyServer(config).start())

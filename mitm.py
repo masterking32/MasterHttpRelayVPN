@@ -11,8 +11,10 @@ Requires: pip install cryptography
 """
 
 import datetime
+import ipaddress
 import logging
 import os
+import re
 import ssl
 import tempfile
 
@@ -105,8 +107,9 @@ class MITMCertManager:
         if domain not in self._ctx_cache:
             key_pem, cert_pem = self._generate_domain_cert(domain)
 
-            cert_file = os.path.join(self._cert_dir, f"{domain}.crt")
-            key_file = os.path.join(self._cert_dir, f"{domain}.key")
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", domain)
+            cert_file = os.path.join(self._cert_dir, f"{safe_name}.crt")
+            key_file = os.path.join(self._cert_dir, f"{safe_name}.key")
 
             ca_pem = self._ca_cert.public_bytes(serialization.Encoding.PEM)
             with open(cert_file, "wb") as f:
@@ -125,10 +128,19 @@ class MITMCertManager:
         key = rsa.generate_private_key(
             public_exponent=65537, key_size=2048
         )
+        try:
+            ip_obj = ipaddress.ip_address(domain.strip("[]"))
+        except ValueError:
+            ip_obj = None
+
         subject = x509.Name([
             x509.NameAttribute(NameOID.COMMON_NAME, domain),
         ])
         now = datetime.datetime.now(datetime.timezone.utc)
+        if ip_obj is not None:
+            san = x509.SubjectAlternativeName([x509.IPAddress(ip_obj)])
+        else:
+            san = x509.SubjectAlternativeName([x509.DNSName(domain)])
         cert = (
             x509.CertificateBuilder()
             .subject_name(subject)
@@ -137,10 +149,7 @@ class MITMCertManager:
             .serial_number(x509.random_serial_number())
             .not_valid_before(now)
             .not_valid_after(now + datetime.timedelta(days=365))
-            .add_extension(
-                x509.SubjectAlternativeName([x509.DNSName(domain)]),
-                critical=False,
-            )
+            .add_extension(san, critical=False)
             .sign(self._ca_key, hashes.SHA256())
         )
 
