@@ -20,6 +20,12 @@ import (
 	"masterhttprelayvpn/internal/logger"
 )
 
+const (
+	pingStateBusy int32 = iota
+	pingStateAggressiveIdle
+	pingStateBackoffIdle
+)
+
 type Client struct {
 	cfg              config.Config
 	log              *logger.Logger
@@ -38,6 +44,7 @@ type Client struct {
 	activeBatches                atomic.Int64
 	pingInFlight                 atomic.Int64
 	idlePongStreak               atomic.Int64
+	pingState                    atomic.Int32
 	batchCursor                  atomic.Uint64
 }
 
@@ -138,7 +145,8 @@ func (c *Client) signalSendWork() {
 func (c *Client) noteMeaningfulActivity(now time.Time) {
 	c.lastMeaningfulActivityUnixMS.Store(now.UnixMilli())
 	c.idlePongStreak.Store(0)
-	c.nextPingDueUnixMS.Store(now.Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+	c.setPingState(pingStateBusy)
+	c.scheduleAggressivePing(now)
 }
 
 func (c *Client) tryBeginPing(now time.Time) bool {
@@ -160,22 +168,27 @@ func (c *Client) completePingWithPong() {
 		warmThreshold := time.Duration(c.cfg.PingWarmThresholdMS) * time.Millisecond
 		if idleFor < warmThreshold {
 			c.idlePongStreak.Store(0)
-			c.nextPingDueUnixMS.Store(now.Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+			c.setPingState(pingStateAggressiveIdle)
+			c.scheduleAggressivePing(now)
 			return
 		}
 
 		streak := c.idlePongStreak.Add(1)
+		c.setPingState(pingStateBackoffIdle)
 		c.nextPingDueUnixMS.Store(now.Add(c.idleIntervalForStreak(streak)).UnixMilli())
 		return
 	}
 
 	c.idlePongStreak.Store(0)
-	c.nextPingDueUnixMS.Store(now.Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+	c.setPingState(pingStateBusy)
+	c.scheduleAggressivePing(now)
 }
 
 func (c *Client) failPing() {
 	c.pingInFlight.Store(0)
-	c.nextPingDueUnixMS.Store(time.Now().Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+	c.idlePongStreak.Store(0)
+	c.setPingState(pingStateAggressiveIdle)
+	c.scheduleAggressivePing(time.Now())
 }
 
 func (c *Client) idleIntervalForStreak(streak int64) time.Duration {
@@ -184,6 +197,14 @@ func (c *Client) idleIntervalForStreak(streak int64) time.Duration {
 		interval = c.cfg.PingMaxIntervalMS
 	}
 	return time.Duration(interval) * time.Millisecond
+}
+
+func (c *Client) scheduleAggressivePing(now time.Time) {
+	c.nextPingDueUnixMS.Store(now.Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+}
+
+func (c *Client) setPingState(state int32) {
+	c.pingState.Store(state)
 }
 
 func generateClientSessionKey() string {

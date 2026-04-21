@@ -391,6 +391,21 @@ func TestIdleIntervalForStreakBacksOffWithIdlePongs(t *testing.T) {
 	}
 }
 
+func TestNoteMeaningfulActivitySetsBusyState(t *testing.T) {
+	cfg := testClientConfig()
+	client := New(cfg, nil)
+	now := time.Now()
+
+	client.noteMeaningfulActivity(now)
+
+	if got := client.pingState.Load(); got != pingStateBusy {
+		t.Fatalf("expected busy ping state, got %d", got)
+	}
+	if client.nextPingDueUnixMS.Load() <= now.UnixMilli() {
+		t.Fatal("expected next ping due to be scheduled after meaningful activity")
+	}
+}
+
 func TestCompletePingWithPongIncrementsStreakOnlyWithoutRealTraffic(t *testing.T) {
 	cfg := testClientConfig()
 	client := New(cfg, nil)
@@ -403,6 +418,9 @@ func TestCompletePingWithPongIncrementsStreakOnlyWithoutRealTraffic(t *testing.T
 	client.completePingWithPong()
 	if got := client.idlePongStreak.Load(); got != 1 {
 		t.Fatalf("expected pong streak to increment to 1, got %d", got)
+	}
+	if got := client.pingState.Load(); got != pingStateBackoffIdle {
+		t.Fatalf("expected backoff idle ping state, got %d", got)
 	}
 	nextDue := client.nextPingDueUnixMS.Load()
 	if nextDue <= now.UnixMilli() {
@@ -417,6 +435,9 @@ func TestCompletePingWithPongIncrementsStreakOnlyWithoutRealTraffic(t *testing.T
 	client.completePingWithPong()
 	if got := client.idlePongStreak.Load(); got != 0 {
 		t.Fatalf("expected pong streak reset after real traffic, got %d", got)
+	}
+	if got := client.pingState.Load(); got != pingStateBusy {
+		t.Fatalf("expected busy ping state after meaningful traffic, got %d", got)
 	}
 	if client.nextPingDueUnixMS.Load() <= now.UnixMilli() {
 		t.Fatal("expected next ping due to be rescheduled after meaningful traffic")
@@ -438,12 +459,37 @@ func TestCompletePingWithPongStaysAggressiveBeforeWarmThreshold(t *testing.T) {
 	if got := client.idlePongStreak.Load(); got != 0 {
 		t.Fatalf("expected pong streak to stay at 0 before warm threshold, got %d", got)
 	}
+	if got := client.pingState.Load(); got != pingStateAggressiveIdle {
+		t.Fatalf("expected aggressive idle ping state before warm threshold, got %d", got)
+	}
 
 	nextDue := client.nextPingDueUnixMS.Load()
 	expectedMin := now.Add(900 * time.Millisecond).UnixMilli()
 	expectedMax := now.Add(1100 * time.Millisecond).UnixMilli()
 	if nextDue < expectedMin || nextDue > expectedMax {
 		t.Fatalf("expected aggressive next ping around idle interval, got %d", nextDue)
+	}
+}
+
+func TestFailPingReturnsToAggressiveIdle(t *testing.T) {
+	cfg := testClientConfig()
+	client := New(cfg, nil)
+	now := time.Now()
+
+	client.noteMeaningfulActivity(now.Add(-10 * time.Second))
+	client.idlePongStreak.Store(3)
+	client.setPingState(pingStateBackoffIdle)
+
+	client.failPing()
+
+	if got := client.idlePongStreak.Load(); got != 0 {
+		t.Fatalf("expected pong streak reset after ping failure, got %d", got)
+	}
+	if got := client.pingState.Load(); got != pingStateAggressiveIdle {
+		t.Fatalf("expected aggressive idle ping state after failure, got %d", got)
+	}
+	if client.nextPingDueUnixMS.Load() <= time.Now().UnixMilli() {
+		t.Fatal("expected next ping due to be rescheduled after ping failure")
 	}
 }
 
