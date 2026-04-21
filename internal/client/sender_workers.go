@@ -448,7 +448,6 @@ func (c *Client) reclaimExpiredInFlight() {
 			}
 
 			if dropped > 0 {
-				socksConn.ConnectFailure = "max retry exceeded"
 				socksConn.CompleteConnect(fmt.Errorf("max retry exceeded"))
 				socksConn.ResetTransportState()
 				_ = socksConn.CloseLocal()
@@ -467,7 +466,6 @@ func (c *Client) reclaimExpiredReorder() {
 			"<yellow>socks_id=<cyan>%d</cyan> inbound reorder gap expired, closing connection</yellow>",
 			socksConn.ID,
 		)
-		socksConn.ConnectFailure = "inbound reorder timeout"
 		socksConn.ResetTransportState()
 		_ = socksConn.CloseLocal()
 	}
@@ -654,7 +652,6 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 				"<yellow>inbound reorder buffer overflow socks_id=<cyan>%d</cyan> type=<cyan>%s</cyan> seq=<cyan>%d</cyan></yellow>",
 				socksConn.ID, packet.Type, packet.Sequence,
 			)
-			socksConn.ConnectFailure = "inbound reorder overflow"
 			socksConn.ResetTransportState()
 			_ = socksConn.CloseLocal()
 			return nil
@@ -710,7 +707,6 @@ func (c *Client) applyOrderedResponsePacket(socksConn *SOCKSConnection, packet p
 		}
 
 		_ = socksConn.AckPacket(packet)
-		socksConn.ConnectFailure = message
 		c.log.Warnf(
 			"<yellow>connect failure applied socks_id=<cyan>%d</cyan> reason=<cyan>%s</cyan></yellow>",
 			socksConn.ID, message,

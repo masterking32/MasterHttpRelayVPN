@@ -49,6 +49,8 @@ func (b *relayHeaderBuilder) Apply(req *http.Request) {
 		b.applyCDNProfile(req)
 	case "api":
 		b.applyAPIProfile(req)
+	case "minimal":
+		// Intentionally leave only the default request headers untouched.
 	}
 
 	if b.cfg.HTTPRandomizeHeaders {

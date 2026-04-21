@@ -46,7 +46,7 @@ func (c *Client) handleConn(ctx context.Context, conn net.Conn) {
 	defer c.unregisterConn(conn)
 	defer conn.Close()
 
-	socksConn := c.socksConnections.New(c.clientSessionKey, conn.RemoteAddr().String(), c.chunkPolicy)
+	socksConn := c.socksConnections.New(c.clientSessionKey, c.chunkPolicy)
 	socksConn.LocalConn = conn
 	defer c.socksConnections.Delete(socksConn.ID)
 
@@ -90,7 +90,6 @@ func (c *Client) handleSOCKS5(ctx context.Context, conn net.Conn, socksConn *SOC
 	socksConn.TargetPort = targetPort
 	socksConn.TargetAddressType = atyp
 	socksConn.ConnectAccepted = true
-	socksConn.HandshakeDone = true
 	socksConn.LastActivityAt = time.Now()
 
 	c.log.Infof(
@@ -174,7 +173,6 @@ func (c *Client) handleUserPassAuth(conn net.Conn, socksConn *SOCKSConnection) e
 	}
 
 	ok := string(username) == c.cfg.SOCKSUsername && string(password) == c.cfg.SOCKSPassword
-	socksConn.SOCKSUsername = string(username)
 	if ok {
 		_, err := conn.Write([]byte{socksUserPassVersion, socksAuthSuccess})
 		return err

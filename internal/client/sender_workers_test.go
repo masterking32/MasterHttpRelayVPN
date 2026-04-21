@@ -47,7 +47,7 @@ func TestSOCKSConnectionStoreDeleteClearsTransportState(t *testing.T) {
 	localConn, peerConn := net.Pipe()
 	defer peerConn.Close()
 
-	socksConn := store.New("client-session", "127.0.0.1:1000", chunkPolicy)
+	socksConn := store.New("client-session", chunkPolicy)
 	socksConn.LocalConn = localConn
 	socksConn.BufferedBytes = len("initial-payload")
 
@@ -179,9 +179,9 @@ func TestBuildNextBatchRotatesAcrossConnections(t *testing.T) {
 	client := New(cfg, nil)
 	client.chunkPolicy = newChunkPolicy(cfg)
 
-	conn1 := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
-	conn2 := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1002", client.chunkPolicy)
-	conn3 := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1003", client.chunkPolicy)
+	conn1 := client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
+	conn2 := client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
+	conn3 := client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
 
 	for _, socksConn := range []*SOCKSConnection{conn1, conn2, conn3} {
 		if err := socksConn.EnqueuePacket(socksConn.BuildSOCKSDataPacket([]byte("x"), false)); err != nil {
@@ -213,8 +213,8 @@ func TestBuildNextBatchHonorsPerSOCKSPacketLimit(t *testing.T) {
 	client := New(cfg, nil)
 	client.chunkPolicy = newChunkPolicy(cfg)
 
-	conn1 := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
-	conn2 := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1002", client.chunkPolicy)
+	conn1 := client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
+	conn2 := client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
 
 	for i := 0; i < 3; i++ {
 		if err := conn1.EnqueuePacket(conn1.BuildSOCKSDataPacket([]byte("a"), false)); err != nil {
@@ -360,7 +360,7 @@ func TestBuildPollBatchSkipsWhenTransportBusy(t *testing.T) {
 	client := New(cfg, nil)
 	client.chunkPolicy = newChunkPolicy(cfg)
 
-	socksConn := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
+	socksConn := client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
 	if err := socksConn.EnqueuePacket(socksConn.BuildSOCKSDataPacket([]byte("busy"), false)); err != nil {
 		t.Fatalf("enqueue packet: %v", err)
 	}
@@ -375,7 +375,7 @@ func TestBuildPollBatchAllowsOnlySinglePingInFlight(t *testing.T) {
 	cfg := testClientConfig()
 	client := New(cfg, nil)
 	client.chunkPolicy = newChunkPolicy(cfg)
-	client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
+	client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
 	client.noteMeaningfulActivity(time.Now().Add(-10 * time.Second))
 
 	batch, ok := client.buildPollBatch(client.socksConnections.Snapshot(), 0)
@@ -418,7 +418,7 @@ func TestShouldSendPingWhenIdleIntervalHasElapsed(t *testing.T) {
 	cfg := testClientConfig()
 	client := New(cfg, nil)
 	client.chunkPolicy = newChunkPolicy(cfg)
-	client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
+	client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
 
 	now := time.Now()
 	client.nextPingDueUnixMS.Store(now.Add(-2 * time.Second).UnixMilli())
@@ -431,7 +431,7 @@ func TestShouldNotSendPingBeforeIdleInterval(t *testing.T) {
 	cfg := testClientConfig()
 	client := New(cfg, nil)
 	client.chunkPolicy = newChunkPolicy(cfg)
-	client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
+	client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
 
 	now := time.Now()
 	client.nextPingDueUnixMS.Store(now.Add(500 * time.Millisecond).UnixMilli())
@@ -444,7 +444,7 @@ func TestShouldSendPingWithOnlyInFlightPackets(t *testing.T) {
 	cfg := testClientConfig()
 	client := New(cfg, nil)
 	client.chunkPolicy = newChunkPolicy(cfg)
-	socksConn := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
+	socksConn := client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
 
 	packet := socksConn.BuildSOCKSDataPacket([]byte("hello"), false)
 	item := &SOCKSOutboundQueueItem{
@@ -595,7 +595,7 @@ func TestInboundReorderAllowsCloseReadAndCloseWriteOnSameSequence(t *testing.T) 
 	client := New(cfg, nil)
 	client.chunkPolicy = newChunkPolicy(cfg)
 
-	socksConn := client.socksConnections.New(client.clientSessionKey, "127.0.0.1:1001", client.chunkPolicy)
+	socksConn := client.socksConnections.New(client.clientSessionKey, client.chunkPolicy)
 	socksConn.ConnectAccepted = true
 
 	closeWrite := protocol.NewPacket(client.clientSessionKey, protocol.PacketTypeSOCKSCloseWrite)

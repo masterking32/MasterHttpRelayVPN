@@ -54,20 +54,13 @@ type SOCKSConnection struct {
 	ChunkPolicy       ChunkPolicy
 	CreatedAt         time.Time
 	LastActivityAt    time.Time
-	ClientAddress     string
 	TargetHost        string
 	TargetPort        uint16
 	TargetAddressType byte
 	BufferedBytes     int
 	NextSequence      uint64
 	SOCKSAuthMethod   byte
-	SOCKSUsername     string
-	HandshakeDone     bool
 	ConnectAccepted   bool
-	ConnectFailure    string
-	CloseReadSent     bool
-	CloseWriteSent    bool
-	ResetSent         bool
 
 	LocalConn           net.Conn
 	localWriteMu        sync.Mutex
@@ -98,7 +91,7 @@ func NewSOCKSConnectionStore() *SOCKSConnectionStore {
 	}
 }
 
-func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string, chunkPolicy ChunkPolicy) *SOCKSConnection {
+func (s *SOCKSConnectionStore) New(clientSessionKey string, chunkPolicy ChunkPolicy) *SOCKSConnection {
 	id := s.nextID.Add(1)
 	now := time.Now()
 	socksConn := &SOCKSConnection{
@@ -107,7 +100,6 @@ func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string
 		ChunkPolicy:      chunkPolicy,
 		CreatedAt:        now,
 		LastActivityAt:   now,
-		ClientAddress:    clientAddress,
 		closedC:          make(chan struct{}),
 		connectResultC:   make(chan error, 1),
 		InFlight:         make(map[string]*SOCKSOutboundQueueItem),
@@ -169,8 +161,6 @@ func (s *SOCKSConnection) BuildSOCKSDataPacket(payload []byte, final bool) proto
 }
 
 func (s *SOCKSConnection) BuildSOCKSCloseReadPacket() protocol.Packet {
-	s.CloseReadSent = true
-
 	packet := protocol.NewPacket(s.ClientSessionKey, protocol.PacketTypeSOCKSCloseRead)
 	packet.SOCKSID = s.ID
 	packet.Sequence = s.nextSequence()
@@ -179,8 +169,6 @@ func (s *SOCKSConnection) BuildSOCKSCloseReadPacket() protocol.Packet {
 }
 
 func (s *SOCKSConnection) BuildSOCKSCloseWritePacket() protocol.Packet {
-	s.CloseWriteSent = true
-
 	packet := protocol.NewPacket(s.ClientSessionKey, protocol.PacketTypeSOCKSCloseWrite)
 	packet.SOCKSID = s.ID
 	packet.Sequence = s.nextSequence()
@@ -189,8 +177,6 @@ func (s *SOCKSConnection) BuildSOCKSCloseWritePacket() protocol.Packet {
 }
 
 func (s *SOCKSConnection) BuildSOCKSRSTPacket() protocol.Packet {
-	s.ResetSent = true
-
 	packet := protocol.NewPacket(s.ClientSessionKey, protocol.PacketTypeSOCKSRST)
 	packet.SOCKSID = s.ID
 	packet.Sequence = s.nextSequence()
