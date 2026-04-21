@@ -7,8 +7,15 @@
 	"auth_key": "CHANGE_ME_TO_A_STRONG_SECRET",
 	"listen_host": "127.0.0.1",
 	"listen_port": 8085,
+	"socks5_enabled": true,
+	"socks5_host": "127.0.0.1",
+	"socks5_port": 1080,
 	"log_level": "INFO",
 	"verify_ssl": true,
+	"_direct_google_exclude_comment": "Google web apps that should NEVER use the raw direct-tunnel shortcut. Supports exact hosts and optional suffix patterns like \".googleapis.com\". They will go through the MITM relay path instead for better compatibility.",
+	"direct_google_exclude": ["gemini.google.com", "aistudio.google.com", "notebooklm.google.com", "labs.google.com", "meet.google.com", "accounts.google.com", "ogs.google.com", "mail.google.com", "calendar.google.com", "drive.google.com", "docs.google.com", "chat.google.com"],
+	"_direct_google_allow_comment": "Conservative allowlist for raw direct Google tunneling. Leave empty unless you have confirmed a host works better direct than via relay.",
+	"direct_google_allow": ["www.google.com", "safebrowsing.google.com"],
 	"_hosts_comment": "Optional SNI-rewrite overrides. YouTube, googlevideo, gstatic, fonts.googleapis.com, ytimg, ggpht, doubleclick, etc. are ALREADY handled automatically (routed via google_ip with SNI=front_domain, same trick as the Xray MITM-DomainFronting config). Add entries here only for custom domains, e.g. \"example.com\": \"216.239.38.120\".",
 	"hosts": {}
 }

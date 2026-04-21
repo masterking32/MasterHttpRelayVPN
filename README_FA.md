@@ -86,6 +86,8 @@ cp config.example.json config.json
   "auth_key": "your-secret-password-here",
   "listen_host": "127.0.0.1",
   "listen_port": 8085,
+  "socks5_enabled": true,
+  "socks5_port": 1080,
   "log_level": "INFO",
   "verify_ssl": true
 }
@@ -97,10 +99,10 @@ cp config.example.json config.json
 ### مرحله 4: اجرا
 
 ```bash
-python main.py
+python3 main.py
 ```
 
-اگر همه‌چیز درست باشد، پراکسی روی `127.0.0.1:8085` بالا می‌آید.
+اگر همه‌چیز درست باشد، پراکسی HTTP روی `127.0.0.1:8085` و SOCKS5 روی `127.0.0.1:1080` بالا می‌آید.
 
 ### مرحله 5: تنظیم مرورگر
 
@@ -109,6 +111,7 @@ python main.py
 - **Proxy Address:** `127.0.0.1`
 - **Proxy Port:** `8085`
 - **Type:** HTTP
+- **SOCKS5 Port (اختیاری):** `1080`
 
 نمونه تنظیم مرورگرها:
 
@@ -208,12 +211,14 @@ Firefox معمولا certificate store جداگانه دارد:
 ## دستورهای اجرا
 
 ```bash
-python main.py
-python main.py -p 9090
-python main.py --log-level DEBUG
-python main.py -c /path/to/config.json
-python main.py --install-cert        # نصب گواهی CA و خروج
-python main.py --no-cert-check       # رد شدن از بررسی خودکار گواهی
+python3 main.py
+python3 main.py -p 9090
+python3 main.py --socks5-port 1081
+python3 main.py --disable-socks5
+python3 main.py --log-level DEBUG
+python3 main.py -c /path/to/config.json
+python3 main.py --install-cert        # نصب گواهی CA و خروج
+python3 main.py --no-cert-check       # رد شدن از بررسی خودکار گواهی
 ```
 
 > **نصب خودکار:** هنگام اجرا در حالت `apps_script`، برنامه به‌طور خودکار بررسی می‌کند که آیا گواهی CA قابل اعتماد است یا نه و در صورت نیاز آن را نصب می‌کند. اگر نصب خودکار ناموفق بود (مثلاً نیاز به دسترسی مدیر دارد)، می‌توانید دستور `python main.py --install-cert` را اجرا کنید یا مراحل مرحله ۶ را دنبال کنید.

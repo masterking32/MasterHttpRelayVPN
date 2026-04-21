@@ -89,6 +89,8 @@ This is the "relay" that sits on Google's servers and fetches websites for you. 
      "auth_key": "your-secret-password-here",
      "listen_host": "127.0.0.1",
      "listen_port": 8085,
+     "socks5_enabled": true,
+     "socks5_port": 1080,
      "log_level": "INFO",
      "verify_ssl": true
    }
@@ -99,10 +101,10 @@ This is the "relay" that sits on Google's servers and fetches websites for you. 
 ### Step 4: Run
 
 ```bash
-python main.py
+python3 main.py
 ```
 
-You should see a message saying the proxy is running on `127.0.0.1:8085`.
+You should see a message saying the HTTP proxy is running on `127.0.0.1:8085` and SOCKS5 on `127.0.0.1:1080`.
 
 ### Step 5: Set Up Your Browser
 
@@ -111,6 +113,7 @@ Set your browser to use the proxy:
 - **Proxy Address:** `127.0.0.1`
 - **Proxy Port:** `8085`
 - **Type:** HTTP
+- **Optional SOCKS5 Port:** `1080`
 
 **How to set proxy in common browsers:**
 - **Firefox:** Settings → General → Network Settings → Manual proxy → enter `127.0.0.1` port `8085` for HTTP Proxy → check "Also use this proxy for HTTPS"
@@ -220,12 +223,14 @@ If you change `Code.gs`, you must **create a new deployment** in Google Apps Scr
 ## Command Line Options
 
 ```bash
-python main.py                          # Normal start
-python main.py -p 9090                  # Use port 9090 instead
-python main.py --log-level DEBUG        # Show detailed logs
-python main.py -c /path/to/config.json  # Use a different config file
-python main.py --install-cert           # Install MITM CA certificate and exit
-python main.py --no-cert-check          # Skip automatic CA install check on startup
+python3 main.py                          # Normal start
+python3 main.py -p 9090                  # Use HTTP port 9090 instead
+python3 main.py --socks5-port 1081       # Use SOCKS5 port 1081
+python3 main.py --disable-socks5         # Disable SOCKS5 listener
+python3 main.py --log-level DEBUG        # Show detailed logs
+python3 main.py -c /path/to/config.json  # Use a different config file
+python3 main.py --install-cert           # Install MITM CA certificate and exit
+python3 main.py --no-cert-check          # Skip automatic CA install check on startup
 ```
 
 > **Auto-install:** On startup (MITM mode), the proxy automatically checks if the CA certificate is trusted and attempts to install it. Use `--no-cert-check` to skip this. If auto-install fails (e.g. needs elevation), run `python main.py --install-cert` manually or follow Step 6 above.
