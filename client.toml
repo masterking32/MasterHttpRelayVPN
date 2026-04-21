@@ -1,36 +1,239 @@
 # ==============================================================================
+# MasterHttpRelayVPN - Client Configuration
+# ------------------------------------------------------------------------------
+# This file controls the local SOCKS client and its HTTP relay behavior.
+# Each option below includes:
+# - purpose
+# - default value used by the code when omitted
+# - allowed values or constraints
+# ------------------------------------------------------------------------------
+# Notes:
+# - String values must stay inside quotes.
+# - Time values here are in milliseconds unless stated otherwise.
+# - Size values here are in bytes.
+# ==============================================================================
+
+# ==============================================================================
+# SECURITY / RELAY
+# ------------------------------------------------------------------------------
+# AES_ENCRYPTION_KEY:
+# Shared symmetric key used to encrypt and decrypt every HTTP batch body.
+# This value must match the server configuration exactly.
+# Default: none, required
+# Allowed: any non-empty string
 AES_ENCRYPTION_KEY = "c4710a45afed2fdc00e0522c70802e71"
+
+# RELAY_URL:
+# The final HTTP or HTTPS endpoint used by the client for sending encrypted batches.
+# This can point directly to the Go server or to a PHP relay/fronting endpoint.
+# Default: none, required
+# Allowed: any non-empty http:// or https:// URL
 RELAY_URL = "http://127.0.0.1/relay.php"
+
 # ==============================================================================
+# HTTP DISGUISE / HEADER SHAPE
+# ------------------------------------------------------------------------------
+# HTTP_USER_AGENTS_FILE:
+# Path to a text file containing one User-Agent per line.
+# The client randomly selects one entry for outgoing relay requests.
+# If the file is missing or empty, built-in defaults are used.
+# Default: "user-agents.txt"
+# Allowed: any relative or absolute file path
 HTTP_USER_AGENTS_FILE = "user-agents.txt"
+
+# HTTP_HEADER_PROFILE:
+# Controls which family of HTTP headers is generated for relay requests.
+# "browser" = browser-like fetch headers
+# "cdn"     = proxy/CDN-friendly generic fetch headers
+# "api"     = API/client-like request headers
+# "minimal" = only essential headers, lowest disguise
+# Default: "browser"
+# Allowed: "browser", "cdn", "api", "minimal"
 HTTP_HEADER_PROFILE = "browser"
+
+# HTTP_RANDOMIZE_HEADERS:
+# Enables random decorative headers such as padding and nonce values.
+# Helps requests look less static across time.
+# Default: true
+# Allowed: true, false
 HTTP_RANDOMIZE_HEADERS = true
+
+# HTTP_PADDING_HEADER:
+# Name of the extra padding header added when HTTP_RANDOMIZE_HEADERS=true.
+# The client fills it with random hex text.
+# Default: "X-Padding"
+# Allowed: any non-empty HTTP header name
 HTTP_PADDING_HEADER = "X-Padding"
+
+# HTTP_PADDING_MIN_BYTES:
+# Minimum random padding payload length placed into HTTP_PADDING_HEADER.
+# Default: 16
+# Allowed: integer >= 0
 HTTP_PADDING_MIN_BYTES = 16
+
+# HTTP_PADDING_MAX_BYTES:
+# Maximum random padding payload length placed into HTTP_PADDING_HEADER.
+# Must be >= HTTP_PADDING_MIN_BYTES.
+# Default: 48
+# Allowed: integer >= HTTP_PADDING_MIN_BYTES
 HTTP_PADDING_MAX_BYTES = 48
+
+# HTTP_REFERER:
+# Optional fixed Referer header.
+# If left empty, the client auto-generates referers derived from RELAY_URL.
+# Default: ""
+# Allowed: empty string, or any valid URL string
 HTTP_REFERER = ""
+
+# HTTP_ACCEPT_LANGUAGE:
+# Optional fixed Accept-Language header.
+# If empty, the client randomly selects from built-in language profiles.
+# Default: ""
+# Allowed: empty string, or any valid Accept-Language header value
 HTTP_ACCEPT_LANGUAGE = ""
+
+# ==============================================================================
+# HTTP TIMING / BATCH SHAPE RANDOMIZATION
+# ------------------------------------------------------------------------------
+# HTTP_TIMING_JITTER_MS:
+# Adds random delay jitter on top of poll/worker wait intervals.
+# This makes request timing less perfectly periodic.
+# Default: 50
+# Allowed: integer >= 0
 HTTP_TIMING_JITTER_MS = 50
+
+# HTTP_BATCH_RANDOMIZE:
+# Enables slight randomization of effective batch size and packet count per send.
+# This reduces a perfectly fixed request shape.
+# Default: true
+# Allowed: true, false
 HTTP_BATCH_RANDOMIZE = true
+
+# HTTP_BATCH_PACKETS_JITTER:
+# Maximum number of packets subtracted from MAX_PACKETS_PER_BATCH randomly.
+# Example: if MAX_PACKETS_PER_BATCH=32 and jitter=4, effective limit may be 28..32.
+# Default: 4
+# Allowed: integer >= 0
 HTTP_BATCH_PACKETS_JITTER = 4
+
+# HTTP_BATCH_BYTES_JITTER:
+# Maximum number of bytes subtracted from MAX_BATCH_BYTES randomly.
+# Example: if MAX_BATCH_BYTES=262144 and jitter=32768, effective limit may be
+# between 229376 and 262144, but never below MAX_CHUNK_SIZE.
+# Default: 32768
+# Allowed: integer >= 0
 HTTP_BATCH_BYTES_JITTER = 32768
+
 # ==============================================================================
+# LOGGING
+# ------------------------------------------------------------------------------
+# LOG_LEVEL:
+# Controls client log verbosity.
+# Default: "INFO"
+# Allowed in practice by logger: "DEBUG", "INFO", "WARN", "ERROR"
 LOG_LEVEL = "DEBUG"
+
 # ==============================================================================
+# LOCAL SOCKS LISTENER
+# ------------------------------------------------------------------------------
+# SOCKS_HOST:
+# Local interface used by the client SOCKS5 listener.
+# Default: "127.0.0.1"
+# Allowed: any valid bind host/IP
 SOCKS_HOST = "127.0.0.1"
+
+# SOCKS_PORT:
+# Local port used by the SOCKS5 listener.
+# Default: 1080
+# Allowed: integer 1..65535
 SOCKS_PORT = 18001
+
+# SOCKS_AUTH:
+# Enables username/password authentication for the local SOCKS listener.
+# Default: false
+# Allowed: true, false
 SOCKS_AUTH = false
+
+# SOCKS_USERNAME:
+# Local SOCKS username used only when SOCKS_AUTH=true.
+# Default: ""
+# Allowed: any string
 SOCKS_USERNAME = "your_socks_username_here"
+
+# SOCKS_PASSWORD:
+# Local SOCKS password used only when SOCKS_AUTH=true.
+# Default: ""
+# Allowed: any string
 SOCKS_PASSWORD = "your_socks_password_here"
+
 # ==============================================================================
+# TRANSPORT / FLOW CONTROL
+# ------------------------------------------------------------------------------
+# MAX_CHUNK_SIZE:
+# Maximum payload size for a single SOCKS data packet before chunking.
+# Also used as the minimum safe lower bound for several queue/body limits.
+# Default: 16384 (16 KiB)
+# Allowed: integer >= 1
 MAX_CHUNK_SIZE = 16384
+
+# MAX_PACKETS_PER_BATCH:
+# Hard upper bound for packet count in one outbound HTTP batch before jitter.
+# Default: 32
+# Allowed: integer >= 1
 MAX_PACKETS_PER_BATCH = 32
+
+# MAX_BATCH_BYTES:
+# Hard upper bound for total payload bytes in one HTTP batch before jitter.
+# Must be >= MAX_CHUNK_SIZE.
+# Default: 262144 (256 KiB)
+# Allowed: integer >= MAX_CHUNK_SIZE
 MAX_BATCH_BYTES = 262144
+
+# WORKER_COUNT:
+# Number of concurrent sender workers posting batches to the relay.
+# Default: 4
+# Allowed: integer >= 1
 WORKER_COUNT = 4
+
+# HTTP_REQUEST_TIMEOUT_MS:
+# Timeout for a single relay HTTP request.
+# If exceeded, in-flight packets may be retried according to ACK policy.
+# Default: 15000
+# Allowed: integer >= 1
 HTTP_REQUEST_TIMEOUT_MS = 15000
+
+# WORKER_POLL_INTERVAL_MS:
+# Base idle wait time used by sender workers when no immediate work exists.
+# Lower values may reduce latency but increase CPU wakeups.
+# Default: 200
+# Allowed: integer >= 1
 WORKER_POLL_INTERVAL_MS = 200
+
+# IDLE_POLL_INTERVAL_MS:
+# Minimum poll interval for synthetic ping/poll requests when no payload data exists.
+# Must be >= WORKER_POLL_INTERVAL_MS.
+# Default: 1000
+# Allowed: integer >= WORKER_POLL_INTERVAL_MS
 IDLE_POLL_INTERVAL_MS = 1000
+
+# MAX_QUEUE_BYTES_PER_SOCKS:
+# Maximum queued payload bytes allowed per local SOCKS connection.
+# Prevents unbounded client-side buffering for a single connection.
+# Must be >= MAX_CHUNK_SIZE.
+# Default: 1048576 (1 MiB)
+# Allowed: integer >= MAX_CHUNK_SIZE
 MAX_QUEUE_BYTES_PER_SOCKS = 1048576
+
+# ACK_TIMEOUT_MS:
+# Time to wait before considering an in-flight packet lost and eligible for retry.
+# Default: 5000
+# Allowed: integer >= 1
 ACK_TIMEOUT_MS = 5000
+
+# MAX_RETRY_COUNT:
+# Maximum resend attempts for a packet before the connection is failed.
+# Default: 5
+# Allowed: integer >= 0
 MAX_RETRY_COUNT = 5
+
 # ==============================================================================
