@@ -32,9 +32,13 @@ type Client struct {
 	conns  map[net.Conn]struct{}
 	workCh chan struct{}
 
-	lastPollUnixMS atomic.Int64
-	activeBatches  atomic.Int64
-	batchCursor    atomic.Uint64
+	lastMeaningfulActivityUnixMS atomic.Int64
+	lastPingMeaningfulSnapshotMS atomic.Int64
+	nextPingDueUnixMS            atomic.Int64
+	activeBatches                atomic.Int64
+	pingInFlight                 atomic.Int64
+	idlePongStreak               atomic.Int64
+	batchCursor                  atomic.Uint64
 }
 
 func New(cfg config.Config, lg *logger.Logger) *Client {
@@ -129,6 +133,57 @@ func (c *Client) signalSendWork() {
 	case c.workCh <- struct{}{}:
 	default:
 	}
+}
+
+func (c *Client) noteMeaningfulActivity(now time.Time) {
+	c.lastMeaningfulActivityUnixMS.Store(now.UnixMilli())
+	c.idlePongStreak.Store(0)
+	c.nextPingDueUnixMS.Store(now.Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+}
+
+func (c *Client) tryBeginPing(now time.Time) bool {
+	if !c.pingInFlight.CompareAndSwap(0, 1) {
+		return false
+	}
+
+	c.lastPingMeaningfulSnapshotMS.Store(c.lastMeaningfulActivityUnixMS.Load())
+	return true
+}
+
+func (c *Client) completePingWithPong() {
+	c.pingInFlight.Store(0)
+	now := time.Now()
+
+	if c.lastMeaningfulActivityUnixMS.Load() == c.lastPingMeaningfulSnapshotMS.Load() {
+		lastMeaningfulAt := time.UnixMilli(c.lastMeaningfulActivityUnixMS.Load())
+		idleFor := now.Sub(lastMeaningfulAt)
+		warmThreshold := time.Duration(c.cfg.PingWarmThresholdMS) * time.Millisecond
+		if idleFor < warmThreshold {
+			c.idlePongStreak.Store(0)
+			c.nextPingDueUnixMS.Store(now.Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+			return
+		}
+
+		streak := c.idlePongStreak.Add(1)
+		c.nextPingDueUnixMS.Store(now.Add(c.idleIntervalForStreak(streak)).UnixMilli())
+		return
+	}
+
+	c.idlePongStreak.Store(0)
+	c.nextPingDueUnixMS.Store(now.Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+}
+
+func (c *Client) failPing() {
+	c.pingInFlight.Store(0)
+	c.nextPingDueUnixMS.Store(time.Now().Add(time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond).UnixMilli())
+}
+
+func (c *Client) idleIntervalForStreak(streak int64) time.Duration {
+	interval := c.cfg.PingBackoffBaseMS + int(streak)*c.cfg.PingBackoffStepMS
+	if interval > c.cfg.PingMaxIntervalMS {
+		interval = c.cfg.PingMaxIntervalMS
+	}
+	return time.Duration(interval) * time.Millisecond
 }
 
 func generateClientSessionKey() string {

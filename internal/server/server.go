@@ -39,29 +39,29 @@ type ClientSession struct {
 }
 
 type SOCKSState struct {
-	ID               uint64
-	CreatedAt        time.Time
-	LastActivityAt   time.Time
-	Target           *protocol.Target
-	ConnectSeen      bool
-	ConnectAcked     bool
-	CloseReadSeen    bool
-	CloseWriteSeen   bool
-	ResetSeen        bool
-	ReceivedBytes    uint64
-	LastSequenceSeen uint64
+	ID                  uint64
+	CreatedAt           time.Time
+	LastActivityAt      time.Time
+	Target              *protocol.Target
+	ConnectSeen         bool
+	ConnectAcked        bool
+	CloseReadSeen       bool
+	CloseWriteSeen      bool
+	ResetSeen           bool
+	ReceivedBytes       uint64
+	LastSequenceSeen    uint64
 	NextInboundSequence uint64
-	OutboundSequence uint64
-	PendingInbound   map[uint64]PendingInboundPacket
-	UpstreamConn     net.Conn
-	upstreamWriteMu  sync.Mutex
-	upstreamCloseMu  sync.Mutex
-	upstreamReadEOF  bool
-	upstreamWriteEOF bool
-	queueMu          sync.Mutex
-	OutboundQueue    []protocol.Packet
-	QueuedBytes      int
-	MaxQueueBytes    int
+	OutboundSequence    uint64
+	PendingInbound      map[uint64][]PendingInboundPacket
+	UpstreamConn        net.Conn
+	upstreamWriteMu     sync.Mutex
+	upstreamCloseMu     sync.Mutex
+	upstreamReadEOF     bool
+	upstreamWriteEOF    bool
+	queueMu             sync.Mutex
+	OutboundQueue       []protocol.Packet
+	QueuedBytes         int
+	MaxQueueBytes       int
 }
 
 type PendingInboundPacket struct {
@@ -230,7 +230,7 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 				ConnectSeen:      true,
 				LastSequenceSeen: packet.Sequence,
 				MaxQueueBytes:    s.cfg.MaxServerQueueBytes,
-				PendingInbound:   make(map[uint64]PendingInboundPacket),
+				PendingInbound:   make(map[uint64][]PendingInboundPacket),
 			}
 			session.SOCKSConnections[packet.SOCKSID] = socksState
 		} else {
@@ -238,7 +238,7 @@ func (s *Server) processPacketLocked(session *ClientSession, packet protocol.Pac
 			socksState.Target = packet.Target
 			socksState.ConnectSeen = true
 			if socksState.PendingInbound == nil {
-				socksState.PendingInbound = make(map[uint64]PendingInboundPacket)
+				socksState.PendingInbound = make(map[uint64][]PendingInboundPacket)
 			}
 			if packet.Sequence > socksState.LastSequenceSeen {
 				socksState.LastSequenceSeen = packet.Sequence
@@ -380,7 +380,7 @@ func (s *Server) getOrCreateSOCKSStateLocked(session *ClientSession, packet prot
 	socksState := session.SOCKSConnections[packet.SOCKSID]
 	if socksState != nil {
 		if socksState.PendingInbound == nil {
-			socksState.PendingInbound = make(map[uint64]PendingInboundPacket)
+			socksState.PendingInbound = make(map[uint64][]PendingInboundPacket)
 		}
 		return socksState
 	}
@@ -392,7 +392,7 @@ func (s *Server) getOrCreateSOCKSStateLocked(session *ClientSession, packet prot
 		Target:           packet.Target,
 		LastSequenceSeen: packet.Sequence,
 		MaxQueueBytes:    s.cfg.MaxServerQueueBytes,
-		PendingInbound:   make(map[uint64]PendingInboundPacket),
+		PendingInbound:   make(map[uint64][]PendingInboundPacket),
 	}
 	session.SOCKSConnections[packet.SOCKSID] = socksState
 	s.log.Debugf(
@@ -625,16 +625,17 @@ func (s *SOCKSState) queueInboundPacketLocked(packet protocol.Packet, now time.T
 	if packet.Sequence < expected {
 		return nil, true, false
 	}
-	if _, exists := s.PendingInbound[packet.Sequence]; exists {
+	pendingForSequence := s.PendingInbound[packet.Sequence]
+	if containsPendingInboundPacketLocked(pendingForSequence, packet) {
 		return nil, true, false
 	}
-	if len(s.PendingInbound) >= maxBuffered {
+	if bufferedInboundPacketCountLocked(s.PendingInbound) >= maxBuffered {
 		return nil, false, true
 	}
-	s.PendingInbound[packet.Sequence] = PendingInboundPacket{
+	s.PendingInbound[packet.Sequence] = append(s.PendingInbound[packet.Sequence], PendingInboundPacket{
 		Packet:   packet,
 		QueuedAt: now,
-	}
+	})
 	if !s.ConnectAcked {
 		return nil, false, false
 	}
@@ -645,11 +646,14 @@ func (s *SOCKSState) drainReadyInboundLocked() []protocol.Packet {
 	expected := s.expectedInboundSequenceLocked()
 	ready := make([]protocol.Packet, 0)
 	for {
-		pending, ok := s.PendingInbound[expected]
-		if !ok {
+		pendingPackets, ok := s.PendingInbound[expected]
+		if !ok || len(pendingPackets) == 0 {
 			break
 		}
-		ready = append(ready, pending.Packet)
+		sortPendingInboundPacketsLocked(pendingPackets)
+		for _, pending := range pendingPackets {
+			ready = append(ready, pending.Packet)
+		}
 		delete(s.PendingInbound, expected)
 		expected++
 	}
@@ -658,13 +662,60 @@ func (s *SOCKSState) drainReadyInboundLocked() []protocol.Packet {
 }
 
 func (s *SOCKSState) hasExpiredInboundGapLocked(now time.Time, timeout time.Duration) bool {
-	for _, pending := range s.PendingInbound {
-		if now.Sub(pending.QueuedAt) >= timeout {
-			clear(s.PendingInbound)
+	for _, pendingPackets := range s.PendingInbound {
+		for _, pending := range pendingPackets {
+			if now.Sub(pending.QueuedAt) >= timeout {
+				clear(s.PendingInbound)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsPendingInboundPacketLocked(pendingPackets []PendingInboundPacket, packet protocol.Packet) bool {
+	for _, pending := range pendingPackets {
+		if pending.Packet.Type == packet.Type &&
+			pending.Packet.FragmentID == packet.FragmentID &&
+			pending.Packet.TotalFragments == packet.TotalFragments {
 			return true
 		}
 	}
 	return false
+}
+
+func bufferedInboundPacketCountLocked(pending map[uint64][]PendingInboundPacket) int {
+	total := 0
+	for _, pendingPackets := range pending {
+		total += len(pendingPackets)
+	}
+	return total
+}
+
+func sortPendingInboundPacketsLocked(pendingPackets []PendingInboundPacket) {
+	for i := 1; i < len(pendingPackets); i++ {
+		current := pendingPackets[i]
+		j := i - 1
+		for ; j >= 0 && inboundPacketSortOrderLocked(current.Packet.Type) < inboundPacketSortOrderLocked(pendingPackets[j].Packet.Type); j-- {
+			pendingPackets[j+1] = pendingPackets[j]
+		}
+		pendingPackets[j+1] = current
+	}
+}
+
+func inboundPacketSortOrderLocked(packetType protocol.PacketType) int {
+	switch packetType {
+	case protocol.PacketTypeSOCKSData:
+		return 0
+	case protocol.PacketTypeSOCKSCloseRead:
+		return 1
+	case protocol.PacketTypeSOCKSCloseWrite:
+		return 2
+	case protocol.PacketTypeSOCKSRST:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func (s *SOCKSState) enqueueOutboundData(clientSessionKey string, payload []byte, final bool) bool {

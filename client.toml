@@ -245,11 +245,38 @@ HTTP_REQUEST_TIMEOUT_MS = 15000
 WORKER_POLL_INTERVAL_MS = 200
 
 # IDLE_POLL_INTERVAL_MS:
-# Minimum poll interval for synthetic ping/poll requests when no payload data exists.
+# Minimum ping interval used shortly after real traffic, before idle keepalive
+# backoff starts growing.
 # Must be >= WORKER_POLL_INTERVAL_MS.
 # Default: 1000
 # Allowed: integer >= WORKER_POLL_INTERVAL_MS
 IDLE_POLL_INTERVAL_MS = 1000
+
+# PING_WARM_THRESHOLD_MS:
+# If no real non-ping traffic has been seen for at least this long, the client
+# leaves the aggressive idle poll interval and switches to ping backoff mode.
+# Default: 5000
+# Allowed: integer >= 1
+PING_WARM_THRESHOLD_MS = 5000
+
+# PING_BACKOFF_BASE_MS:
+# First keepalive interval used after the client becomes idle-only.
+# Default: 5000
+# Allowed: integer >= IDLE_POLL_INTERVAL_MS
+PING_BACKOFF_BASE_MS = 5000
+
+# PING_BACKOFF_STEP_MS:
+# Extra delay added after each successful idle-only ping/pong round.
+# Example: with base=5000 and step=5000, intervals become 5s, 10s, 15s, ...
+# Default: 5000
+# Allowed: integer >= 1
+PING_BACKOFF_STEP_MS = 5000
+
+# PING_MAX_INTERVAL_MS:
+# Maximum keepalive interval cap when the connection has stayed idle for a long time.
+# Default: 60000
+# Allowed: integer >= PING_BACKOFF_BASE_MS
+PING_MAX_INTERVAL_MS = 60000
 
 # MAX_QUEUE_BYTES_PER_SOCKS:
 # Maximum queued payload bytes allowed per local SOCKS connection.

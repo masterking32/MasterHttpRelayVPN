@@ -64,9 +64,9 @@ func TestDrainSessionOutboundLockedRespectsGlobalLimits(t *testing.T) {
 
 func TestSOCKSStateInboundReorderQueuesUntilGapFilled(t *testing.T) {
 	socksState := &SOCKSState{
-		ConnectAcked:    true,
-		PendingInbound:  make(map[uint64]PendingInboundPacket),
-		MaxQueueBytes:   1024,
+		ConnectAcked:   true,
+		PendingInbound: make(map[uint64][]PendingInboundPacket),
+		MaxQueueBytes:  1024,
 	}
 
 	packet2 := testDataPacket("client-session", 1, 2, "two")
@@ -93,12 +93,12 @@ func TestSOCKSStateInboundReorderQueuesUntilGapFilled(t *testing.T) {
 
 func TestSOCKSStateInboundGapTimeout(t *testing.T) {
 	socksState := &SOCKSState{
-		PendingInbound: make(map[uint64]PendingInboundPacket),
+		PendingInbound: make(map[uint64][]PendingInboundPacket),
 	}
-	socksState.PendingInbound[3] = PendingInboundPacket{
+	socksState.PendingInbound[3] = []PendingInboundPacket{{
 		Packet:   testDataPacket("client-session", 1, 3, "late"),
 		QueuedAt: time.Now().Add(-2 * time.Second),
-	}
+	}}
 
 	if !socksState.hasExpiredInboundGapLocked(time.Now(), 500*time.Millisecond) {
 		t.Fatal("expected inbound gap timeout to trigger")
@@ -110,7 +110,7 @@ func TestSOCKSStateInboundGapTimeout(t *testing.T) {
 
 func TestSOCKSStateInboundDataWaitsForConnect(t *testing.T) {
 	socksState := &SOCKSState{
-		PendingInbound: make(map[uint64]PendingInboundPacket),
+		PendingInbound: make(map[uint64][]PendingInboundPacket),
 	}
 
 	packet1 := testDataPacket("client-session", 1, 1, "one")
@@ -129,6 +129,40 @@ func TestSOCKSStateInboundDataWaitsForConnect(t *testing.T) {
 	}
 	if ready[0].Sequence != 1 {
 		t.Fatalf("expected sequence 1, got %d", ready[0].Sequence)
+	}
+}
+
+func TestSOCKSStateInboundReorderAllowsMultiplePacketTypesPerSequence(t *testing.T) {
+	socksState := &SOCKSState{
+		ConnectAcked:   true,
+		PendingInbound: make(map[uint64][]PendingInboundPacket),
+	}
+
+	closeWrite := protocol.NewPacket("client-session", protocol.PacketTypeSOCKSCloseWrite)
+	closeWrite.SOCKSID = 1
+	closeWrite.Sequence = 2
+
+	closeRead := protocol.NewPacket("client-session", protocol.PacketTypeSOCKSCloseRead)
+	closeRead.SOCKSID = 1
+	closeRead.Sequence = 2
+
+	ready, duplicate, overflow := socksState.queueInboundPacketLocked(closeWrite, time.Now(), 8)
+	if duplicate || overflow || len(ready) != 0 {
+		t.Fatalf("expected first close packet to buffer, duplicate=%t overflow=%t ready=%d", duplicate, overflow, len(ready))
+	}
+
+	ready, duplicate, overflow = socksState.queueInboundPacketLocked(closeRead, time.Now(), 8)
+	if duplicate || overflow || len(ready) != 0 {
+		t.Fatalf("expected second close packet on same sequence to buffer, duplicate=%t overflow=%t ready=%d", duplicate, overflow, len(ready))
+	}
+
+	data := testDataPacket("client-session", 1, 1, "one")
+	ready, duplicate, overflow = socksState.queueInboundPacketLocked(data, time.Now(), 8)
+	if duplicate || overflow || len(ready) != 3 {
+		t.Fatalf("expected data and both close packets to drain, duplicate=%t overflow=%t ready=%d", duplicate, overflow, len(ready))
+	}
+	if ready[0].Type != protocol.PacketTypeSOCKSData || ready[1].Type != protocol.PacketTypeSOCKSCloseRead || ready[2].Type != protocol.PacketTypeSOCKSCloseWrite {
+		t.Fatalf("unexpected drain order: %s, %s, %s", ready[0].Type, ready[1].Type, ready[2].Type)
 	}
 }
 

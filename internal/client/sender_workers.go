@@ -9,6 +9,8 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,6 +76,9 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 
 		if err := batch.Validate(); err != nil {
 			c.log.Errorf("<red>worker=<cyan>%d</cyan> invalid batch: <cyan>%v</cyan></red>", w.id, err)
+			if isPingOnlyBatch(batch) {
+				c.failPing()
+			}
 			c.requeueSelected(selected)
 			c.releaseBatchSlot()
 			c.waitForSendWork(ctx, c.jitterDuration(waitInterval))
@@ -85,6 +90,9 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 		body, err := protocol.EncryptBatch(batch, c.cfg.AESEncryptionKey)
 		if err != nil {
 			c.log.Errorf("<red>worker=<cyan>%d</cyan> encrypt batch failed: <cyan>%v</cyan></red>", w.id, err)
+			if isPingOnlyBatch(batch) {
+				c.failPing()
+			}
 			c.requeueSelected(selected)
 			c.releaseBatchSlot()
 			c.waitForSendWork(ctx, c.jitterDuration(waitInterval))
@@ -104,6 +112,9 @@ func (w *sendWorker) run(ctx context.Context, c *Client) {
 			"<green>worker=<cyan>%d</cyan> sent batch=<cyan>%s</cyan> packets=<cyan>%d</cyan> bytes=<cyan>%d</cyan></green>",
 			w.id, batch.BatchID, len(batch.Packets), len(body),
 		)
+		if !isPingOnlyBatch(batch) {
+			c.noteMeaningfulActivity(time.Now())
+		}
 	}
 }
 
@@ -119,15 +130,12 @@ func (c *Client) waitForSendWork(ctx context.Context, interval time.Duration) {
 }
 
 func (c *Client) buildNextBatch(connections []*SOCKSConnection, totalQueuedBytes int) (protocol.Batch, []dequeuedPacket) {
-	if len(connections) == 0 {
-		return protocol.Batch{}, nil
-	}
-
-	sort.Slice(connections, func(i, j int) bool {
-		return connections[i].ID < connections[j].ID
-	})
-
 	start := 0
+	if len(connections) > 0 {
+		sort.Slice(connections, func(i, j int) bool {
+			return connections[i].ID < connections[j].ID
+		})
+	}
 	if len(connections) > 1 {
 		rotationEvery := c.cfg.MuxRotateEveryBatches
 		if rotationEvery < 1 {
@@ -195,26 +203,43 @@ func (c *Client) buildNextBatch(connections []*SOCKSConnection, totalQueuedBytes
 }
 
 func (c *Client) buildPollBatch(connections []*SOCKSConnection, totalQueuedBytes int) (protocol.Batch, bool) {
-	if len(connections) == 0 {
-		return protocol.Batch{}, false
-	}
-
 	now := time.Now()
-	nowUnixMS := now.UnixMilli()
-	lastUnixMS := c.lastPollUnixMS.Load()
-	minInterval := c.jitterDuration(c.effectiveIdlePollInterval(totalQueuedBytes))
-	if lastUnixMS > 0 && nowUnixMS-lastUnixMS < minInterval.Milliseconds() {
+	if !c.shouldSendPing(connections, totalQueuedBytes, now) {
 		return protocol.Batch{}, false
 	}
-
-	if !c.lastPollUnixMS.CompareAndSwap(lastUnixMS, nowUnixMS) {
+	if !c.tryBeginPing(now) {
 		return protocol.Batch{}, false
 	}
 
 	packet := protocol.NewPacket(c.clientSessionKey, protocol.PacketTypePing)
-	packet.Payload = []byte("poll")
+	packet.Payload = buildPingPayload(now)
 	batch := protocol.NewBatch(c.clientSessionKey, protocol.NewBatchID(), []protocol.Packet{packet})
 	return batch, true
+}
+
+func (c *Client) shouldSendPing(connections []*SOCKSConnection, totalQueuedBytes int, now time.Time) bool {
+	if totalQueuedBytes > 0 {
+		return false
+	}
+	if hasQueuedPackets(connections) {
+		return false
+	}
+	if c.pingInFlight.Load() > 0 {
+		return false
+	}
+
+	lastMeaningfulUnixMS := c.lastMeaningfulActivityUnixMS.Load()
+	sessionActive := len(connections) > 0 || lastMeaningfulUnixMS > 0
+	if !sessionActive {
+		return false
+	}
+
+	nextDueUnixMS := c.nextPingDueUnixMS.Load()
+	if nextDueUnixMS <= 0 {
+		return lastMeaningfulUnixMS > 0
+	}
+
+	return now.UnixMilli() >= nextDueUnixMS
 }
 
 func (c *Client) effectiveBatchLimits(totalQueuedBytes int) (int, int) {
@@ -256,16 +281,6 @@ func (c *Client) effectiveWaitInterval(totalQueuedBytes int) time.Duration {
 			return burst
 		}
 		return 25 * time.Millisecond
-	}
-	return interval
-}
-
-func (c *Client) effectiveIdlePollInterval(totalQueuedBytes int) time.Duration {
-	interval := time.Duration(c.cfg.IdlePollIntervalMS) * time.Millisecond
-	if totalQueuedBytes >= c.cfg.MuxBurstThresholdBytes {
-		if burst := interval / 2; burst >= time.Duration(c.cfg.WorkerPollIntervalMS)*time.Millisecond {
-			return burst
-		}
 	}
 	return interval
 }
@@ -313,6 +328,29 @@ func queuedBytesAcross(connections []*SOCKSConnection) int {
 		total += queuedBytes
 	}
 	return total
+}
+
+func hasQueuedPackets(connections []*SOCKSConnection) bool {
+	for _, socksConn := range connections {
+		queueItems, _ := socksConn.QueueSnapshot()
+		if queueItems > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func buildPingPayload(now time.Time) []byte {
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		return []byte(fmt.Sprintf("ping:%d:fallback", now.UnixMilli()))
+	}
+
+	return []byte(fmt.Sprintf("ping:%d:%s", now.UnixMilli(), hex.EncodeToString(random)))
+}
+
+func isPingOnlyBatch(batch protocol.Batch) bool {
+	return len(batch.Packets) == 1 && batch.Packets[0].Type == protocol.PacketTypePing
 }
 
 func (c *Client) jitterDuration(base time.Duration) time.Duration {
@@ -391,8 +429,12 @@ func (c *Client) reclaimExpiredReorder() {
 }
 
 func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Batch, body []byte) error {
+	pingOnly := isPingOnlyBatch(batch)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.RelayURL, bytes.NewReader(body))
 	if err != nil {
+		if pingOnly {
+			c.failPing()
+		}
 		return err
 	}
 
@@ -404,16 +446,25 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
+		if pingOnly {
+			c.failPing()
+		}
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if pingOnly {
+			c.failPing()
+		}
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	if resp.StatusCode == http.StatusNoContent {
+		if pingOnly {
+			c.failPing()
+		}
 		c.log.Debugf(
 			"<gray>worker=<cyan>%d</cyan> batch=<cyan>%s</cyan> got no-content response</gray>",
 			w.id, batch.BatchID,
@@ -423,15 +474,24 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		if pingOnly {
+			c.failPing()
+		}
 		return err
 	}
 
 	if len(respBody) == 0 {
+		if pingOnly {
+			c.failPing()
+		}
 		return nil
 	}
 
 	responseBatch, err := protocol.DecryptBatch(respBody, c.cfg.AESEncryptionKey)
 	if err != nil {
+		if pingOnly {
+			c.failPing()
+		}
 		return err
 	}
 
@@ -449,6 +509,13 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 
 func (c *Client) applyResponseBatch(batch protocol.Batch) error {
 	for _, packet := range batch.Packets {
+		if packet.Type == protocol.PacketTypePong {
+			c.completePingWithPong()
+		}
+		if packet.Type != protocol.PacketTypePing && packet.Type != protocol.PacketTypePong {
+			c.noteMeaningfulActivity(time.Now())
+		}
+
 		c.log.Debugf(
 			"<gray>apply response packet=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> payload_bytes=<cyan>%d</cyan> final=<cyan>%t</cyan></gray>",
 			packet.Type, packet.SOCKSID, packet.Sequence, len(packet.Payload), packet.Final,

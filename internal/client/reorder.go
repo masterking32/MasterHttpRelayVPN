@@ -20,17 +20,18 @@ func (s *SOCKSConnection) queueInboundPacket(packet protocol.Packet, maxBuffered
 	if packet.Sequence < expected {
 		return nil, true, false
 	}
-	if _, exists := s.PendingInbound[packet.Sequence]; exists {
+	pendingForSequence := s.PendingInbound[packet.Sequence]
+	if containsPendingInboundPacket(pendingForSequence, packet) {
 		return nil, true, false
 	}
-	if len(s.PendingInbound) >= maxBuffered {
+	if bufferedInboundPacketCount(s.PendingInbound) >= maxBuffered {
 		return nil, false, true
 	}
 
-	s.PendingInbound[packet.Sequence] = PendingInboundPacket{
+	s.PendingInbound[packet.Sequence] = append(s.PendingInbound[packet.Sequence], PendingInboundPacket{
 		Packet:   packet,
 		QueuedAt: time.Now(),
-	}
+	})
 
 	if !s.ConnectAccepted {
 		return nil, false, false
@@ -55,11 +56,14 @@ func (s *SOCKSConnection) drainReadyInboundLocked() []protocol.Packet {
 	expected := s.expectedInboundSequenceLocked()
 	ready := make([]protocol.Packet, 0)
 	for {
-		pending, ok := s.PendingInbound[expected]
-		if !ok {
+		pendingPackets, ok := s.PendingInbound[expected]
+		if !ok || len(pendingPackets) == 0 {
 			break
 		}
-		ready = append(ready, pending.Packet)
+		sortPendingInboundPackets(pendingPackets)
+		for _, pending := range pendingPackets {
+			ready = append(ready, pending.Packet)
+		}
 		delete(s.PendingInbound, expected)
 		expected++
 	}
@@ -75,13 +79,60 @@ func (s *SOCKSConnection) hasExpiredInboundGap(timeout time.Duration) bool {
 	s.reorderMu.Lock()
 	defer s.reorderMu.Unlock()
 	now := time.Now()
-	for _, pending := range s.PendingInbound {
-		if now.Sub(pending.QueuedAt) >= timeout {
-			clear(s.PendingInbound)
+	for _, pendingPackets := range s.PendingInbound {
+		for _, pending := range pendingPackets {
+			if now.Sub(pending.QueuedAt) >= timeout {
+				clear(s.PendingInbound)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsPendingInboundPacket(pendingPackets []PendingInboundPacket, packet protocol.Packet) bool {
+	for _, pending := range pendingPackets {
+		if pending.Packet.Type == packet.Type &&
+			pending.Packet.FragmentID == packet.FragmentID &&
+			pending.Packet.TotalFragments == packet.TotalFragments {
 			return true
 		}
 	}
 	return false
+}
+
+func bufferedInboundPacketCount(pending map[uint64][]PendingInboundPacket) int {
+	total := 0
+	for _, pendingPackets := range pending {
+		total += len(pendingPackets)
+	}
+	return total
+}
+
+func sortPendingInboundPackets(pendingPackets []PendingInboundPacket) {
+	for i := 1; i < len(pendingPackets); i++ {
+		current := pendingPackets[i]
+		j := i - 1
+		for ; j >= 0 && inboundPacketSortOrder(current.Packet.Type) < inboundPacketSortOrder(pendingPackets[j].Packet.Type); j-- {
+			pendingPackets[j+1] = pendingPackets[j]
+		}
+		pendingPackets[j+1] = current
+	}
+}
+
+func inboundPacketSortOrder(packetType protocol.PacketType) int {
+	switch packetType {
+	case protocol.PacketTypeSOCKSData:
+		return 0
+	case protocol.PacketTypeSOCKSCloseRead:
+		return 1
+	case protocol.PacketTypeSOCKSCloseWrite:
+		return 2
+	case protocol.PacketTypeSOCKSRST:
+		return 3
+	default:
+		return 4
+	}
 }
 
 func isReorderSequencedPacket(packetType protocol.PacketType) bool {

@@ -49,6 +49,10 @@ type Config struct {
 	HTTPRequestTimeoutMS       int
 	WorkerPollIntervalMS       int
 	IdlePollIntervalMS         int
+	PingWarmThresholdMS        int
+	PingBackoffBaseMS          int
+	PingBackoffStepMS          int
+	PingMaxIntervalMS          int
 	MaxQueueBytesPerSOCKS      int
 	AckTimeoutMS               int
 	MaxRetryCount              int
@@ -88,6 +92,10 @@ func Load(path string) (Config, error) {
 		HTTPRequestTimeoutMS:       15000,
 		WorkerPollIntervalMS:       200,
 		IdlePollIntervalMS:         1000,
+		PingWarmThresholdMS:        5000,
+		PingBackoffBaseMS:          5000,
+		PingBackoffStepMS:          5000,
+		PingMaxIntervalMS:          60000,
 		MaxQueueBytesPerSOCKS:      1024 * 1024,
 		AckTimeoutMS:               5000,
 		MaxRetryCount:              5,
@@ -292,6 +300,34 @@ func Load(path string) (Config, error) {
 			}
 
 			cfg.IdlePollIntervalMS = interval
+		case "PING_WARM_THRESHOLD_MS":
+			threshold, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse PING_WARM_THRESHOLD_MS: %w", err)
+			}
+
+			cfg.PingWarmThresholdMS = threshold
+		case "PING_BACKOFF_BASE_MS":
+			interval, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse PING_BACKOFF_BASE_MS: %w", err)
+			}
+
+			cfg.PingBackoffBaseMS = interval
+		case "PING_BACKOFF_STEP_MS":
+			interval, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse PING_BACKOFF_STEP_MS: %w", err)
+			}
+
+			cfg.PingBackoffStepMS = interval
+		case "PING_MAX_INTERVAL_MS":
+			interval, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse PING_MAX_INTERVAL_MS: %w", err)
+			}
+
+			cfg.PingMaxIntervalMS = interval
 		case "MAX_QUEUE_BYTES_PER_SOCKS":
 			size, err := strconv.Atoi(value)
 			if err != nil {
@@ -406,6 +442,18 @@ func (c Config) ValidateClient() error {
 
 	if c.IdlePollIntervalMS < c.WorkerPollIntervalMS {
 		return fmt.Errorf("IDLE_POLL_INTERVAL_MS must be >= WORKER_POLL_INTERVAL_MS")
+	}
+	if c.PingWarmThresholdMS < 1 {
+		return fmt.Errorf("invalid PING_WARM_THRESHOLD_MS: %d", c.PingWarmThresholdMS)
+	}
+	if c.PingBackoffBaseMS < c.IdlePollIntervalMS {
+		return fmt.Errorf("PING_BACKOFF_BASE_MS must be >= IDLE_POLL_INTERVAL_MS")
+	}
+	if c.PingBackoffStepMS < 1 {
+		return fmt.Errorf("invalid PING_BACKOFF_STEP_MS: %d", c.PingBackoffStepMS)
+	}
+	if c.PingMaxIntervalMS < c.PingBackoffBaseMS {
+		return fmt.Errorf("PING_MAX_INTERVAL_MS must be >= PING_BACKOFF_BASE_MS")
 	}
 
 	if c.AckTimeoutMS < 1 {

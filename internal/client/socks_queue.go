@@ -100,6 +100,12 @@ func (s *SOCKSConnection) QueueSnapshot() (items int, bytes int) {
 	return len(s.OutboundQueue), s.QueuedBytes
 }
 
+func (s *SOCKSConnection) InFlightCount() int {
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	return len(s.InFlight)
+}
+
 func (s *SOCKSConnection) DequeuePacket() *SOCKSOutboundQueueItem {
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()

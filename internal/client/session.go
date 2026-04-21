@@ -39,21 +39,21 @@ type SOCKSConnection struct {
 	CloseWriteSent    bool
 	ResetSent         bool
 
-	LocalConn      net.Conn
-	localWriteMu   sync.Mutex
-	localCloseMu   sync.Mutex
-	reorderMu      sync.Mutex
-	localReadEOF   bool
-	localWriteEOF  bool
-	closedC        chan struct{}
-	closeOnce      sync.Once
-	connectResultC chan error
-	queueMu        sync.Mutex
-	OutboundQueue  []*SOCKSOutboundQueueItem
-	QueuedBytes    int
-	InFlight       map[string]*SOCKSOutboundQueueItem
+	LocalConn           net.Conn
+	localWriteMu        sync.Mutex
+	localCloseMu        sync.Mutex
+	reorderMu           sync.Mutex
+	localReadEOF        bool
+	localWriteEOF       bool
+	closedC             chan struct{}
+	closeOnce           sync.Once
+	connectResultC      chan error
+	queueMu             sync.Mutex
+	OutboundQueue       []*SOCKSOutboundQueueItem
+	QueuedBytes         int
+	InFlight            map[string]*SOCKSOutboundQueueItem
 	NextInboundSequence uint64
-	PendingInbound      map[uint64]PendingInboundPacket
+	PendingInbound      map[uint64][]PendingInboundPacket
 }
 
 type PendingInboundPacket struct {
@@ -93,7 +93,7 @@ func (s *SOCKSConnectionStore) New(clientSessionKey string, clientAddress string
 		closedC:          make(chan struct{}),
 		connectResultC:   make(chan error, 1),
 		InFlight:         make(map[string]*SOCKSOutboundQueueItem),
-		PendingInbound:   make(map[uint64]PendingInboundPacket),
+		PendingInbound:   make(map[uint64][]PendingInboundPacket),
 	}
 
 	s.mu.Lock()
