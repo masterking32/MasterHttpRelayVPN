@@ -2,6 +2,15 @@
 AES_ENCRYPTION_KEY = "c4710a45afed2fdc00e0522c70802e71"
 RELAY_URL = "http://127.0.0.1/relay.php"
 # ==============================================================================
+HTTP_USER_AGENTS_FILE = "user-agents.txt"
+HTTP_HEADER_PROFILE = "browser"
+HTTP_RANDOMIZE_HEADERS = true
+HTTP_PADDING_HEADER = "X-Padding"
+HTTP_PADDING_MIN_BYTES = 16
+HTTP_PADDING_MAX_BYTES = 48
+HTTP_REFERER = ""
+HTTP_ACCEPT_LANGUAGE = ""
+# ==============================================================================
 LOG_LEVEL = "DEBUG"
 # ==============================================================================
 SOCKS_HOST = "127.0.0.1"

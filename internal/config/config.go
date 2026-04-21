@@ -18,6 +18,14 @@ import (
 type Config struct {
 	AESEncryptionKey      string
 	RelayURL              string
+	HTTPUserAgentsFile    string
+	HTTPHeaderProfile     string
+	HTTPRandomizeHeaders  bool
+	HTTPPaddingHeader     string
+	HTTPPaddingMinBytes   int
+	HTTPPaddingMaxBytes   int
+	HTTPReferer           string
+	HTTPAcceptLanguage    string
 	ServerHost            string
 	ServerPort            int
 	SOCKSHost             string
@@ -46,6 +54,12 @@ func Load(path string) (Config, error) {
 	cfg := Config{
 		SOCKSHost:             "127.0.0.1",
 		SOCKSPort:             1080,
+		HTTPUserAgentsFile:    "user-agents.txt",
+		HTTPHeaderProfile:     "browser",
+		HTTPRandomizeHeaders:  true,
+		HTTPPaddingHeader:     "X-Padding",
+		HTTPPaddingMinBytes:   16,
+		HTTPPaddingMaxBytes:   48,
 		ServerHost:            "127.0.0.1",
 		ServerPort:            28080,
 		LogLevel:              "INFO",
@@ -91,6 +105,34 @@ func Load(path string) (Config, error) {
 			cfg.AESEncryptionKey = trimString(value)
 		case "RELAY_URL":
 			cfg.RelayURL = trimString(value)
+		case "HTTP_USER_AGENTS_FILE":
+			cfg.HTTPUserAgentsFile = trimString(value)
+		case "HTTP_HEADER_PROFILE":
+			cfg.HTTPHeaderProfile = trimString(value)
+		case "HTTP_RANDOMIZE_HEADERS":
+			randomize, err := strconv.ParseBool(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_RANDOMIZE_HEADERS: %w", err)
+			}
+			cfg.HTTPRandomizeHeaders = randomize
+		case "HTTP_PADDING_HEADER":
+			cfg.HTTPPaddingHeader = trimString(value)
+		case "HTTP_PADDING_MIN_BYTES":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_PADDING_MIN_BYTES: %w", err)
+			}
+			cfg.HTTPPaddingMinBytes = size
+		case "HTTP_PADDING_MAX_BYTES":
+			size, err := strconv.Atoi(value)
+			if err != nil {
+				return Config{}, fmt.Errorf("parse HTTP_PADDING_MAX_BYTES: %w", err)
+			}
+			cfg.HTTPPaddingMaxBytes = size
+		case "HTTP_REFERER":
+			cfg.HTTPReferer = trimString(value)
+		case "HTTP_ACCEPT_LANGUAGE":
+			cfg.HTTPAcceptLanguage = trimString(value)
 		case "SERVER_HOST":
 			cfg.ServerHost = trimString(value)
 		case "SERVER_PORT":
@@ -217,33 +259,55 @@ func (c Config) ValidateClient() error {
 	if err := c.validateShared(); err != nil {
 		return err
 	}
+
 	if c.SOCKSAuth && (c.SOCKSUsername == "" || c.SOCKSPassword == "") {
 		return fmt.Errorf("SOCKS auth enabled but username/password missing")
 	}
+
 	if c.SOCKSPort < 1 || c.SOCKSPort > 65535 {
 		return fmt.Errorf("invalid SOCKS_PORT: %d", c.SOCKSPort)
 	}
+
 	if strings.TrimSpace(c.RelayURL) == "" {
 		return fmt.Errorf("RELAY_URL is required")
 	}
+
 	if c.HTTPRequestTimeoutMS < 1 {
 		return fmt.Errorf("invalid HTTP_REQUEST_TIMEOUT_MS: %d", c.HTTPRequestTimeoutMS)
 	}
+
 	if c.WorkerPollIntervalMS < 1 {
 		return fmt.Errorf("invalid WORKER_POLL_INTERVAL_MS: %d", c.WorkerPollIntervalMS)
 	}
+
 	if c.IdlePollIntervalMS < c.WorkerPollIntervalMS {
 		return fmt.Errorf("IDLE_POLL_INTERVAL_MS must be >= WORKER_POLL_INTERVAL_MS")
 	}
+
 	if c.AckTimeoutMS < 1 {
 		return fmt.Errorf("invalid ACK_TIMEOUT_MS: %d", c.AckTimeoutMS)
 	}
+
 	if c.MaxRetryCount < 0 {
 		return fmt.Errorf("invalid MAX_RETRY_COUNT: %d", c.MaxRetryCount)
 	}
+
+	if c.HTTPHeaderProfile != "browser" && c.HTTPHeaderProfile != "minimal" {
+		return fmt.Errorf("invalid HTTP_HEADER_PROFILE: %s", c.HTTPHeaderProfile)
+	}
+
+	if c.HTTPPaddingMinBytes < 0 {
+		return fmt.Errorf("invalid HTTP_PADDING_MIN_BYTES: %d", c.HTTPPaddingMinBytes)
+	}
+
+	if c.HTTPPaddingMaxBytes < c.HTTPPaddingMinBytes {
+		return fmt.Errorf("HTTP_PADDING_MAX_BYTES must be >= HTTP_PADDING_MIN_BYTES")
+	}
+
 	if c.MaxQueueBytesPerSOCKS < c.MaxChunkSize {
 		return fmt.Errorf("MAX_QUEUE_BYTES_PER_SOCKS must be >= MAX_CHUNK_SIZE")
 	}
+
 	return nil
 }
 
@@ -251,21 +315,27 @@ func (c Config) ValidateServer() error {
 	if err := c.validateShared(); err != nil {
 		return err
 	}
+
 	if c.ServerPort < 1 || c.ServerPort > 65535 {
 		return fmt.Errorf("invalid SERVER_PORT: %d", c.ServerPort)
 	}
+
 	if c.SessionIdleTimeoutMS < 1 {
 		return fmt.Errorf("invalid SESSION_IDLE_TIMEOUT_MS: %d", c.SessionIdleTimeoutMS)
 	}
+
 	if c.SOCKSIdleTimeoutMS < 1 {
 		return fmt.Errorf("invalid SOCKS_IDLE_TIMEOUT_MS: %d", c.SOCKSIdleTimeoutMS)
 	}
+
 	if c.ReadBodyLimitBytes < c.MaxChunkSize {
 		return fmt.Errorf("READ_BODY_LIMIT_BYTES must be >= MAX_CHUNK_SIZE")
 	}
+
 	if c.MaxServerQueueBytes < c.MaxChunkSize {
 		return fmt.Errorf("MAX_SERVER_QUEUE_BYTES must be >= MAX_CHUNK_SIZE")
 	}
+
 	return nil
 }
 
@@ -273,18 +343,23 @@ func (c Config) validateShared() error {
 	if strings.TrimSpace(c.AESEncryptionKey) == "" {
 		return fmt.Errorf("AES_ENCRYPTION_KEY is required")
 	}
+
 	if c.MaxChunkSize < 1 {
 		return fmt.Errorf("invalid MAX_CHUNK_SIZE: %d", c.MaxChunkSize)
 	}
+
 	if c.MaxPacketsPerBatch < 1 {
 		return fmt.Errorf("invalid MAX_PACKETS_PER_BATCH: %d", c.MaxPacketsPerBatch)
 	}
+
 	if c.MaxBatchBytes < c.MaxChunkSize {
 		return fmt.Errorf("MAX_BATCH_BYTES must be >= MAX_CHUNK_SIZE")
 	}
+
 	if c.WorkerCount < 1 {
 		return fmt.Errorf("invalid WORKER_COUNT: %d", c.WorkerCount)
 	}
+
 	return nil
 }
 

@@ -122,7 +122,7 @@ func (c *Client) buildNextBatch() (protocol.Batch, []dequeuedPacket) {
 	for len(selected) < c.cfg.MaxPacketsPerBatch {
 		progress := false
 
-		for offset := 0; offset < len(connections); offset++ {
+		for offset := range connections {
 			if len(selected) >= c.cfg.MaxPacketsPerBatch {
 				break
 			}
@@ -197,6 +197,7 @@ func (c *Client) requeueSelected(selected []dequeuedPacket) {
 	for socksConn, identityKeys := range grouped {
 		socksConn.RequeueInFlightByIdentity(identityKeys)
 	}
+
 	if len(grouped) > 0 {
 		c.signalSendWork()
 	}
@@ -207,6 +208,7 @@ func (c *Client) markSelectedInFlight(selected []dequeuedPacket) {
 	for _, entry := range selected {
 		grouped[entry.socksConn] = append(grouped[entry.socksConn], entry.item)
 	}
+
 	for socksConn, items := range grouped {
 		socksConn.MarkInFlight(items)
 	}
@@ -221,9 +223,11 @@ func (c *Client) reclaimExpiredInFlight() {
 				"<yellow>socks_id=<cyan>%d</cyan> reclaimed inflight requeued=<cyan>%d</cyan> dropped=<cyan>%d</cyan></yellow>",
 				socksConn.ID, requeued, dropped,
 			)
+
 			if requeued > 0 {
 				c.signalSendWork()
 			}
+
 			if dropped > 0 {
 				socksConn.ConnectFailure = "max retry exceeded"
 				socksConn.CompleteConnect(fmt.Errorf("max retry exceeded"))
@@ -242,6 +246,9 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("X-Relay-Version", fmt.Sprintf("%d", protocol.CurrentVersion))
+	if c.headerBuilder != nil {
+		c.headerBuilder.Apply(req)
+	}
 
 	resp, err := w.httpClient.Do(req)
 	if err != nil {
@@ -266,6 +273,7 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 	if err != nil {
 		return err
 	}
+
 	if len(respBody) == 0 {
 		return nil
 	}
@@ -274,13 +282,16 @@ func (w *sendWorker) postBatch(ctx context.Context, c *Client, batch protocol.Ba
 	if err != nil {
 		return err
 	}
+
 	c.log.Debugf(
 		"<gray>worker=<cyan>%d</cyan> received response batch=<cyan>%s</cyan> packets=<cyan>%d</cyan> bytes=<cyan>%d</cyan></gray>",
 		w.id, responseBatch.BatchID, len(responseBatch.Packets), len(respBody),
 	)
+
 	if err := c.applyResponseBatch(responseBatch); err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -290,6 +301,7 @@ func (c *Client) applyResponseBatch(batch protocol.Batch) error {
 			"<gray>apply response packet=<cyan>%s</cyan> socks_id=<cyan>%d</cyan> seq=<cyan>%d</cyan> payload_bytes=<cyan>%d</cyan> final=<cyan>%t</cyan></gray>",
 			packet.Type, packet.SOCKSID, packet.Sequence, len(packet.Payload), packet.Final,
 		)
+
 		if err := c.applyResponsePacket(packet); err != nil {
 			return err
 		}
@@ -359,6 +371,7 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 			"<gray>writing to local socket socks_id=<cyan>%d</cyan> bytes=<cyan>%d</cyan></gray>",
 			socksConn.ID, len(packet.Payload),
 		)
+
 		return socksConn.WriteToLocal(packet.Payload)
 
 	case protocol.PacketTypeSOCKSCloseRead:
@@ -368,12 +381,15 @@ func (c *Client) applyResponsePacket(packet protocol.Packet) error {
 			"<gray>close_read applied socks_id=<cyan>%d</cyan></gray>",
 			socksConn.ID,
 		)
+
 		if err := socksConn.CloseLocalWrite(); err != nil {
 			return err
 		}
+
 		if socksConn.BothLocalSidesClosed() {
 			return socksConn.CloseLocal()
 		}
+
 		return nil
 
 	case protocol.PacketTypeSOCKSCloseWrite:

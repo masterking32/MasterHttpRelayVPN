@@ -26,6 +26,7 @@ type Client struct {
 	clientSessionKey string
 	socksConnections *SOCKSConnectionStore
 	chunkPolicy      ChunkPolicy
+	headerBuilder    *relayHeaderBuilder
 
 	connMu sync.Mutex
 	conns  map[net.Conn]struct{}
@@ -44,6 +45,7 @@ func New(cfg config.Config, lg *logger.Logger) *Client {
 		clientSessionKey: clientSessionKey,
 		socksConnections: NewSOCKSConnectionStore(),
 		chunkPolicy:      newChunkPolicy(cfg),
+		headerBuilder:    newRelayHeaderBuilder(cfg, lg),
 		conns:            make(map[net.Conn]struct{}),
 		workCh:           make(chan struct{}, 1),
 	}
