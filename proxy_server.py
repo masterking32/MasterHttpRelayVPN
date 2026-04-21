@@ -279,7 +279,13 @@ class ProxyServer:
                 transport, protocol, ssl_ctx, server_side=True,
             )
         except Exception as e:
-            log.error("TLS handshake failed for %s: %s", host, e)
+            # Non-HTTPS traffic (e.g. MTProto, plain HTTP on port 80/443)
+            # routed through the proxy will always fail TLS — log at DEBUG
+            # to avoid alarming noise.
+            if port != 443:
+                log.debug("TLS handshake skipped for %s:%d (non-HTTPS): %s", host, port, e)
+            else:
+                log.debug("TLS handshake failed for %s: %s", host, e)
             return
 
         # Update writer to use the new TLS transport

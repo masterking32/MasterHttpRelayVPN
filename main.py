@@ -14,6 +14,8 @@ import logging
 import os
 import sys
 
+from cert_installer import install_ca, is_ca_trusted
+from mitm import CA_CERT_FILE
 from proxy_server import ProxyServer
 
 __version__ = "1.0.0"
@@ -59,6 +61,16 @@ def parse_args():
         "-v", "--version",
         action="version",
         version=f"%(prog)s {__version__}",
+    )
+    parser.add_argument(
+        "--install-cert",
+        action="store_true",
+        help="Install the MITM CA certificate as a trusted root and exit.",
+    )
+    parser.add_argument(
+        "--no-cert-check",
+        action="store_true",
+        help="Skip the certificate installation check on startup.",
     )
     return parser.parse_args()
 
@@ -125,6 +137,14 @@ def main():
             print("Deploy the Apps Script from appsscript/Code.gs and paste the Deployment ID.")
             sys.exit(1)
 
+    # ── Certificate installation ──────────────────────────────────────────
+    if args.install_cert:
+        setup_logging("INFO")
+        _log = logging.getLogger("Main")
+        _log.info("Installing CA certificate…")
+        ok = install_ca(CA_CERT_FILE)
+        sys.exit(0 if ok else 1)
+
     setup_logging(config.get("log_level", "INFO"))
     log = logging.getLogger("Main")
 
@@ -147,7 +167,27 @@ def main():
                 log.info("  [%d] %s", i + 1, sid)
         else:
             log.info("Script ID         : %s", script_ids)
-        log.info("MITM enabled — install ca/ca.crt in your browser!")
+
+        # Ensure CA file exists before checking / installing it.
+        # MITMCertManager generates ca/ca.crt on first instantiation.
+        if not os.path.exists(CA_CERT_FILE):
+            from mitm import MITMCertManager
+            MITMCertManager()  # side-effect: creates ca/ca.crt + ca/ca.key
+
+        # Auto-install MITM CA if not already trusted
+        if not args.no_cert_check:
+            if not is_ca_trusted(CA_CERT_FILE):
+                log.warning("MITM CA is not trusted — attempting automatic installation…")
+                ok = install_ca(CA_CERT_FILE)
+                if ok:
+                    log.info("CA certificate installed. You may need to restart your browser.")
+                else:
+                    log.error(
+                        "Auto-install failed. Run with --install-cert (may need admin/sudo) "
+                        "or manually install ca/ca.crt as a trusted root CA."
+                    )
+            else:
+                log.info("MITM CA is already trusted.")
     else:
         log.info("Front domain (SNI) : %s", config.get("front_domain", "?"))
         log.info("Worker host (Host) : %s", config.get("worker_host", "?"))

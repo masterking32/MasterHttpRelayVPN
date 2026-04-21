@@ -152,6 +152,8 @@ Firefox uses its own certificate store, so even after OS-level install you need 
 3. Select `ca/ca.crt` from the project folder.
 4. Check **Trust this CA to identify websites** → click **OK**.
 
+> **Auto-install on startup:** When running in `apps_script` mode the proxy will automatically detect if the CA is not yet trusted and attempt to install it for you. If it succeeds you'll see a confirmation in the log; if it fails (e.g. needs administrator rights) it will print instructions. You can also run `python main.py --install-cert` at any time to (re-)install the certificate.
+
 > ⚠️ **Security note:** This certificate only works locally on your machine. Don't share the `ca/` folder with anyone. If you want to start fresh, delete the `ca/` folder and the tool will generate a new one.
 
 ---
@@ -222,7 +224,11 @@ python main.py                          # Normal start
 python main.py -p 9090                  # Use port 9090 instead
 python main.py --log-level DEBUG        # Show detailed logs
 python main.py -c /path/to/config.json  # Use a different config file
+python main.py --install-cert           # Install MITM CA certificate and exit
+python main.py --no-cert-check          # Skip automatic CA install check on startup
 ```
+
+> **Auto-install:** On startup (MITM mode), the proxy automatically checks if the CA certificate is trusted and attempts to install it. Use `--no-cert-check` to skip this. If auto-install fails (e.g. needs elevation), run `python main.py --install-cert` manually or follow Step 6 above.
 
 ---
 
@@ -248,6 +254,7 @@ python main.py -c /path/to/config.json  # Use a different config file
 | `domain_fronter.py` | Disguises traffic through CDN/Google |
 | `h2_transport.py` | Faster connections using HTTP/2 (optional) |
 | `mitm.py` | Handles HTTPS certificate generation |
+| `cert_installer.py` | Cross-platform CA certificate installer (Windows/macOS/Linux + Firefox) |
 | `ws.py` | WebSocket support |
 | `Code.gs` | The relay script you deploy to Google Apps Script |
 | `config.example.json` | Example config — copy to `config.json` |

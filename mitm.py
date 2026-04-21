@@ -55,8 +55,8 @@ class MITMCertManager:
             public_exponent=65537, key_size=2048
         )
         subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, "DomainFront Tunnel CA"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "DomainFront Tunnel"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "MasterHttpRelayVPN"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "MasterHttpRelayVPN"),
         ])
         now = datetime.datetime.now(datetime.timezone.utc)
         self._ca_cert = (

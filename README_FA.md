@@ -142,6 +142,8 @@ Firefox معمولا certificate store جداگانه دارد:
 4. فایل `ca/ca.crt` را انتخاب کنید.
 5. گزینه **Trust this CA to identify websites** را فعال کنید.
 
+> **نصب خودکار هنگام اجرا:** در حالت `apps_script`، برنامه به صورت خودکار وضعیت اعتماد گواهی CA را بررسی کرده و در صورت نیاز نصب می‌کند. در صورت موفقیت پیام تأیید در لاگ نمایش داده می‌شود. اگر نصب خودکار ناموفق بود، می‌توانید دستور `python main.py --install-cert` را اجرا کنید.
+
 نکته امنیتی: پوشه `ca/` را با کسی به اشتراک نگذارید. اگر خواستید از اول گواهی جدید بسازید، این پوشه را حذف کنید تا دوباره ساخته شود.
 
 ---
@@ -210,7 +212,11 @@ python main.py
 python main.py -p 9090
 python main.py --log-level DEBUG
 python main.py -c /path/to/config.json
+python main.py --install-cert        # نصب گواهی CA و خروج
+python main.py --no-cert-check       # رد شدن از بررسی خودکار گواهی
 ```
+
+> **نصب خودکار:** هنگام اجرا در حالت `apps_script`، برنامه به‌طور خودکار بررسی می‌کند که آیا گواهی CA قابل اعتماد است یا نه و در صورت نیاز آن را نصب می‌کند. اگر نصب خودکار ناموفق بود (مثلاً نیاز به دسترسی مدیر دارد)، می‌توانید دستور `python main.py --install-cert` را اجرا کنید یا مراحل مرحله ۶ را دنبال کنید.
 
 ---
 
@@ -234,6 +240,7 @@ python main.py -c /path/to/config.json
 | `domain_fronter.py` | انجام domain fronting |
 | `h2_transport.py` | ارتباط سریع‌تر با HTTP/2 |
 | `mitm.py` | ساخت و مدیریت certificate |
+| `cert_installer.py` | نصب خودکار گواهی CA در ویندوز، مک، لینوکس و Firefox |
 | `ws.py` | پشتیبانی WebSocket |
 | `Code.gs` | رله Apps Script |
 | `config.example.json` | فایل نمونه تنظیمات |
