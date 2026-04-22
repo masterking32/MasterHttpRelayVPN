@@ -174,6 +174,29 @@ Firefox uses its own certificate store, so even after OS-level install you need 
 
 ---
 
+## LAN Sharing (Optional)
+
+By default, the proxy only listens on `127.0.0.1` (localhost), meaning only your computer can use it. To allow other devices on your local network (LAN) to use the proxy:
+
+1. Set `"lan_sharing": true` in your `config.json`
+2. The proxy will automatically listen on all network interfaces (`0.0.0.0`)
+3. The startup log will show your LAN IP addresses that other devices can connect to
+
+**Example LAN configuration:**
+```json
+{
+  "lan_sharing": true,
+  "listen_host": "0.0.0.0",
+  "listen_port": 8085
+}
+```
+
+**Security Warning:** When LAN sharing is enabled, anyone on your local network can use your proxy. Ensure your network is trusted and consider additional security measures.
+
+**On other devices:** Configure them to use your computer's LAN IP (shown in the startup log) and port 8085 as the HTTP proxy.
+
+---
+
 ## Modes Overview
 
 This project focuses entirely on the **Apps Script** relay — a free Google account is all you need, no server, no VPS, no Cloudflare setup. Everything is configured out of the box for this mode.
@@ -188,8 +211,9 @@ This project focuses entirely on the **Apps Script** relay — a free Google acc
 |---------|-------------|
 | `auth_key` | Password shared between your computer and the relay |
 | `script_id` | Your Google Apps Script Deployment ID |
-| `listen_host` | Where to listen (`127.0.0.1` = only this computer) |
+| `listen_host` | Where to listen (`127.0.0.1` = only this computer, `0.0.0.0` = all interfaces for LAN sharing) |
 | `listen_port` | Which port to listen on (default: `8085`) |
+| `lan_sharing` | Enable LAN sharing to allow other devices on your network to use the proxy (`false` by default) |
 | `log_level` | How much detail to show: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
 ### Advanced Settings
@@ -215,6 +239,7 @@ Install everything from [`requirements.txt`](requirements.txt). All listed packa
 | `h2` | HTTP/2 multiplexing to the Apps Script relay (significantly faster) |
 | `brotli` | Decompression of `Content-Encoding: br` responses |
 | `zstandard` | Decompression of `Content-Encoding: zstd` responses |
+| `netifaces` | Better network interface detection for LAN sharing (fallback available without it) |
 
 ### Load Balancing
 

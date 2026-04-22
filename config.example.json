@@ -10,6 +10,7 @@
 	"socks5_port": 1080,
 	"log_level": "INFO",
 	"verify_ssl": true,
+	"lan_sharing": true,
 	"parallel_relay": 1,
 	"block_hosts": [],
 	"bypass_hosts": [
