@@ -306,6 +306,7 @@ MasterHttpRelayVPN/
 | Slow browsing | Deploy multiple `Code.gs` copies and use `script_ids` array for load balancing |
 | `502 Bad JSON` error | Google returned an unexpected response (HTML instead of JSON). Causes: wrong `script_id`, Apps Script daily quota exhausted, or the deployment wasn't re-created after editing `Code.gs`. Check your `script_id` and create a **new deployment** if you recently changed `Code.gs`. |
 | Telegram works on HTTP proxy but not on SOCKS5 | **Expected.** SOCKS5 clients resolve hostnames locally and connect to raw IPs, so Telegram's MTProto-obfuscated bytes reach a blocked IP that we can neither direct-tunnel nor intercept. Configure Telegram as an **HTTP proxy** (`127.0.0.1:8085`) instead — it sends hostnames, which the proxy handles via SNI-rewrite through Google. |
+| Google and YouTube open but YouTube videos don't play and other sites don't load | The connection to `script.google.com` was not successfully established. This is likely caused by an issue with the deployment of `Code.gs` on Google Apps Script, or the daily execution quota has been exhausted. Re-deploy `Code.gs` with a new deployment and verify your `script_id`, or wait until the quota resets (midnight Pacific Time / 10:30 AM Iran Time). |
 
 ---
 
