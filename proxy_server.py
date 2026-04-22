@@ -2,11 +2,8 @@
 Local HTTP proxy server.
 
 Intercepts the user's browser traffic and forwards everything through
-a domain-fronted connection to a CDN worker or Apps Script relay.
-
-Supports:
-  - CONNECT method  → WebSocket tunnel (modes 1-3) or MITM relay (apps_script)
-  - GET / POST etc. → HTTP forwarding  (modes 1-3) or JSON relay (apps_script)
+the Apps Script relay (MITM-decrypts HTTPS locally, forwards requests
+as JSON to script.google.com fronted through www.google.com).
 """
 
 import asyncio
@@ -150,16 +147,10 @@ class ProxyServer:
         self.socks_enabled = config.get("socks5_enabled", True)
         self.socks_host = config.get("socks5_host", self.host)
         self.socks_port = config.get("socks5_port", 1080)
-        self.mode = config.get("mode", "domain_fronting")
         self.fronter = DomainFronter(config)
         self.mitm = None
         self._cache = ResponseCache(max_mb=50)
         self._direct_fail_until: dict[str, float] = {}
-
-        # Persistent HTTP tunnel cache for google_fronting mode
-        # Key: "host:port" → (tunnel_reader, tunnel_writer, lock)
-        self._http_tunnels: dict = {}
-        self._tunnel_lock = asyncio.Lock()
 
         # hosts override — DNS fake-map: domain/suffix → IP
         # Checked before any real DNS lookup; supports exact and suffix matching.
@@ -181,14 +172,13 @@ class ProxyServer:
             )
         }
 
-        if self.mode == "apps_script":
-            try:
-                from mitm import MITMCertManager
-                self.mitm = MITMCertManager()
-            except ImportError:
-                log.error("apps_script mode requires 'cryptography' package.")
-                log.error("Run: pip install cryptography")
-                raise SystemExit(1)
+        try:
+            from mitm import MITMCertManager
+            self.mitm = MITMCertManager()
+        except ImportError:
+            log.error("Apps Script relay requires the 'cryptography' package.")
+            log.error("Run: pip install cryptography")
+            raise SystemExit(1)
 
     @staticmethod
     def _header_value(headers: dict | None, name: str) -> str:
@@ -406,44 +396,41 @@ class ProxyServer:
     async def _handle_target_tunnel(self, host: str, port: int,
                                     reader: asyncio.StreamReader,
                                     writer: asyncio.StreamWriter):
-        """Route a target connection through the active relay mode."""
+        """Route a target connection through the Apps Script relay."""
 
-        if self.mode == "apps_script":
-            override_ip = self._sni_rewrite_ip(host)
-            if override_ip:
-                # SNI-blocked domain: MITM-decrypt from browser, then
-                # re-connect to the override IP with SNI=front_domain so
-                # the ISP never sees the blocked hostname in the TLS handshake.
-                log.info("SNI-rewrite tunnel → %s via %s (SNI: %s)",
-                         host, override_ip, self.fronter.sni_host)
-                await self._do_sni_rewrite_tunnel(host, port, reader, writer,
-                                                  connect_ip=override_ip)
-            elif self._is_google_domain(host):
-                if self._direct_temporarily_disabled(host):
-                    log.info("Relay fallback → %s (direct tunnel temporarily disabled)", host)
-                    if port == 443:
-                        await self._do_mitm_connect(host, port, reader, writer)
-                    else:
-                        await self._do_plain_http_tunnel(host, port, reader, writer)
-                    return
-
-                log.info("Direct tunnel → %s (Google domain, skipping relay)", host)
-                ok = await self._do_direct_tunnel(host, port, reader, writer)
-                if ok:
-                    return
-
-                self._remember_direct_failure(host)
-                log.warning("Direct tunnel fallback → %s (switching to relay)", host)
+        override_ip = self._sni_rewrite_ip(host)
+        if override_ip:
+            # SNI-blocked domain: MITM-decrypt from browser, then
+            # re-connect to the override IP with SNI=front_domain so
+            # the ISP never sees the blocked hostname in the TLS handshake.
+            log.info("SNI-rewrite tunnel → %s via %s (SNI: %s)",
+                     host, override_ip, self.fronter.sni_host)
+            await self._do_sni_rewrite_tunnel(host, port, reader, writer,
+                                              connect_ip=override_ip)
+        elif self._is_google_domain(host):
+            if self._direct_temporarily_disabled(host):
+                log.info("Relay fallback → %s (direct tunnel temporarily disabled)", host)
                 if port == 443:
                     await self._do_mitm_connect(host, port, reader, writer)
                 else:
                     await self._do_plain_http_tunnel(host, port, reader, writer)
-            elif port == 443:
+                return
+
+            log.info("Direct tunnel → %s (Google domain, skipping relay)", host)
+            ok = await self._do_direct_tunnel(host, port, reader, writer)
+            if ok:
+                return
+
+            self._remember_direct_failure(host)
+            log.warning("Direct tunnel fallback → %s (switching to relay)", host)
+            if port == 443:
                 await self._do_mitm_connect(host, port, reader, writer)
             else:
                 await self._do_plain_http_tunnel(host, port, reader, writer)
+        elif port == 443:
+            await self._do_mitm_connect(host, port, reader, writer)
         else:
-            await self.fronter.tunnel(host, port, reader, writer)
+            await self._do_plain_http_tunnel(host, port, reader, writer)
 
     # ── Hosts override (fake DNS) ─────────────────────────────────
 
@@ -1028,117 +1015,54 @@ class ProxyServer:
         first_line = header_block.split(b"\r\n")[0].decode(errors="replace")
         log.info("HTTP → %s", first_line)
 
-        if self.mode == "apps_script":
-            # Parse request and relay through Apps Script
-            parts = first_line.strip().split(" ", 2)
-            method = parts[0] if parts else "GET"
-            url = parts[1] if len(parts) > 1 else "/"
+        # Parse request and relay through Apps Script
+        parts = first_line.strip().split(" ", 2)
+        method = parts[0] if parts else "GET"
+        url = parts[1] if len(parts) > 1 else "/"
 
-            headers = {}
-            for raw_line in header_block.split(b"\r\n")[1:]:
-                if b":" in raw_line:
-                    k, v = raw_line.decode(errors="replace").split(":", 1)
-                    headers[k.strip()] = v.strip()
+        headers = {}
+        for raw_line in header_block.split(b"\r\n")[1:]:
+            if b":" in raw_line:
+                k, v = raw_line.decode(errors="replace").split(":", 1)
+                headers[k.strip()] = v.strip()
 
-            # ── CORS preflight over plain HTTP ────────────────────────────
-            origin = next(
-                (v for k, v in headers.items() if k.lower() == "origin"), ""
-            )
-            acr_method = next(
-                (v for k, v in headers.items()
-                 if k.lower() == "access-control-request-method"), ""
-            )
-            acr_headers_val = next(
-                (v for k, v in headers.items()
-                 if k.lower() == "access-control-request-headers"), ""
-            )
-            if method.upper() == "OPTIONS" and acr_method:
-                log.debug("CORS preflight (HTTP) → %s (responding locally)", url[:60])
-                writer.write(self._cors_preflight_response(origin, acr_method, acr_headers_val))
-                await writer.drain()
-                return
+        # ── CORS preflight over plain HTTP ────────────────────────────
+        origin = next(
+            (v for k, v in headers.items() if k.lower() == "origin"), ""
+        )
+        acr_method = next(
+            (v for k, v in headers.items()
+             if k.lower() == "access-control-request-method"), ""
+        )
+        acr_headers_val = next(
+            (v for k, v in headers.items()
+             if k.lower() == "access-control-request-headers"), ""
+        )
+        if method.upper() == "OPTIONS" and acr_method:
+            log.debug("CORS preflight (HTTP) → %s (responding locally)", url[:60])
+            writer.write(self._cors_preflight_response(origin, acr_method, acr_headers_val))
+            await writer.drain()
+            return
 
-            # Cache check for GET
-            response = None
-            if self._cache_allowed(method, url, headers, body):
-                response = self._cache.get(url)
-                if response:
-                    log.debug("Cache HIT (HTTP): %s", url[:60])
+        # Cache check for GET
+        response = None
+        if self._cache_allowed(method, url, headers, body):
+            response = self._cache.get(url)
+            if response:
+                log.debug("Cache HIT (HTTP): %s", url[:60])
 
-            if response is None:
-                response = await self._relay_smart(method, url, headers, body)
-                # Cache successful GET
-                if self._cache_allowed(method, url, headers, body) and response:
-                    ttl = ResponseCache.parse_ttl(response, url)
-                    if ttl > 0:
-                        self._cache.put(url, response, ttl)
+        if response is None:
+            response = await self._relay_smart(method, url, headers, body)
+            # Cache successful GET
+            if self._cache_allowed(method, url, headers, body) and response:
+                ttl = ResponseCache.parse_ttl(response, url)
+                if ttl > 0:
+                    self._cache.put(url, response, ttl)
 
-            # Inject CORS headers for cross-origin requests
-            if origin and response:
-                response = self._inject_cors_headers(response, origin)
-            self._log_response_summary(url, response)
-        elif self.mode in ("google_fronting", "custom_domain", "domain_fronting"):
-            # Use WebSocket tunnel for ALL traffic (much faster than forward())
-            response = await self._tunnel_http(header_block, body)
-        else:
-            response = await self.fronter.forward(header_block + body)
+        # Inject CORS headers for cross-origin requests
+        if origin and response:
+            response = self._inject_cors_headers(response, origin)
+        self._log_response_summary(url, response)
 
         writer.write(response)
         await writer.drain()
-
-    async def _tunnel_http(self, header_block: bytes, body: bytes) -> bytes:
-        """Forward plain HTTP via a persistent WebSocket tunnel.
-
-        Instead of opening a new TLS+HTTP connection for each request
-        (the old forward() path), this keeps a WebSocket tunnel open
-        to the target host and pipes raw HTTP through it.
-        Much faster for rapid-fire requests (e.g., Telegram API).
-        """
-        # Parse target host:port from the raw HTTP request
-        host = ""
-        port = 80
-        for line in header_block.split(b"\r\n")[1:]:
-            if not line:
-                break
-            if line.lower().startswith(b"host:"):
-                host_val = line.split(b":", 1)[1].strip().decode(errors="replace")
-                if ":" in host_val:
-                    h, p = host_val.rsplit(":", 1)
-                    try:
-                        host, port = h, int(p)
-                    except ValueError:
-                        host = host_val
-                else:
-                    host = host_val
-                break
-
-        if not host:
-            return b"HTTP/1.1 400 Bad Request\r\n\r\nNo Host header\r\n"
-
-        # Rewrite the request line: browser sends absolute URL
-        # (e.g., "GET http://host/path HTTP/1.1") but the target
-        # server expects a relative path ("GET /path HTTP/1.1")
-        first_line = header_block.split(b"\r\n")[0]
-        first_str = first_line.decode(errors="replace")
-        parts = first_str.split(" ", 2)
-        if len(parts) >= 2 and parts[1].startswith("http://"):
-            from urllib.parse import urlparse
-            parsed = urlparse(parts[1])
-            rel_path = parsed.path or "/"
-            if parsed.query:
-                rel_path += "?" + parsed.query
-            new_first = f"{parts[0]} {rel_path}"
-            if len(parts) == 3:
-                new_first += f" {parts[2]}"
-            header_block = new_first.encode() + b"\r\n" + b"\r\n".join(header_block.split(b"\r\n")[1:])
-
-        raw_request = header_block + body
-
-        # Send through tunnel
-        try:
-            return await asyncio.wait_for(
-                self.fronter.forward(raw_request), timeout=30
-            )
-        except Exception as e:
-            log.error("Tunnel HTTP failed (%s:%d): %s", host, port, e)
-            return b"HTTP/1.1 502 Bad Gateway\r\n\r\nTunnel forward failed\r\n"

@@ -176,14 +176,7 @@ Firefox uses its own certificate store, so even after OS-level install you need 
 
 ## Modes Overview
 
-| Mode | What You Need | Description |
-|------|--------------|-------------|
-| `apps_script` | Free Google account | **Easiest.** Uses Google Apps Script as relay. No server needed. |
-| `google_fronting` | Google Cloud Run service | Uses your own Cloud Run service behind Google's CDN. |
-| `domain_fronting` | Cloudflare Worker | Uses a Cloudflare Worker as relay. |
-| `custom_domain` | Custom domain on Cloudflare | Connects directly to your domain on Cloudflare. |
-
-Most users should use **`apps_script`** mode — it's free and requires no server.
+This project focuses entirely on the **Apps Script** relay — a free Google account is all you need, no server, no VPS, no Cloudflare setup. Everything is configured out of the box for this mode.
 
 ---
 
@@ -193,7 +186,6 @@ Most users should use **`apps_script`** mode — it's free and requires no serve
 
 | Setting | What It Does |
 |---------|-------------|
-| `mode` | Which relay type to use (see table above) |
 | `auth_key` | Password shared between your computer and the relay |
 | `script_id` | Your Google Apps Script Deployment ID |
 | `listen_host` | Where to listen (`127.0.0.1` = only this computer) |
@@ -207,8 +199,6 @@ Most users should use **`apps_script`** mode — it's free and requires no serve
 | `google_ip` | `216.239.38.120` | Google IP address to connect through |
 | `front_domain` | `www.google.com` | Domain shown to the firewall/filter |
 | `verify_ssl` | `true` | Verify TLS certificates |
-| `worker_host` | — | Hostname for Cloudflare/Cloud Run modes |
-| `custom_domain` | — | Your custom domain on Cloudflare |
 | `script_ids` | — | Multiple Script IDs for load balancing (array) |
 
 ### Load Balancing
@@ -269,11 +259,10 @@ python3 main.py --no-cert-check          # Skip automatic CA install check on st
 |------|-------------|
 | `main.py` | Starts the proxy |
 | `proxy_server.py` | Handles browser connections |
-| `domain_fronter.py` | Disguises traffic through CDN/Google |
+| `domain_fronter.py` | Apps Script relay client (fronted through Google) |
 | `h2_transport.py` | Faster connections using HTTP/2 (optional) |
 | `mitm.py` | Handles HTTPS certificate generation |
 | `cert_installer.py` | Cross-platform CA certificate installer (Windows/macOS/Linux + Firefox) |
-| `ws.py` | WebSocket support |
 | `Code.gs` | The relay script you deploy to Google Apps Script |
 | `config.example.json` | Example config — copy to `config.json` |
 

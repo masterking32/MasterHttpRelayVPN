@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-DomainFront Tunnel — Bypass DPI censorship via Domain Fronting.
+DomainFront Tunnel — Bypass DPI censorship via Google Apps Script.
 
-Run a local HTTP proxy that tunnels all traffic through a CDN using
-domain fronting: the TLS SNI shows an allowed domain while the encrypted
-HTTP Host header routes to your Cloudflare Worker relay.
+Run a local HTTP proxy that tunnels all traffic through a Google Apps
+Script relay fronted by www.google.com (TLS SNI shows www.google.com
+while the encrypted Host header points at script.google.com).
 """
 
 import argparse
@@ -33,7 +33,7 @@ def setup_logging(level_name: str):
 def parse_args():
     parser = argparse.ArgumentParser(
         prog="domainfront-tunnel",
-        description="Local HTTP proxy that tunnels traffic through domain fronting.",
+        description="Local HTTP proxy that relays traffic through Google Apps Script.",
     )
     parser.add_argument(
         "-c", "--config",
@@ -136,25 +136,13 @@ def main():
             print(f"Missing required config key: {key}")
             sys.exit(1)
 
-    mode = config.get("mode", "domain_fronting")
-    if mode == "custom_domain" and "custom_domain" not in config:
-        print("Mode 'custom_domain' requires 'custom_domain' in config")
+    # Always Apps Script mode — force-set for backward-compat configs.
+    config["mode"] = "apps_script"
+    sid = config.get("script_ids") or config.get("script_id")
+    if not sid or (isinstance(sid, str) and sid == "YOUR_APPS_SCRIPT_DEPLOYMENT_ID"):
+        print("Missing 'script_id' in config.")
+        print("Deploy the Apps Script from Code.gs and paste the Deployment ID.")
         sys.exit(1)
-    if mode == "domain_fronting":
-        for key in ("front_domain", "worker_host"):
-            if key not in config:
-                print(f"Mode 'domain_fronting' requires '{key}' in config")
-                sys.exit(1)
-    if mode == "google_fronting":
-        if "worker_host" not in config:
-            print("Mode 'google_fronting' requires 'worker_host' in config (your Cloud Run URL)")
-            sys.exit(1)
-    if mode == "apps_script":
-        sid = config.get("script_ids") or config.get("script_id")
-        if not sid or (isinstance(sid, str) and sid == "YOUR_APPS_SCRIPT_DEPLOYMENT_ID"):
-            print("Mode 'apps_script' requires 'script_id' in config.")
-            print("Deploy the Apps Script from appsscript/Code.gs and paste the Deployment ID.")
-            sys.exit(1)
 
     # ── Certificate installation ──────────────────────────────────────────
     if args.install_cert:
@@ -167,49 +155,38 @@ def main():
     setup_logging(config.get("log_level", "INFO"))
     log = logging.getLogger("Main")
 
-    mode = config.get("mode", "domain_fronting")
-    log.info("DomainFront Tunnel starting (mode: %s)", mode)
+    log.info("DomainFront Tunnel starting (Apps Script relay)")
 
-    if mode == "custom_domain":
-        log.info("Custom domain    : %s", config["custom_domain"])
-    elif mode == "google_fronting":
-        log.info("Google fronting   : SNI=%s → Host=%s",
-                 config.get("front_domain", "www.google.com"), config["worker_host"])
-        log.info("Google IP         : %s", config.get("google_ip", "216.239.38.120"))
-    elif mode == "apps_script":
-        log.info("Apps Script relay : SNI=%s → script.google.com",
-                 config.get("front_domain", "www.google.com"))
-        script_ids = config.get("script_ids") or config.get("script_id")
-        if isinstance(script_ids, list):
-            log.info("Script IDs        : %d scripts (sticky per-host)", len(script_ids))
-            for i, sid in enumerate(script_ids):
-                log.info("  [%d] %s", i + 1, sid)
-        else:
-            log.info("Script ID         : %s", script_ids)
-
-        # Ensure CA file exists before checking / installing it.
-        # MITMCertManager generates ca/ca.crt on first instantiation.
-        if not os.path.exists(CA_CERT_FILE):
-            from mitm import MITMCertManager
-            MITMCertManager()  # side-effect: creates ca/ca.crt + ca/ca.key
-
-        # Auto-install MITM CA if not already trusted
-        if not args.no_cert_check:
-            if not is_ca_trusted(CA_CERT_FILE):
-                log.warning("MITM CA is not trusted — attempting automatic installation…")
-                ok = install_ca(CA_CERT_FILE)
-                if ok:
-                    log.info("CA certificate installed. You may need to restart your browser.")
-                else:
-                    log.error(
-                        "Auto-install failed. Run with --install-cert (may need admin/sudo) "
-                        "or manually install ca/ca.crt as a trusted root CA."
-                    )
-            else:
-                log.info("MITM CA is already trusted.")
+    log.info("Apps Script relay : SNI=%s → script.google.com",
+             config.get("front_domain", "www.google.com"))
+    script_ids = config.get("script_ids") or config.get("script_id")
+    if isinstance(script_ids, list):
+        log.info("Script IDs        : %d scripts (sticky per-host)", len(script_ids))
+        for i, sid in enumerate(script_ids):
+            log.info("  [%d] %s", i + 1, sid)
     else:
-        log.info("Front domain (SNI) : %s", config.get("front_domain", "?"))
-        log.info("Worker host (Host) : %s", config.get("worker_host", "?"))
+        log.info("Script ID         : %s", script_ids)
+
+    # Ensure CA file exists before checking / installing it.
+    # MITMCertManager generates ca/ca.crt on first instantiation.
+    if not os.path.exists(CA_CERT_FILE):
+        from mitm import MITMCertManager
+        MITMCertManager()  # side-effect: creates ca/ca.crt + ca/ca.key
+
+    # Auto-install MITM CA if not already trusted
+    if not args.no_cert_check:
+        if not is_ca_trusted(CA_CERT_FILE):
+            log.warning("MITM CA is not trusted — attempting automatic installation…")
+            ok = install_ca(CA_CERT_FILE)
+            if ok:
+                log.info("CA certificate installed. You may need to restart your browser.")
+            else:
+                log.error(
+                    "Auto-install failed. Run with --install-cert (may need admin/sudo) "
+                    "or manually install ca/ca.crt as a trusted root CA."
+                )
+        else:
+            log.info("MITM CA is already trusted.")
 
     log.info("HTTP proxy         : %s:%d",
              config.get("listen_host", "127.0.0.1"),

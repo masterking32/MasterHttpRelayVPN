@@ -35,7 +35,7 @@ This PR does not claim full compatibility for all websites. It focuses on making
 
 Local verification:
 
-- `python3 -m py_compile main.py proxy_server.py domain_fronter.py mitm.py h2_transport.py ws.py cert_installer.py`
+- `python3 -m py_compile main.py proxy_server.py domain_fronter.py mitm.py h2_transport.py cert_installer.py`
 
 Observed behavior during manual testing:
 

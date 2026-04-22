@@ -1,19 +1,10 @@
 """
-CDN Relay engine.
+Apps Script relay engine.
 
-Modes:
-  1. custom_domain   — SNI and Host both point to your custom domain on CF.
-  2. domain_fronting  — SNI = front_domain (allowed), Host = worker_host.
-  3. google_fronting  — Connect to Google IP, SNI=google, Host=Cloud Run.
-  4. apps_script     — Domain fronting via Google Apps Script relay.
-     POST JSON to script.google.com (fronted through www.google.com).
-     Apps Script fetches the target URL and returns the response.
+Domain fronting via Google Apps Script: POST JSON to script.google.com
+(fronted through www.google.com). Apps Script fetches the target URL and
+returns the response.
 
-Modes 1-3:
-  tunnel()  — WebSocket-based TCP tunnel (HTTPS / any TCP)
-  forward() — HTTP request forwarding    (plain HTTP)
-
-Mode 4 (apps_script):
   relay()   — JSON-based HTTP relay through Apps Script
 """
 
@@ -23,13 +14,10 @@ import hashlib
 import gzip
 import json
 import logging
-import os
 import re
 import ssl
 import time
 from urllib.parse import urlparse
-
-from ws import ws_encode, ws_decode
 
 log = logging.getLogger("Fronter")
 
@@ -42,34 +30,16 @@ class DomainFronter:
     )
 
     def __init__(self, config: dict):
-        mode = config.get("mode", "domain_fronting")
+        self.connect_host = config.get("google_ip", "216.239.38.120")
+        self.sni_host = config.get("front_domain", "www.google.com")
+        self.http_host = "script.google.com"
+        # Multi-script round-robin for higher throughput
+        script = config.get("script_ids") or config.get("script_id")
+        self._script_ids = script if isinstance(script, list) else [script]
+        self._script_idx = 0
+        self.script_id = self._script_ids[0]  # backward compat / logging
+        self._dev_available = False  # True if /dev endpoint works (no redirect, ~400ms faster)
 
-        if mode == "custom_domain":
-            domain = config["custom_domain"]
-            self.connect_host = domain
-            self.sni_host = domain
-            self.http_host = domain
-        elif mode == "google_fronting":
-            self.connect_host = config.get("google_ip", "216.239.38.120")
-            self.sni_host = config.get("front_domain", "www.google.com")
-            self.http_host = config["worker_host"]
-        elif mode == "apps_script":
-            self.connect_host = config.get("google_ip", "216.239.38.120")
-            self.sni_host = config.get("front_domain", "www.google.com")
-            self.http_host = "script.google.com"
-            # Multi-script round-robin for higher throughput
-            script = config.get("script_ids") or config.get("script_id")
-            self._script_ids = script if isinstance(script, list) else [script]
-            self._script_idx = 0
-            self.script_id = self._script_ids[0]  # backward compat / logging
-            self._dev_available = False  # True if /dev endpoint works (no redirect, ~400ms faster)
-        else:
-            self.connect_host = config["front_domain"]
-            self.sni_host = config["front_domain"]
-            self.http_host = config["worker_host"]
-
-        self.mode = mode
-        self.worker_path = config.get("worker_path", "")
         self.auth_key = config.get("auth_key", "")
         self.verify_ssl = config.get("verify_ssl", True)
 
@@ -98,17 +68,16 @@ class DomainFronter:
 
         # HTTP/2 multiplexing — one connection handles all requests
         self._h2 = None
-        if mode == "apps_script":
-            try:
-                from h2_transport import H2Transport, H2_AVAILABLE
-                if H2_AVAILABLE:
-                    self._h2 = H2Transport(
-                        self.connect_host, self.sni_host, self.verify_ssl
-                    )
-                    log.info("HTTP/2 multiplexing available — "
-                             "all requests will share one connection")
-            except ImportError:
-                pass
+        try:
+            from h2_transport import H2Transport, H2_AVAILABLE
+            if H2_AVAILABLE:
+                self._h2 = H2Transport(
+                    self.connect_host, self.sni_host, self.verify_ssl
+                )
+                log.info("HTTP/2 multiplexing available — "
+                         "all requests will share one connection")
+        except ImportError:
+            pass
 
     # ── helpers ───────────────────────────────────────────────────
 
@@ -391,140 +360,6 @@ class DomainFronter:
 
     def _auth_header(self) -> str:
         return f"X-Auth-Key: {self.auth_key}\r\n" if self.auth_key else ""
-
-    # ── WebSocket tunnel (CONNECT / HTTPS) ────────────────────────
-
-    async def tunnel(self, target_host: str, target_port: int,
-                     client_r: asyncio.StreamReader,
-                     client_w: asyncio.StreamWriter):
-        """Tunnel raw TCP bytes through a domain-fronted WebSocket."""
-        try:
-            remote_r, remote_w = await self._open()
-        except Exception as e:
-            log.error("TLS connect to %s failed: %s", self.connect_host, e)
-            return
-
-        try:
-            # ---- WebSocket upgrade ----
-            ws_key = base64.b64encode(os.urandom(16)).decode()
-            path = f"{self.worker_path}/tunnel?host={target_host}&port={target_port}"
-            handshake = (
-                f"GET {path} HTTP/1.1\r\n"
-                f"Host: {self.http_host}\r\n"
-                f"Upgrade: websocket\r\n"
-                f"Connection: Upgrade\r\n"
-                f"Sec-WebSocket-Key: {ws_key}\r\n"
-                f"Sec-WebSocket-Version: 13\r\n"
-                f"{self._auth_header()}"
-                f"\r\n"
-            )
-            remote_w.write(handshake.encode())
-            await remote_w.drain()
-
-            # Read the 101 Switching Protocols response
-            resp = b""
-            while b"\r\n\r\n" not in resp:
-                chunk = await asyncio.wait_for(remote_r.read(4096), timeout=15)
-                if not chunk:
-                    raise ConnectionError("No WebSocket handshake response")
-                resp += chunk
-
-            status_line = resp.split(b"\r\n")[0]
-            if b"101" not in status_line:
-                raise ConnectionError(
-                    f"WebSocket upgrade rejected: {status_line.decode(errors='replace')}"
-                )
-
-            log.info("Tunnel ready → %s:%d", target_host, target_port)
-
-            # ---- bidirectional relay ----
-            await asyncio.gather(
-                self._client_to_ws(client_r, remote_w),
-                self._ws_to_client(remote_r, client_w),
-            )
-
-        except Exception as e:
-            log.error("Tunnel error (%s:%d): %s", target_host, target_port, e)
-        finally:
-            try:
-                remote_w.close()
-            except Exception:
-                pass
-
-    async def _client_to_ws(self, src: asyncio.StreamReader,
-                            dst: asyncio.StreamWriter):
-        """Read plaintext from the browser, wrap in WS frames, send to CDN."""
-        try:
-            while True:
-                data = await src.read(16384)
-                if not data:
-                    # Send a WS close frame
-                    dst.write(ws_encode(b"", opcode=0x08))
-                    await dst.drain()
-                    break
-                dst.write(ws_encode(data))
-                await dst.drain()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
-
-    async def _ws_to_client(self, src: asyncio.StreamReader,
-                            dst: asyncio.StreamWriter):
-        """Read WS frames from CDN, unwrap, write plaintext to browser."""
-        buf = b""
-        try:
-            while True:
-                chunk = await src.read(16384)
-                if not chunk:
-                    break
-                buf += chunk
-                while buf:
-                    result = ws_decode(buf)
-                    if result is None:
-                        break  # need more data
-                    opcode, payload, consumed = result
-                    buf = buf[consumed:]
-                    if opcode == 0x08:  # close
-                        return
-                    if payload:
-                        dst.write(payload)
-                        await dst.drain()
-        except (ConnectionError, asyncio.CancelledError):
-            pass
-
-    # ── HTTP forwarding ───────────────────────────────────────────
-
-    async def forward(self, raw_request: bytes) -> bytes:
-        """Forward a plain HTTP request through the domain-fronted channel.
-
-        Uses keep-alive connections from the pool for efficiency.
-        """
-        try:
-            reader, writer, created = await self._acquire()
-
-            # Wrap the original HTTP request inside a POST to the worker.
-            request = (
-                f"POST {self.worker_path}/forward HTTP/1.1\r\n"
-                f"Host: {self.http_host}\r\n"
-                f"Content-Type: application/octet-stream\r\n"
-                f"Content-Length: {len(raw_request)}\r\n"
-                f"Connection: keep-alive\r\n"
-                f"{self._auth_header()}"
-                f"\r\n"
-            )
-            writer.write(request.encode() + raw_request)
-            await writer.drain()
-
-            status, resp_headers, resp_body = await self._read_http_response(reader)
-
-            await self._release(reader, writer, created)
-
-            # The worker wraps the target's response in its own HTTP
-            # envelope.  The body IS the raw HTTP response from the target.
-            return resp_body
-
-        except Exception as e:
-            log.error("Forward failed: %s", e)
-            return b"HTTP/1.1 502 Bad Gateway\r\n\r\nDomain fronting request failed\r\n"
 
     # ── Apps Script relay (apps_script mode) ──────────────────────
 

@@ -166,14 +166,7 @@ Firefox معمولا certificate store جداگانه دارد:
 
 ## حالت‌های موجود
 
-| حالت | نیازمندی | توضیح |
-|------|----------|-------|
-| `apps_script` | اکانت رایگان Google | ساده‌ترین حالت، بدون نیاز به سرور |
-| `google_fronting` | Google Cloud Run | استفاده از سرویس Cloud Run خودتان |
-| `domain_fronting` | Cloudflare Worker | استفاده از Worker روی Cloudflare |
-| `custom_domain` | دامنه شخصی روی Cloudflare | اتصال مستقیم به دامنه خودتان |
-
-برای اکثر کاربران، `apps_script` بهترین انتخاب است.
+این پروژه کاملاً روی حالت **Apps Script** تمرکز دارد. فقط به یک اکانت رایگان Google نیاز دارید — بدون VPS، بدون سرور، بدون Cloudflare. همه‌چیز برای همین حالت تنظیم شده است.
 
 ---
 
@@ -181,7 +174,6 @@ Firefox معمولا certificate store جداگانه دارد:
 
 | تنظیم | توضیح |
 |------|-------|
-| `mode` | نوع رله |
 | `auth_key` | رمز مشترک بین برنامه و رله |
 | `script_id` | Deployment ID مربوط به Apps Script |
 | `listen_host` | آدرس محلی برای اجرا |
@@ -195,8 +187,6 @@ Firefox معمولا certificate store جداگانه دارد:
 | `google_ip` | `216.239.38.120` | IP مورد استفاده برای مسیر Google |
 | `front_domain` | `www.google.com` | دامنه‌ای که فیلتر می‌بیند |
 | `verify_ssl` | `true` | بررسی اعتبار TLS |
-| `worker_host` | - | برای حالت‌های Cloudflare/Cloud Run |
-| `custom_domain` | - | دامنه شخصی شما |
 | `script_ids` | - | چند Deployment ID برای load balancing |
 
 ### استفاده از چند Script ID
@@ -255,11 +245,10 @@ python3 main.py --no-cert-check       # رد شدن از بررسی خودکار
 |------|--------|
 | `main.py` | اجرای برنامه |
 | `proxy_server.py` | مدیریت اتصال مرورگر |
-| `domain_fronter.py` | انجام domain fronting |
+| `domain_fronter.py` | کلاینت رله Apps Script (با عبور از Google) |
 | `h2_transport.py` | ارتباط سریع‌تر با HTTP/2 |
 | `mitm.py` | ساخت و مدیریت certificate |
 | `cert_installer.py` | نصب خودکار گواهی CA در ویندوز، مک، لینوکس و Firefox |
-| `ws.py` | پشتیبانی WebSocket |
 | `Code.gs` | رله Apps Script |
 | `config.example.json` | فایل نمونه تنظیمات |
 
