@@ -13,11 +13,12 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import socket
 import ssl
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from urllib.parse import urlparse
 
 import codec
@@ -117,6 +118,10 @@ class DomainFronter:
         # Per-host stats (requests, cache hits, bytes, cumulative latency).
         self._per_site: dict[str, HostStat] = {}
         self._stats_task: asyncio.Task | None = None
+        self._stats_file = config.get("stats_file", "stats.json")
+        self._stats_save_interval = float(config.get("stats_save_interval", 60))  # seconds
+        self._stats_save_task: asyncio.Task | None = None
+        self._load_stats()  # Load persisted stats on startup
 
         self.auth_key = config.get("auth_key", "")
         self.verify_ssl = config.get("verify_ssl", True)
@@ -329,6 +334,59 @@ class DomainFronter:
 
     # ── Per-host stats ────────────────────────────────────────────
 
+    def _load_stats(self) -> None:
+        """Load persisted stats from JSON file if it exists."""
+        if not os.path.exists(self._stats_file):
+            return
+        try:
+            with open(self._stats_file, 'r') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "per_site" in data:
+                for host, stat_dict in data["per_site"].items():
+                    self._per_site[host] = HostStat(
+                        requests=int(stat_dict.get("requests", 0)),
+                        cache_hits=int(stat_dict.get("cache_hits", 0)),
+                        bytes=int(stat_dict.get("bytes", 0)),
+                        total_latency_ns=int(stat_dict.get("total_latency_ns", 0)),
+                        errors=int(stat_dict.get("errors", 0)),
+                    )
+            log.info("Loaded persisted stats for %d hosts from %s",
+                     len(self._per_site), self._stats_file)
+        except Exception as e:
+            log.warning("Failed to load stats from %s: %s", self._stats_file, e)
+
+    def _save_stats(self) -> None:
+        """Save stats to JSON file (non-blocking)."""
+        try:
+            data = {
+                "per_site": {
+                    host: asdict(stat)
+                    for host, stat in self._per_site.items()
+                }
+            }
+            # Write to temp file first, then rename (atomic-ish)
+            temp_file = self._stats_file + ".tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            if os.path.exists(self._stats_file):
+                os.remove(self._stats_file)
+            os.rename(temp_file, self._stats_file)
+        except Exception as e:
+            log.debug("Failed to save stats to %s: %s", self._stats_file, e)
+
+    async def _stats_saver(self) -> None:
+        """Periodically save stats to disk in background."""
+        while True:
+            try:
+                await asyncio.sleep(self._stats_save_interval)
+                if self._per_site:
+                    self._save_stats()
+                    log.debug("Persisted stats for %d hosts", len(self._per_site))
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.debug("Stats saver error: %s", e)
+
     def _record_site(self, url: str, bytes_: int, latency_ns: int,
                      errored: bool) -> None:
         host = self._host_key(url)
@@ -508,6 +566,9 @@ class DomainFronter:
         # Periodic per-host stats logger (opt-in via log level)
         if self._stats_task is None:
             self._stats_task = self._spawn(self._stats_logger())
+        # Periodic stats persistence to disk
+        if self._stats_save_task is None:
+            self._stats_save_task = self._spawn(self._stats_saver())
         # Start H2 connection (runs alongside H1 pool)
         if self._h2:
             self._spawn(self._h2_connect_and_warm())
@@ -521,6 +582,11 @@ class DomainFronter:
 
     async def close(self):
         """Cancel background tasks and close all pooled / H2 connections."""
+        # Save stats before closing
+        if self._per_site:
+            self._save_stats()
+            log.info("Final stats saved: %d hosts", len(self._per_site))
+
         for task in list(self._bg_tasks):
             task.cancel()
         if self._bg_tasks:

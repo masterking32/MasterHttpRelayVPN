@@ -37,5 +37,7 @@
 		"www.google.com",
 		"safebrowsing.google.com"
 	],
-	"hosts": {}
+	"hosts": {},
+	"stats_file": "stats.json",
+	"stats_save_interval": 60
 }

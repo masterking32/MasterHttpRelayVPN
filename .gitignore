@@ -2,6 +2,9 @@
 config.json
 .env
 
+# stats
+stats.json
+
 # CA certificates (generated at runtime, contain private keys)
 ca/
 
