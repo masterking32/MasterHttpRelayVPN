@@ -22,6 +22,7 @@ if _SRC_DIR not in sys.path:
 
 from cert_installer import install_ca, is_ca_trusted
 from constants import __version__
+from lan_utils import log_lan_access
 from logging_utils import configure as configure_logging, print_banner
 from mitm import CA_CERT_FILE
 from proxy_server import ProxyServer
@@ -205,6 +206,14 @@ def main():
         else:
             log.info("MITM CA is already trusted.")
 
+    # ── LAN sharing configuration ────────────────────────────────────────
+    lan_sharing = config.get("lan_sharing", True)
+    if lan_sharing:
+        # If LAN sharing is enabled and host is still localhost, change to all interfaces
+        if config.get("listen_host", "127.0.0.1") == "127.0.0.1":
+            config["listen_host"] = "0.0.0.0"
+            log.info("LAN sharing enabled — listening on all interfaces")
+
     log.info("HTTP proxy         : %s:%d",
              config.get("listen_host", "127.0.0.1"),
              config.get("listen_port", 8080))
@@ -212,6 +221,11 @@ def main():
         log.info("SOCKS5 proxy       : %s:%d",
                  config.get("socks5_host", config.get("listen_host", "127.0.0.1")),
                  config.get("socks5_port", 1080))
+
+    # Log LAN access addresses if sharing is enabled
+    if lan_sharing:
+        socks_port = config.get("socks5_port", 1080) if config.get("socks5_enabled", True) else None
+        log_lan_access(config.get("listen_port", 8080), socks_port)
 
     try:
         asyncio.run(_run(config))
