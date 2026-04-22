@@ -7,6 +7,8 @@ Script relay fronted by www.google.com (TLS SNI shows www.google.com
 while the encrypted Host header points at script.google.com).
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -21,24 +23,18 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 from cert_installer import install_ca, is_ca_trusted
+from config_validator import validate_config
 from constants import __version__
 from logging_utils import configure as configure_logging, print_banner
 from mitm import CA_CERT_FILE
 from proxy_server import ProxyServer
 
 
-def setup_logging(level_name: str):
+def setup_logging(level_name: str) -> None:
     configure_logging(level_name)
 
 
-_PLACEHOLDER_AUTH_KEYS = {
-    "",
-    "CHANGE_ME_TO_A_STRONG_SECRET",
-    "your-secret-password-here",
-}
-
-
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="domainfront-tunnel",
         description="Local HTTP proxy that relays traffic through Google Apps Script.",
@@ -94,7 +90,8 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
+    """Main entry point."""
     args = parse_args()
     config_path = args.config
 
@@ -144,12 +141,12 @@ def main():
             print(f"Missing required config key: {key}")
             sys.exit(1)
 
-    if config.get("auth_key", "") in _PLACEHOLDER_AUTH_KEYS:
-        print(
-            "Refusing to start: 'auth_key' is unset or uses a known placeholder.\n"
-            "Pick a long random secret and set it in both config.json AND "
-            "the AUTH_KEY constant inside Code.gs (they must match)."
-        )
+    # ── Config validation ───────────────────────────────────────────
+    ok, errors = validate_config(config)
+    if not ok:
+        print("Config validation failed:")
+        for err in errors:
+            print(f"  - {err.field}: {err.message}")
         sys.exit(1)
 
     # Always Apps Script mode — force-set for backward-compat configs.
@@ -219,7 +216,8 @@ def main():
         log.info("Stopped")
 
 
-async def _run(config):
+async def _run(config: dict) -> None:
+    """Run the proxy server."""
     server = ProxyServer(config)
     try:
         await server.start()

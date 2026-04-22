@@ -6,6 +6,8 @@ the Apps Script relay (MITM-decrypts HTTPS locally, forwards requests
 as JSON to script.google.com fronted through www.google.com).
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import re

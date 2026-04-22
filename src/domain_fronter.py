@@ -8,6 +8,8 @@ returns the response.
   relay()   — JSON-based HTTP relay through Apps Script
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import hashlib
