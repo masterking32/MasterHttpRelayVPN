@@ -914,8 +914,8 @@ class DomainFronter:
                 log.debug("Keepalive failed: %s", e)
 
     async def _do_warm(self):
-        """Open WARM_POOL_COUNTnnections in parallel — failures are fine."""
-        count = 30
+        """Open WARM_POOL_COUNT connections in parallel — failures are fine."""
+        count = WARM_POOL_COUNT
         coros = [self._add_conn_to_pool() for _ in range(count)]
         results = await asyncio.gather(*coros, return_exceptions=True)
         opened = sum(1 for r in results if not isinstance(r, Exception))
