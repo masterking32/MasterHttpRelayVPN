@@ -21,6 +21,11 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+try:
+    import certifi
+except Exception:  # optional dependency fallback
+    certifi = None
+
 import codec
 from constants import (
     BATCH_MAX,
@@ -167,6 +172,8 @@ class DomainFronter:
         self._batch_window_macro = BATCH_WINDOW_MACRO
         self._batch_max = BATCH_MAX
         self._batch_enabled = True
+        self._batch_disabled_at = 0.0
+        self._batch_cooldown = 60
 
         # Request coalescing — dedup concurrent identical GETs
         self._coalesce: dict[str, list[asyncio.Future]] = {}
@@ -219,6 +226,11 @@ class DomainFronter:
 
     def _ssl_ctx(self) -> ssl.SSLContext:
         ctx = ssl.create_default_context()
+        if certifi is not None:
+            try:
+                ctx.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                pass
         if not self.verify_ssl:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -281,7 +293,7 @@ class DomainFronter:
           we rotate across `self._sni_hosts` so DPI can't fingerprint
           "always www.google.com" from the client side.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.setblocking(False)
@@ -307,7 +319,7 @@ class DomainFronter:
 
     async def _acquire(self):
         """Get a healthy TLS connection from pool (TTL-checked) or open new."""
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         async with self._pool_lock:
             while self._pool:
                 reader, writer, created = self._pool.pop()
@@ -326,11 +338,11 @@ class DomainFronter:
         if not self._refilling:
             self._refilling = True
             self._spawn(self._refill_pool())
-        return reader, writer, asyncio.get_event_loop().time()
+        return reader, writer, asyncio.get_running_loop().time()
 
     async def _release(self, reader, writer, created):
         """Return a connection to the pool if still young and healthy."""
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         if (now - created) >= self._conn_ttl or reader.at_eof():
             try:
                 writer.close()
@@ -708,7 +720,7 @@ class DomainFronter:
         """Open one TLS connection and add it to the pool."""
         try:
             r, w = await asyncio.wait_for(self._open(), timeout=5)
-            t = asyncio.get_event_loop().time()
+            t = asyncio.get_running_loop().time()
             async with self._pool_lock:
                 if len(self._pool) < self._pool_max:
                     self._pool.append((r, w, t))
@@ -725,7 +737,7 @@ class DomainFronter:
         while True:
             try:
                 await asyncio.sleep(3)
-                now = asyncio.get_event_loop().time()
+                now = asyncio.get_running_loop().time()
 
                 # Purge expired / dead connections
                 async with self._pool_lock:
@@ -973,7 +985,7 @@ class DomainFronter:
         race where the owning task's `finally` pops the entry between
         the check and append by a second task.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._batch_lock:
             waiters = self._coalesce.get(key)
             if waiters is not None:
@@ -1152,12 +1164,12 @@ class DomainFronter:
                     f"chunk {s}-{e} failed after {max_tries} tries: {last_err}"
                 )
 
-        t0 = asyncio.get_event_loop().time()
+        t0 = asyncio.get_running_loop().time()
         results = await asyncio.gather(
             *[fetch_range(s, e) for s, e in ranges],
             return_exceptions=True,
         )
-        elapsed = asyncio.get_event_loop().time() - t0
+        elapsed = asyncio.get_running_loop().time() - t0
 
         # Assemble full body
         parts = [resp_body]
@@ -1498,11 +1510,21 @@ class DomainFronter:
 
     async def _batch_submit(self, payload: dict) -> bytes:
         """Submit a request to the batch collector. Returns raw HTTP response."""
-        # If batching is disabled (old Code.gs), go direct
+        # If batching is disabled, retry enabling it after a cooldown.
         if not self._batch_enabled:
-            return await self._relay_with_retry(payload)
+            if (
+                self._batch_disabled_at > 0
+                and (time.time() - self._batch_disabled_at) >= self._batch_cooldown
+            ):
+                self._batch_enabled = True
+                log.info(
+                    "Batch mode re-enabled after %ds cooldown",
+                    self._batch_cooldown,
+                )
+            else:
+                return await self._relay_with_retry(payload)
 
-        future = asyncio.get_event_loop().create_future()
+        future = asyncio.get_running_loop().create_future()
 
         async with self._batch_lock:
             self._batch_pending.append((payload, future))
@@ -1568,9 +1590,13 @@ class DomainFronter:
                     if not future.done():
                         future.set_result(result)
             except Exception as e:
-                log.warning("Batch relay failed, disabling batch mode. "
-                            "Redeploy Code.gs for batch support. Error: %s", e)
+                log.warning(
+                    "Batch relay failed, disabling batch mode for %ds cooldown. "
+                    "Error: %s",
+                    self._batch_cooldown, e,
+                )
                 self._batch_enabled = False
+                self._batch_disabled_at = time.time()
                 # Fallback: send individually
                 tasks = []
                 for payload, future in batch:

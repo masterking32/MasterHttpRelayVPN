@@ -20,6 +20,11 @@ import socket
 import ssl
 from urllib.parse import urlparse
 
+try:
+    import certifi
+except Exception:  # optional dependency fallback
+    certifi = None
+
 import codec
 
 log = logging.getLogger("H2")
@@ -107,6 +112,13 @@ class H2Transport:
     async def _do_connect(self):
         """Establish the HTTP/2 connection with optimized socket settings."""
         ctx = ssl.create_default_context()
+        # Some Python builds don't expose a usable default CA store.
+        # Load certifi bundle when present to keep TLS verification stable.
+        if certifi is not None:
+            try:
+                ctx.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                pass
         # Advertise both h2 and http/1.1 — some DPI blocks h2-only ALPN
         ctx.set_alpn_protocols(["h2", "http/1.1"])
         if not self.verify_ssl:
@@ -128,7 +140,7 @@ class H2Transport:
 
         try:
             await asyncio.wait_for(
-                asyncio.get_event_loop().sock_connect(
+                asyncio.get_running_loop().sock_connect(
                     raw, (self.connect_host, 443)
                 ),
                 timeout=15,
@@ -360,6 +372,15 @@ class H2Transport:
 
         except asyncio.CancelledError:
             pass
+        except ssl.SSLError as e:
+            # APPLICATION_DATA_AFTER_CLOSE_NOTIFY is raised when the server
+            # sends data after its TLS close_notify — technically a protocol
+            # violation but very common with CDNs.  It just means the
+            # connection is closed; reconnect on the next request.
+            if "APPLICATION_DATA_AFTER_CLOSE_NOTIFY" in str(e):
+                log.debug("H2 TLS session closed by remote (close_notify): %s", e)
+            else:
+                log.error("H2 reader error: %s", e)
         except Exception as e:
             if "application data after close notify" in str(e).lower():
                 log.debug("H2 reader closed after close_notify: %s", e)

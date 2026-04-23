@@ -298,6 +298,7 @@ This project focuses entirely on the **Apps Script** relay — a free Google acc
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | Hosts that go direct (no MITM, no relay). Useful for LAN resources or sites that break under MITM. |
 | `direct_google_exclude` | see [config.example.json](config.example.json) | Google apps that must use the MITM relay path instead of the fast direct tunnel. |
 | `hosts` | `{}` | Manual DNS override: map a hostname to a specific IP. |
+| `youtube_via_relay` | `false` | Route YouTube (`youtube.com`, `youtu.be`, `youtube-nocookie.com`) through the Apps Script relay instead of the SNI-rewrite path. The SNI-rewrite path uses Google's frontend IP which enforces SafeSearch and can cause **"Video Unavailable"** errors. Setting this to `true` fixes playback at the cost of using more Apps Script executions and slightly higher latency. |
 
 ### Optional Dependencies
 
@@ -344,9 +345,52 @@ python3 main.py --log-level DEBUG        # Show detailed logs
 python3 main.py -c /path/to/config.json  # Use a different config file
 python3 main.py --install-cert           # Install MITM CA certificate and exit
 python3 main.py --no-cert-check          # Skip automatic CA install check on startup
+python3 main.py --scan                   # Scan Google IPs and find the fastest one
 ```
 
 > **Auto-install:** On startup (MITM mode), the proxy automatically checks if the CA certificate is trusted and attempts to install it. Use `--no-cert-check` to skip this. If auto-install fails (e.g. needs elevation), run `python main.py --install-cert` manually or follow Step 6 above.
+
+### Scanning for the Fastest Google IP
+
+If your current `google_ip` in `config.json` is blocked or slow, you can scan to find a faster one:
+
+```bash
+python3 main.py --scan
+```
+
+This will:
+1. Probe 27 candidate Google IPs in parallel
+2. Measure latency from your network
+3. Display results in a table
+4. Recommend the fastest IP
+5. Exit with exit code 0 if at least one IP is reachable, 1 otherwise
+
+**Example output:**
+```
+Scanning 27 Google frontend IPs
+  SNI: www.google.com
+  Timeout: 4s per IP
+  Concurrency: 8 parallel probes
+
+IP                   LATENCY      STATUS
+-------------------- ------------ -------------------------
+216.239.32.120          42ms   OK
+216.239.34.120          45ms   OK
+216.239.36.120          52ms   OK
+142.250.80.142       timeout   timeout
+...
+
+Result: 15 / 27 reachable
+
+Top 3 fastest IPs:
+  1. 216.239.32.120 (42ms)
+  2. 216.239.34.120 (45ms)
+  3. 216.239.36.120 (52ms)
+
+Recommended: Set "google_ip": "216.239.32.120" in config.json
+```
+
+After scanning, update your `config.json` with the recommended IP and restart the proxy.
 
 ---
 
@@ -384,6 +428,7 @@ MasterHttpRelayVPN/
     ├── mitm.py                # On-the-fly TLS interception
     ├── cert_installer.py      # Cross-platform CA installer (Windows/macOS/Linux + Firefox)
     ├── codec.py               # Content-Encoding decoder (gzip/deflate/br/zstd)
+    ├── google_ip_scanner.py   # Scanner to find the fastest reachable Google IP
     ├── constants.py           # Tunable defaults and shared data
     └── logging_utils.py       # Colored, aligned log formatter
 ```

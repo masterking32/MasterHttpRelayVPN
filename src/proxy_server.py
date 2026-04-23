@@ -15,6 +15,11 @@ import time
 import ipaddress
 from urllib.parse import urlparse
 
+try:
+    import certifi
+except Exception:  # optional dependency fallback
+    certifi = None
+
 from constants import (
     CACHE_MAX_MB,
     CACHE_TTL_MAX,
@@ -236,6 +241,17 @@ class ProxyServer:
         # e.g. ".local" matches any *.local domain.
         self._block_hosts  = self._load_host_rules(config.get("block_hosts", []))
         self._bypass_hosts = self._load_host_rules(config.get("bypass_hosts", []))
+
+        # Route YouTube through the relay when requested; the Google frontend
+        # IP can enforce SafeSearch on the SNI-rewrite path.
+        if config.get("youtube_via_relay", False):
+            self._SNI_REWRITE_SUFFIXES = tuple(
+                s for s in SNI_REWRITE_SUFFIXES
+                if s not in self._YOUTUBE_SNI_SUFFIXES
+            )
+            log.info("youtube_via_relay enabled — YouTube routed through relay")
+        else:
+            self._SNI_REWRITE_SUFFIXES = SNI_REWRITE_SUFFIXES
 
         try:
             from mitm import MITMCertManager
@@ -739,6 +755,11 @@ class ProxyServer:
     # Built-in list of domains that must be reached via Google's frontend IP
     # with SNI rewritten to `front_domain` (default: www.google.com).
     # Source: constants.SNI_REWRITE_SUFFIXES.
+    # When youtube_via_relay is enabled the YouTube suffixes are removed so
+    # YouTube goes through the Apps Script relay instead.
+    _YOUTUBE_SNI_SUFFIXES = frozenset({
+        "youtube.com", "youtu.be", "youtube-nocookie.com",
+    })
     _SNI_REWRITE_SUFFIXES = SNI_REWRITE_SUFFIXES
 
     def _sni_rewrite_ip(self, host: str) -> str | None:
@@ -973,7 +994,7 @@ class ProxyServer:
 
         # Step 1: MITM — accept TLS from the browser
         ssl_ctx_server = self.mitm.get_server_context(host)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         transport = writer.transport
         protocol  = transport.get_protocol()
         try:
@@ -987,6 +1008,11 @@ class ProxyServer:
 
         # Step 2: open outgoing TLS to target IP with the safe SNI
         ssl_ctx_client = ssl.create_default_context()
+        if certifi is not None:
+            try:
+                ssl_ctx_client.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                pass
         if not self.fronter.verify_ssl:
             ssl_ctx_client.check_hostname = False
             ssl_ctx_client.verify_mode = ssl.CERT_NONE
@@ -1040,7 +1066,7 @@ class ProxyServer:
         ssl_ctx = self.mitm.get_server_context(host)
 
         # Upgrade the existing connection to TLS (we are the server)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         transport = writer.transport
         protocol = transport.get_protocol()
 

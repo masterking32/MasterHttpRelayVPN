@@ -23,6 +23,7 @@ if _SRC_DIR not in sys.path:
 from cert_installer import install_ca, is_ca_trusted
 from constants import __version__
 from lan_utils import log_lan_access
+from google_ip_scanner import scan_sync
 from logging_utils import configure as configure_logging, print_banner
 from mitm import CA_CERT_FILE
 from proxy_server import ProxyServer
@@ -91,6 +92,11 @@ def parse_args():
         "--no-cert-check",
         action="store_true",
         help="Skip the certificate installation check on startup.",
+    )
+    parser.add_argument(
+        "--scan",
+        action="store_true",
+        help="Scan Google IPs to find the fastest reachable one and exit.",
     )
     return parser.parse_args()
 
@@ -190,6 +196,15 @@ def main():
         _log = logging.getLogger("Main")
         _log.info("Installing CA certificate…")
         ok = install_ca(CA_CERT_FILE)
+        sys.exit(0 if ok else 1)
+
+    # ── Google IP Scanner ──────────────────────────────────────────────────
+    if args.scan:
+        setup_logging("INFO")
+        front_domain = config.get("front_domain", "www.google.com")
+        _log = logging.getLogger("Main")
+        _log.info(f"Scanning Google IPs (fronting domain: {front_domain})")
+        ok = scan_sync(front_domain)
         sys.exit(0 if ok else 1)
 
     setup_logging(config.get("log_level", "INFO"))

@@ -24,7 +24,7 @@
 
 `masterking32.ton`
 
-- آدرس روی شبکه‌های EVM (ETH و سازگارها): 
+- آدرس روی شبکه‌های EVM (ETH و سازگارها):
 
 `0x517f07305D6ED781A089322B6cD93d1461bF8652`
 
@@ -246,6 +246,7 @@ json
 | `block_hosts` | `[]` | هاست‌هایی که هرگز نباید tunnel شوند (پاسخ 403). نام دقیق (`ads.example.com`) یا پسوند با نقطه‌ی ابتدایی (`.doubleclick.net`). |
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | هاست‌هایی که مستقیم می‌روند (بدون MITM و بدون رله). برای منابع داخلی شبکه یا سایت‌هایی که با MITM مشکل دارند. |
 | `direct_google_exclude` | مراجعه به [config.example.json](config.example.json) | اپ‌های Google که باید از مسیر MITM برای رله استفاده کنند به‌جای tunnel مستقیم. |
+| `youtube_via_relay` | `false` | مسیردهی YouTube (`youtube.com`، `youtu.be`، `youtube-nocookie.com`) از طریق رله Apps Script به‌جای مسیر SNI-rewrite. مسیر SNI-rewrite از IP فرانت‌اند Google عبور می‌کند که SafeSearch را اجباری می‌کند و می‌تواند باعث خطای **«ویدیو در دسترس نیست»** شود. با فعال کردن این گزینه، پخش ویدیو درست می‌شود اما تعداد اجراهای Apps Script بیشتر و تأخیر اندکی بالاتر می‌رود. |
 
 ### وابستگی‌های اختیاری
 
@@ -291,9 +292,52 @@ python3 main.py --log-level DEBUG
 python3 main.py -c /path/to/config.json
 python3 main.py --install-cert        # نصب گواهی CA و خروج
 python3 main.py --no-cert-check       # رد شدن از بررسی خودکار گواهی
+python3 main.py --scan                # اسکن IP های Google و یافتن سریع‌ترین
 ```
 
 > **نصب خودکار:** هنگام اجرا در حالت `apps_script`، برنامه به‌طور خودکار بررسی می‌کند که آیا گواهی CA قابل اعتماد است یا نه و در صورت نیاز آن را نصب می‌کند. اگر نصب خودکار ناموفق بود (مثلاً نیاز به دسترسی مدیر دارد)، می‌توانید دستور `python main.py --install-cert` را اجرا کنید یا مراحل مرحله ۶ را دنبال کنید.
+
+### اسکن کردن برای یافتن سریع‌ترین IP گوگل
+
+اگر `google_ip` فعلی در `config.json` بلاک شده یا آهسته است، می‌توانید اسکن کنید تا سریع‌ترین آن را پیدا کنید:
+
+```bash
+python3 main.py --scan
+```
+
+این دستور:
+1. ۲۷ IP برای fronting Google را به‌صورت موازی بررسی می‌کند
+2. تأخیر (latency) از شبکه شما را اندازه می‌گیرد
+3. نتایج را در جدول نمایش می‌دهد
+4. سریع‌ترین IP را پیشنهاد می‌دهد
+5. اگر حداقل یک IP در دسترس باشد کد خروج ۰، ورنه ۱ را برمی‌گرداند
+
+**نمونه خروجی:**
+```
+Scanning 27 Google frontend IPs
+  SNI: www.google.com
+  Timeout: 4s per IP
+  Concurrency: 8 parallel probes
+
+IP                   LATENCY      STATUS
+-------------------- ------------ -------------------------
+216.239.32.120          42ms   OK
+216.239.34.120          45ms   OK
+216.239.36.120          52ms   OK
+142.250.80.142       timeout   timeout
+...
+
+Result: 15 / 27 reachable
+
+Top 3 fastest IPs:
+  1. 216.239.32.120 (42ms)
+  2. 216.239.34.120 (45ms)
+  3. 216.239.36.120 (52ms)
+
+Recommended: Set "google_ip": "216.239.32.120" in config.json
+```
+
+پس از اسکن، مقدار `google_ip` در `config.json` را با IP پیشنهادی به‌روزرسانی کنید و پراکسی را دوباره راه‌اندازی کنید.
 
 ---
 
@@ -327,6 +371,7 @@ MasterHttpRelayVPN/
     ├── mitm.py                # ساخت و مدیریت گواهی‌ها
     ├── cert_installer.py      # نصب خودکار CA در ویندوز/مک/لینوکس + فایرفاکس
     ├── codec.py               # رمزگشای Content-Encoding (gzip/deflate/br/zstd)
+    ├── google_ip_scanner.py   # اسکنر IP های Google برای یافتن سریع‌ترین
     ├── constants.py           # مقادیر پیش‌فرض قابل تنظیم
     └── logging_utils.py       # فرمت‌دهنده‌ی لاگ رنگی و منظم
 ```
