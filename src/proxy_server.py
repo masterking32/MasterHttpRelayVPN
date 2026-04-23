@@ -201,6 +201,20 @@ class ProxyServer:
         self._block_hosts  = self._load_host_rules(config.get("block_hosts", []))
         self._bypass_hosts = self._load_host_rules(config.get("bypass_hosts", []))
 
+        # youtube_via_relay: route YouTube through Apps Script relay instead of
+        # the SNI-rewrite path.  The SNI-rewrite path shares Google's frontend
+        # IP which enforces SafeSearch and can cause "Video Unavailable".
+        # Enabling this fixes YouTube playback at the cost of using more
+        # Apps Script executions and slightly higher latency.
+        if config.get("youtube_via_relay", False):
+            self._SNI_REWRITE_SUFFIXES = tuple(
+                s for s in SNI_REWRITE_SUFFIXES
+                if s not in self._YOUTUBE_SNI_SUFFIXES
+            )
+            log.info("youtube_via_relay enabled — YouTube routed through relay")
+        else:
+            self._SNI_REWRITE_SUFFIXES = SNI_REWRITE_SUFFIXES
+
         try:
             from mitm import MITMCertManager
             self.mitm = MITMCertManager()
@@ -624,6 +638,12 @@ class ProxyServer:
     # Built-in list of domains that must be reached via Google's frontend IP
     # with SNI rewritten to `front_domain` (default: www.google.com).
     # Source: constants.SNI_REWRITE_SUFFIXES.
+    # When youtube_via_relay is enabled the YouTube suffixes are removed so
+    # YouTube goes through the Apps Script relay instead (avoids SafeSearch
+    # forced by the Google frontend IP, at the cost of extra relay executions).
+    _YOUTUBE_SNI_SUFFIXES = frozenset({
+        "youtube.com", "youtu.be", "youtube-nocookie.com",
+    })
     _SNI_REWRITE_SUFFIXES = SNI_REWRITE_SUFFIXES
 
     def _sni_rewrite_ip(self, host: str) -> str | None:
