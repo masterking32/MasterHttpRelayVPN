@@ -1014,7 +1014,7 @@ class ProxyServer:
                         headers[k.strip()] = v.strip()
 
                 # Shortening the length of X API URLs to prevent relay errors.
-                if host == "x.com" and  re.match(r"/i/api/graphql/[^/]+/[^?]+\?variables=", path):
+                if host == "x.com" and re.match(r"/i/api/graphql/[^/]+/[^?]+\?variables=", path):
                     path = path.split("&")[0]
 
                 # MITM traffic arrives as origin-form paths; SOCKS/plain HTTP can
@@ -1062,9 +1062,18 @@ class ProxyServer:
                     # Relay through Apps Script
                     try:
                         response = await self._relay_smart(method, url, headers, body, writer)
+                    except asyncio.TimeoutError:
+                        log.warning("Relay timeout (%s)", url[:60])
+                        response = (
+                            b"HTTP/1.1 504 Gateway Timeout\r\n"
+                            b"Content-Type: text/plain\r\n"
+                            b"Content-Length: 13\r\n"
+                            b"\r\nRelay timeout"
+                        )
                     except Exception as e:
-                        log.error("Relay error (%s): %s", url[:60], e)
-                        err_body = f"Relay error: {e}".encode()
+                        err_label = str(e) or type(e).__name__
+                        log.error("Relay error (%s): %s", url[:60], err_label)
+                        err_body = f"Relay error: {err_label}".encode()
                         response = (
                             b"HTTP/1.1 502 Bad Gateway\r\n"
                             b"Content-Type: text/plain\r\n"
