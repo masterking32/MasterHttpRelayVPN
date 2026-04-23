@@ -10,7 +10,7 @@
 	"socks5_port": 1080,
 	"log_level": "INFO",
 	"verify_ssl": true,
-	"lan_sharing": false,
+	"lan_sharing": true,
 	"relay_timeout": 25,
 	"tls_connect_timeout": 15,
 	"tcp_connect_timeout": 10,
