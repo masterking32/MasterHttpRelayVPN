@@ -22,6 +22,7 @@ if _SRC_DIR not in sys.path:
 
 from cert_installer import install_ca, is_ca_trusted
 from constants import __version__
+from gas_stats_fetcher import create_fetcher as create_gas_stats_fetcher
 from lan_utils import log_lan_access
 from google_ip_scanner import scan_sync
 from logging_utils import configure as configure_logging, print_banner
@@ -97,6 +98,11 @@ def parse_args():
         "--scan",
         action="store_true",
         help="Scan Google IPs to find the fastest reachable one and exit.",
+    )
+    parser.add_argument(
+        "--gas-stats",
+        action="store_true",
+        help="Fetch and display Google Apps Script deployment stats, then exit.",
     )
     return parser.parse_args()
 
@@ -206,6 +212,27 @@ def main():
         _log.info(f"Scanning Google IPs (fronting domain: {front_domain})")
         ok = scan_sync(front_domain)
         sys.exit(0 if ok else 1)
+
+    # ── Google Apps Script Stats ────────────────────────────────────────
+    if args.gas_stats:
+        setup_logging("INFO")
+        _log = logging.getLogger("Main")
+        script_id = config.get("script_ids") or config.get("script_id")
+        if not script_id:
+            _log.error("No script_id configured in config.json")
+            sys.exit(1)
+        if isinstance(script_id, list):
+            _log.info("Fetching stats for %d script IDs…", len(script_id))
+            script_id = script_id[0]  # Use first for stats
+        else:
+            _log.info("Fetching Google Apps Script deployment stats…")
+        try:
+            fetcher = create_gas_stats_fetcher(deployment_id=script_id)
+            fetcher.fetch_and_log_stats()
+        except ImportError as e:
+            _log.error(f"Cannot fetch stats: {e}")
+            sys.exit(1)
+        sys.exit(0)
 
     setup_logging(config.get("log_level", "INFO"))
     log = logging.getLogger("Main")

@@ -15,3 +15,8 @@ zstandard>=0.22.0
 
 # Optional: Better network interface detection for LAN sharing
 netifaces>=0.11.0
+
+# Optional: Google Apps Script stats fetching (google_auth_stats)
+google-auth>=2.25.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.1.0

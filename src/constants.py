@@ -23,6 +23,15 @@ RELAY_TIMEOUT           = 25
 TLS_CONNECT_TIMEOUT     = 15
 TCP_CONNECT_TIMEOUT     = 10
 
+
+# ── Google API settings ─────────────────────────────────────────────────────────
+# Google Apps Script deployment stats
+GAS_STATS_TIMEOUT = 10  # Timeout for GAS API requests (seconds)
+GAS_STATS_API_BASE = "https://www.googleapis.com/apps_script/v1"
+GAS_EXECUTION_API_BASE = "https://www.googleapis.com/execution/v1/projects"
+GAS_CREDENTIALS_FILE = "credentials.json"  # OAuth2 credentials file path
+
+
 # ── Google IP Scanner settings ──────────────────────────────────────────────
 GOOGLE_SCANNER_TIMEOUT      = 4       # Timeout per IP probe (seconds)
 GOOGLE_SCANNER_CONCURRENCY  = 8       # Parallel probes
