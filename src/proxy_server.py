@@ -156,6 +156,14 @@ class ProxyServer:
         self.socks_port = config.get("socks5_port", 1080)
         self.fronter = DomainFronter(config)
         self.mitm = None
+        
+        # Chunked download settings (configurable)
+        exts = config.get("chunked_download_extensions", list(LARGE_FILE_EXTS))
+        self._chunked_extensions = frozenset(exts)
+        self._chunked_bypass_check = ".*" in exts
+        self._chunked_min_size = config.get("chunked_download_min_size", 5 * 1024 * 1024)  # 5MB default
+        self._chunked_chunk_size = config.get("chunked_download_chunk_size", 256 * 1024)  # 256KB default
+        self._chunked_max_parallel = config.get("chunked_download_max_parallel", 16)  # 16 parallel default
         self._cache = ResponseCache(max_mb=CACHE_MAX_MB)
         self._direct_fail_until: dict[str, float] = {}
         self._servers: list[asyncio.base_events.Server] = []
@@ -1043,7 +1051,7 @@ class ProxyServer:
                 if response is None:
                     # Relay through Apps Script
                     try:
-                        response = await self._relay_smart(method, url, headers, body)
+                        response = await self._relay_smart(method, url, headers, body, writer)
                     except Exception as e:
                         log.error("Relay error (%s): %s", url[:60], e)
                         err_body = f"Relay error: {e}".encode()
@@ -1068,8 +1076,10 @@ class ProxyServer:
 
                 self._log_response_summary(url, response)
 
-                writer.write(response)
-                await writer.drain()
+                # Only write if response not empty (streaming already sent data)
+                if response:
+                    writer.write(response)
+                    await writer.drain()
 
             except asyncio.TimeoutError:
                 break
@@ -1139,10 +1149,10 @@ class ProxyServer:
             additions.append("Vary: Origin")
         return ("\r\n".join(lines + additions) + "\r\n\r\n").encode() + body
 
-    async def _relay_smart(self, method, url, headers, body):
+    async def _relay_smart(self, method, url, headers, body, writer=None):
         """Choose optimal relay strategy based on request type.
 
-        - GET requests for likely-large downloads use parallel-range.
+        - GET requests for likely-large downloads use parallel-range with streaming.
         - All other requests (API calls, HTML, JSON, XHR) go through the
           single-request relay. This avoids injecting a synthetic Range
           header on normal traffic, which some origins honor by returning
@@ -1159,18 +1169,36 @@ class ProxyServer:
                         )
             # Only probe with Range when the URL looks like a big file.
             if self._is_likely_download(url, headers):
+                # Use streaming version if writer provided
+                if writer:
+                    return await self.fronter.relay_parallel_streaming(
+                        method, url, headers, body, writer,
+                        min_size=self._chunked_min_size,
+                        chunk_size=self._chunked_chunk_size,
+                        max_parallel=self._chunked_max_parallel
+                    )
                 return await self.fronter.relay_parallel(
-                    method, url, headers, body
+                    method, url, headers, body,
+                    chunk_size=self._chunked_chunk_size,
+                    max_parallel=self._chunked_max_parallel
                 )
         return await self.fronter.relay(method, url, headers, body)
 
     def _is_likely_download(self, url: str, headers: dict) -> bool:
-        """Heuristic: is this URL likely a large file download?"""
+        """Heuristic: is this URL likely a large file download?
+        
+        If ".*" is in chunked_download_extensions, bypasses extension check
+        and returns True for all URLs (enables chunking for any file).
+        """
+        if self._chunked_bypass_check:
+            return True
+        
         path = url.split("?")[0].lower()
-        for ext in LARGE_FILE_EXTS:
-            if path.endswith(ext):
+        for ext in self._chunked_extensions:
+            if path.endswith(ext.lower()):
                 return True
         return False
+
 
     # ── Plain HTTP forwarding ─────────────────────────────────────
 
@@ -1224,7 +1252,7 @@ class ProxyServer:
                 log.debug("Cache HIT (HTTP): %s", url[:60])
 
         if response is None:
-            response = await self._relay_smart(method, url, headers, body)
+            response = await self._relay_smart(method, url, headers, body, writer)
             # Cache successful GET
             if self._cache_allowed(method, url, headers, body) and response:
                 ttl = ResponseCache.parse_ttl(response, url)
@@ -1236,5 +1264,7 @@ class ProxyServer:
             response = self._inject_cors_headers(response, origin)
         self._log_response_summary(url, response)
 
-        writer.write(response)
-        await writer.drain()
+        # Only write if response not empty (streaming already sent data)
+        if response:
+            writer.write(response)
+            await writer.drain()
