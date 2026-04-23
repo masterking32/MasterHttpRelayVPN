@@ -16,15 +16,55 @@
  * CHANGE THE AUTH KEY BELOW TO YOUR OWN SECRET!
  */
 
-const AUTH_KEY = "CHANGE_ME_TO_A_STRONG_SECRET";
+const AUTH_KEY = "ENTER AUTH CODE HERE";
 
-// Keep browser capability headers (sec-ch-ua*, sec-fetch-*) intact.
-// Some modern apps, notably Google Meet, use them for browser gating.
+// Leave empty to keep Apps Script's default user agent.
+const FORCE_USER_AGENT = "Mozilla/5.0";
+
+// Forward only headers that are usually needed for normal HTTP semantics.
+// Add more here if a target site genuinely requires them.
+const ALLOW_HEADERS = {
+  accept: 1,
+  "accept-language": 1,
+  "accept-encoding": 1,
+  authorization: 1,
+  cookie: 1,
+  "cache-control": 1,
+  pragma: 1,
+  range: 1,
+  "if-match": 1,
+  "if-none-match": 1,
+  "if-modified-since": 1,
+  "if-unmodified-since": 1,
+  "if-range": 1,
+};
+
 const SKIP_HEADERS = {
   host: 1, connection: 1, "content-length": 1,
   "transfer-encoding": 1, "proxy-connection": 1, "proxy-authorization": 1,
-  "priority": 1, te: 1,
+  "forwarded": 1, "via": 1,
+  "x-forwarded-for": 1, "x-forwarded-host": 1, "x-forwarded-proto": 1,
+  "x-forwarded-port": 1, "x-forwarded-server": 1,
+  "x-real-ip": 1, "x-client-ip": 1, "client-ip": 1,
+  "true-client-ip": 1, "cf-connecting-ip": 1, "fastly-client-ip": 1,
+  "fly-client-ip": 1, "x-cluster-client-ip": 1, "x-originating-ip": 1,
+  "proxy-client-ip": 1, "wl-proxy-client-ip": 1, "x-proxyuser-ip": 1,
+  "remote-addr": 1, origin: 1, referer: 1,
+  "user-agent": 1,
 };
+
+function _trim(s) {
+  return String(s).replace(/^\s+|\s+$/g, "");
+}
+
+function _headerName(k) {
+  return _trim(k).toLowerCase();
+}
+
+function _shouldForwardHeader(k) {
+  var name = _headerName(k);
+  return !!name && ALLOW_HEADERS[name] && !SKIP_HEADERS[name];
+}
 
 function doPost(e) {
   try {
@@ -49,7 +89,7 @@ function _doSingle(req) {
   var resp = UrlFetchApp.fetch(req.u, opts);
   return _json({
     s: resp.getResponseCode(),
-    h: _respHeaders(resp),
+    h: resp.getHeaders(),
     b: Utilities.base64Encode(resp.getContent()),
   });
 }
@@ -84,7 +124,7 @@ function _doBatch(items) {
       var resp = responses[rIdx++];
       results.push({
         s: resp.getResponseCode(),
-        h: _respHeaders(resp),
+        h: resp.getHeaders(),
         b: Utilities.base64Encode(resp.getContent()),
       });
     }
@@ -98,31 +138,24 @@ function _buildOpts(req) {
     muteHttpExceptions: true,
     followRedirects: req.r !== false,
     validateHttpsCertificates: true,
-    escaping: false,
   };
   if (req.h && typeof req.h === "object") {
     var headers = {};
     for (var k in req.h) {
-      if (req.h.hasOwnProperty(k) && !SKIP_HEADERS[k.toLowerCase()]) {
-        headers[k] = req.h[k];
+      if (req.h.hasOwnProperty(k) && _shouldForwardHeader(k)) {
+        headers[_trim(k)] = req.h[k];
       }
     }
+    if (FORCE_USER_AGENT) headers["User-Agent"] = FORCE_USER_AGENT;
     opts.headers = headers;
+  } else if (FORCE_USER_AGENT) {
+    opts.headers = { "User-Agent": FORCE_USER_AGENT };
   }
   if (req.b) {
     opts.payload = Utilities.base64Decode(req.b);
     if (req.ct) opts.contentType = req.ct;
   }
   return opts;
-}
-
-function _respHeaders(resp) {
-  try {
-    if (typeof resp.getAllHeaders === "function") {
-      return resp.getAllHeaders();
-    }
-  } catch (err) {}
-  return resp.getHeaders();
 }
 
 function doGet(e) {
