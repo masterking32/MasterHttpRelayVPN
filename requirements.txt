@@ -12,3 +12,6 @@ brotli>=1.1.0
 
 # Optional: Zstandard decompression (some CDNs now serve `zstd`)
 zstandard>=0.22.0
+
+# Optional: Better network interface detection for LAN sharing
+netifaces>=0.11.0

@@ -62,10 +62,15 @@ class H2Transport:
     """
 
     def __init__(self, connect_host: str, sni_host: str,
-                 verify_ssl: bool = True):
+                 verify_ssl: bool = True,
+                 sni_hosts: list[str] | None = None):
         self.connect_host = connect_host
         self.sni_host = sni_host
         self.verify_ssl = verify_ssl
+        # Optional SNI rotation pool — picked round-robin on each new connect.
+        # Falls back to the single sni_host if no pool is given.
+        self._sni_hosts: list[str] = [h for h in (sni_hosts or []) if h] or [sni_host]
+        self._sni_idx: int = 0
 
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -107,6 +112,12 @@ class H2Transport:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
 
+        # Pick next SNI from the rotation pool so repeated reconnects
+        # don't fingerprint as "always www.google.com".
+        sni = self._sni_hosts[self._sni_idx % len(self._sni_hosts)]
+        self._sni_idx += 1
+        self.sni_host = sni  # kept for backward-compat logging
+
         # Create raw TCP socket with TCP_NODELAY BEFORE TLS handshake.
         # Nagle's algorithm can delay small writes (H2 frames) by up to 200ms
         # waiting to coalesce — TCP_NODELAY forces immediate send.
@@ -124,7 +135,7 @@ class H2Transport:
             self._reader, self._writer = await asyncio.wait_for(
                 asyncio.open_connection(
                     ssl=ctx,
-                    server_hostname=self.sni_host,
+                    server_hostname=sni,
                     sock=raw,
                 ),
                 timeout=15,
@@ -165,7 +176,7 @@ class H2Transport:
         self._connected = True
         self._read_task = asyncio.create_task(self._reader_loop())
         log.info("H2 connected → %s (SNI=%s, TCP_NODELAY=on)",
-                 self.connect_host, self.sni_host)
+                 self.connect_host, sni)
 
     async def reconnect(self):
         """Close current connection and re-establish."""

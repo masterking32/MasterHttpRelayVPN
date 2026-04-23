@@ -45,12 +45,42 @@ This means the filter sees normal-looking Google traffic, while the actual desti
 
 ---
 
-## Step-by-Step Setup Guide
+## Quick Start (Recommended)
+
+One command sets up a virtualenv, installs dependencies, launches an interactive
+config wizard, and starts the proxy.
+
+**Windows:**
+```cmd
+git clone https://github.com/masterking32/MasterHttpRelayVPN.git
+cd MasterHttpRelayVPN
+start.bat
+```
+
+**Linux / macOS:**
+```bash
+git clone https://github.com/masterking32/MasterHttpRelayVPN.git
+cd MasterHttpRelayVPN
+chmod +x start.sh
+./start.sh
+```
+
+The first time it runs, the wizard asks for your Google Apps Script Deployment ID
+and generates a strong random password for you. Follow the Apps Script deployment
+instructions in **Step 2** below before running the wizard so you have a
+Deployment ID ready.
+
+After it's running, jump to **Step 5** (browser proxy) and **Step 6** (CA
+certificate).
+
+---
+
+## Step-by-Step Setup Guide (Manual)
 
 ### Step 1: Download This Project
 
 ```bash
-git clone -b python_testing https://github.com/masterking32/MasterHttpRelayVPN.git
+git clone https://github.com/masterking32/MasterHttpRelayVPN.git
 cd MasterHttpRelayVPN
 pip install -r requirements.txt
 ```
@@ -60,7 +90,7 @@ pip install -r requirements.txt
 > pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
 > ```
 
-Or download the ZIP from [GitHub](https://github.com/masterking32/MasterHttpRelayVPN/tree/python_testing) and extract it.
+Or download the ZIP from [GitHub](https://github.com/masterking32/MasterHttpRelayVPN) and extract it.
 
 ### Step 2: Set Up the Google Relay (Code.gs)
 
@@ -85,6 +115,15 @@ This is the "relay" that sits on Google's servers and fetches websites for you. 
 > ⚠️ Remember the password you set in step 5. You'll use the same password in the config file below.
 
 ### Step 3: Configure
+
+**Option A — interactive wizard (recommended):**
+```bash
+python setup.py
+```
+It'll prompt for your Deployment ID, generate a random `auth_key`, and write
+`config.json` for you.
+
+**Option B — manual:**
 
 1. Copy the example config file:
    ```bash
@@ -174,6 +213,29 @@ Firefox uses its own certificate store, so even after OS-level install you need 
 
 ---
 
+## LAN Sharing (Optional)
+
+By default, the proxy only listens on `127.0.0.1` (localhost), meaning only your computer can use it. To allow other devices on your local network (LAN) to use the proxy:
+
+1. Set `"lan_sharing": true` in your `config.json`
+2. The proxy will automatically listen on all network interfaces (`0.0.0.0`)
+3. The startup log will show your LAN IP addresses that other devices can connect to
+
+**Example LAN configuration:**
+```json
+{
+  "lan_sharing": true,
+  "listen_host": "0.0.0.0",
+  "listen_port": 8085
+}
+```
+
+**Security Warning:** When LAN sharing is enabled, anyone on your local network can use your proxy. Ensure your network is trusted and consider additional security measures.
+
+**On other devices:** Configure them to use your computer's LAN IP (shown in the startup log) and port 8085 as the HTTP proxy.
+
+---
+
 ## Modes Overview
 
 This project focuses entirely on the **Apps Script** relay — a free Google account is all you need, no server, no VPS, no Cloudflare setup. Everything is configured out of the box for this mode.
@@ -188,8 +250,9 @@ This project focuses entirely on the **Apps Script** relay — a free Google acc
 |---------|-------------|
 | `auth_key` | Password shared between your computer and the relay |
 | `script_id` | Your Google Apps Script Deployment ID |
-| `listen_host` | Where to listen (`127.0.0.1` = only this computer) |
+| `listen_host` | Where to listen (`127.0.0.1` = only this computer, `0.0.0.0` = all interfaces for LAN sharing) |
 | `listen_port` | Which port to listen on (default: `8085`) |
+| `lan_sharing` | Enable LAN sharing to allow other devices on your network to use the proxy (`false` by default) |
 | `log_level` | How much detail to show: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
 ### Advanced Settings
@@ -215,6 +278,7 @@ Install everything from [`requirements.txt`](requirements.txt). All listed packa
 | `h2` | HTTP/2 multiplexing to the Apps Script relay (significantly faster) |
 | `brotli` | Decompression of `Content-Encoding: br` responses |
 | `zstandard` | Decompression of `Content-Encoding: zstd` responses |
+| `netifaces` | Better network interface detection for LAN sharing (fallback available without it) |
 
 ### Load Balancing
 
@@ -229,7 +293,7 @@ To increase speed, deploy `Code.gs` multiple times to different Apps Script proj
   ]
 }
 ```
-
+> ⚠️ **Note:** If you are using multiple deployments, the auth-keys must be identical. (All deployments must use the same auth-key.)
 ---
 
 ## Updating the Google Relay
@@ -316,8 +380,10 @@ After scanning, update your `config.json` with the recommended IP and restart th
 ```
 MasterHttpRelayVPN/
 ├── main.py                    # Entry point: starts the proxy
+├── setup.py                   # Interactive wizard — writes config.json
+├── start.bat / start.sh       # One-click launcher (venv + deps + wizard + run)
 ├── config.example.json        # Copy to config.json and fill in your values
-├── requirements.txt           # Optional Python dependencies
+├── requirements.txt           # Python dependencies
 ├── apps_script/
 │   └── Code.gs                # The relay script you deploy to Google Apps Script
 ├── ca/                        # Generated MITM CA (do NOT share)
@@ -360,7 +426,7 @@ MasterHttpRelayVPN/
 - **Change the default `AUTH_KEY`** in `Code.gs` before deploying.
 - **Don't share the `ca/` folder** — it contains your private certificate key.
 - Keep `listen_host` as `127.0.0.1` so only your computer can use the proxy.
-
+- Every google scripts deployment has limit of 20,000 requests in 24 hours
 ---
 
 ## Special Thanks
