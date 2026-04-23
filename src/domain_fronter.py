@@ -202,7 +202,7 @@ class DomainFronter:
           we rotate across `self._sni_hosts` so DPI can't fingerprint
           "always www.google.com" from the client side.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.setblocking(False)
@@ -228,7 +228,7 @@ class DomainFronter:
 
     async def _acquire(self):
         """Get a healthy TLS connection from pool (TTL-checked) or open new."""
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         async with self._pool_lock:
             while self._pool:
                 reader, writer, created = self._pool.pop()
@@ -247,11 +247,11 @@ class DomainFronter:
         if not self._refilling:
             self._refilling = True
             self._spawn(self._refill_pool())
-        return reader, writer, asyncio.get_event_loop().time()
+        return reader, writer, asyncio.get_running_loop().time()
 
     async def _release(self, reader, writer, created):
         """Return a connection to the pool if still young and healthy."""
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         if (now - created) >= self._conn_ttl or reader.at_eof():
             try:
                 writer.close()
@@ -442,6 +442,7 @@ class DomainFronter:
     def _exec_path_for_sid(self, sid: str) -> str:
         """Build the /macros/s/<sid>/(dev|exec) path for a specific script ID."""
         return f"/macros/s/{sid}/{'dev' if self._dev_available else 'exec'}"
+
     async def _flush_pool(self):
         """Close all pooled connections (they may be stale after errors)."""
         async with self._pool_lock:
@@ -464,7 +465,7 @@ class DomainFronter:
         """Open one TLS connection and add it to the pool."""
         try:
             r, w = await asyncio.wait_for(self._open(), timeout=5)
-            t = asyncio.get_event_loop().time()
+            t = asyncio.get_running_loop().time()
             async with self._pool_lock:
                 if len(self._pool) < self._pool_max:
                     self._pool.append((r, w, t))
@@ -481,7 +482,7 @@ class DomainFronter:
         while True:
             try:
                 await asyncio.sleep(3)
-                now = asyncio.get_event_loop().time()
+                now = asyncio.get_running_loop().time()
 
                 # Purge expired / dead connections
                 async with self._pool_lock:
@@ -713,7 +714,7 @@ class DomainFronter:
         race where the owning task's `finally` pops the entry between
         the check and append by a second task.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._batch_lock:
             waiters = self._coalesce.get(url)
             if waiters is not None:
@@ -833,12 +834,12 @@ class DomainFronter:
                     f"chunk {s}-{e} failed after {max_tries} tries: {last_err}"
                 )
 
-        t0 = asyncio.get_event_loop().time()
+        t0 = asyncio.get_running_loop().time()
         results = await asyncio.gather(
             *[fetch_range(s, e) for s, e in ranges],
             return_exceptions=True,
         )
-        elapsed = asyncio.get_event_loop().time() - t0
+        elapsed = asyncio.get_running_loop().time() - t0
 
         # Assemble full body
         parts = [resp_body]
@@ -870,38 +871,38 @@ class DomainFronter:
                                       chunk_size: int = 256 * 1024,
                                       max_parallel: int = 16) -> bytes:
         """Stream large file download to client as chunks arrive.
-        
+
         Downloads file in parallel chunks and streams to client immediately,
         avoiding memory buildup and timeout issues for large files.
-        
+
         Args:
             min_size: Minimum file size to enable chunking (0 = no minimum)
             chunk_size: Size of each chunk in bytes (default 256KB)
             max_parallel: Maximum parallel chunk downloads (default 16)
         """
-        
+
         if method != "GET" or body:
             return await self.relay(method, url, headers, body)
-        
+
         # Probe: first chunk with Range header
         range_headers = dict(headers) if headers else {}
         range_headers["Range"] = f"bytes=0-{chunk_size - 1}"
         first_resp = await self.relay("GET", url, range_headers, b"")
-        
+
         status, resp_hdrs, resp_body = self._split_raw_response(first_resp)
-        
+
         # No range support → return single response
         if status != 206:
             return first_resp
-        
+
         # Parse total size from Content-Range
         content_range = resp_hdrs.get("content-range", "")
         m = re.search(r"/(\d+)", content_range)
         if not m:
             return self._rewrite_206_to_200(first_resp)
-        
+
         total_size = int(m.group(1))
-        
+
         # Check minimum size threshold (if configured)
         if min_size > 0 and total_size < min_size:
             log.debug(
@@ -909,11 +910,11 @@ class DomainFronter:
                 total_size, min_size
             )
             return self._rewrite_206_to_200(first_resp)
-        
+
         # Small file (less than one chunk) → return immediately
         if total_size <= chunk_size or len(resp_body) >= total_size:
             return self._rewrite_206_to_200(first_resp)
-        
+
         # Build response header
         response_header = "HTTP/1.1 200 OK\r\n"
         skip = {"transfer-encoding", "connection", "keep-alive",
@@ -922,15 +923,15 @@ class DomainFronter:
             if k.lower() not in skip:
                 response_header += f"{k}: {v}\r\n"
         response_header += f"Content-Length: {total_size}\r\n\r\n"
-        
+
         # Send header + first chunk immediately
         writer.write(response_header.encode() + resp_body)
         await writer.drain()
-        
+
         log.info("Streaming download: %d bytes, %d chunks of %d KB",
                 total_size, (total_size + chunk_size - 1) // chunk_size,
                 chunk_size // 1024)
-        
+
         # Calculate remaining ranges
         ranges = []
         start = len(resp_body)
@@ -938,21 +939,21 @@ class DomainFronter:
             end = min(start + chunk_size - 1, total_size - 1)
             ranges.append((start, end))
             start = end + 1
-        
+
         # Download and stream chunks in order
         sem = asyncio.Semaphore(max_parallel)
         chunk_buffer = {}  # idx -> chunk_data
         next_to_stream = 0
         stream_event = asyncio.Event()
         all_downloaded = asyncio.Event()
-        
+
         async def fetch_chunk(idx: int, s: int, e: int, max_retries: int = 5):
             """Download chunk with retry and timeout."""
             async with sem:
                 rh = dict(headers) if headers else {}
                 rh["Range"] = f"bytes={s}-{e}"
                 expected_size = e - s + 1
-                
+
                 for attempt in range(max_retries):
                     try:
                         # Low timeout for small chunks (256KB should download quickly)
@@ -961,7 +962,7 @@ class DomainFronter:
                             timeout=15
                         )
                         _, _, chunk_body = self._split_raw_response(raw)
-                        
+
                         # Verify chunk size
                         if len(chunk_body) != expected_size:
                             log.warning(
@@ -971,13 +972,13 @@ class DomainFronter:
                             if attempt < max_retries - 1:
                                 await asyncio.sleep(0.5 * (attempt + 1))
                                 continue
-                        
+
                         # Store chunk in buffer
                         chunk_buffer[idx] = chunk_body
                         stream_event.set()  # Signal streamer
                         log.debug("Downloaded chunk %d/%d", idx + 1, len(ranges))
                         return
-                        
+
                     except asyncio.TimeoutError:
                         log.warning(
                             "Chunk %d timeout (retry %d/%d)",
@@ -992,10 +993,10 @@ class DomainFronter:
                         )
                         if attempt < max_retries - 1:
                             await asyncio.sleep(0.5 * (attempt + 1))
-                
+
                 # All retries failed
                 raise Exception(f"Chunk {idx} failed after {max_retries} retries")
-        
+
         async def stream_chunks():
             """Stream chunks to client in sequential order."""
             nonlocal next_to_stream
@@ -1008,25 +1009,25 @@ class DomainFronter:
                             raise Exception(f"Chunk {next_to_stream} never arrived")
                         stream_event.clear()
                         await asyncio.wait_for(stream_event.wait(), timeout=30)
-                    
+
                     # Stream the chunk
                     chunk_data = chunk_buffer.pop(next_to_stream)
                     writer.write(chunk_data)
                     await writer.drain()
                     log.debug("Streamed chunk %d/%d", next_to_stream + 1, len(ranges))
                     next_to_stream += 1
-                    
+
             except Exception as e:
                 log.error("Streaming error: %s", e)
                 raise
-        
+
         # Start downloads and streaming concurrently
         download_tasks = [
             asyncio.create_task(fetch_chunk(i, s, e))
             for i, (s, e) in enumerate(ranges)
         ]
         stream_task = asyncio.create_task(stream_chunks())
-        
+
         # Wait for downloads to complete
         try:
             await asyncio.gather(*download_tasks)
@@ -1041,7 +1042,7 @@ class DomainFronter:
             if not stream_task.done():
                 stream_task.cancel()
             raise
-        
+
         # Return empty bytes since we already streamed everything
         return b""
 
@@ -1144,7 +1145,7 @@ class DomainFronter:
         if not self._batch_enabled:
             return await self._relay_with_retry(payload)
 
-        future = asyncio.get_event_loop().create_future()
+        future = asyncio.get_running_loop().create_future()
 
         async with self._batch_lock:
             self._batch_pending.append((payload, future))

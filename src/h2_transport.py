@@ -139,7 +139,7 @@ class H2Transport:
 
         try:
             await asyncio.wait_for(
-                asyncio.get_event_loop().sock_connect(
+                asyncio.get_running_loop().sock_connect(
                     raw, (self.connect_host, 443)
                 ),
                 timeout=15,

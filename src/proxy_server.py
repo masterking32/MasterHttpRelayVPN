@@ -161,7 +161,7 @@ class ProxyServer:
         self.socks_port = config.get("socks5_port", 1080)
         self.fronter = DomainFronter(config)
         self.mitm = None
-        
+
         # Chunked download settings (configurable)
         exts = config.get("chunked_download_extensions", list(LARGE_FILE_EXTS))
         self._chunked_extensions = frozenset(exts)
@@ -853,7 +853,7 @@ class ProxyServer:
 
         # Step 1: MITM — accept TLS from the browser
         ssl_ctx_server = self.mitm.get_server_context(host)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         transport = writer.transport
         protocol  = transport.get_protocol()
         try:
@@ -925,7 +925,7 @@ class ProxyServer:
         ssl_ctx = self.mitm.get_server_context(host)
 
         # Upgrade the existing connection to TLS (we are the server)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         transport = writer.transport
         protocol = transport.get_protocol()
 
@@ -1012,11 +1012,11 @@ class ProxyServer:
                     if b":" in raw_line:
                         k, v = raw_line.decode(errors="replace").split(":", 1)
                         headers[k.strip()] = v.strip()
-                        
+
                 # Shortening the length of X API URLs to prevent relay errors.
                 if host == "x.com" and  re.match(r"/i/api/graphql/[^/]+/[^?]+\?variables=", path):
                     path = path.split("&")[0]
-                
+
                 # MITM traffic arrives as origin-form paths; SOCKS/plain HTTP can
                 # also send absolute-form requests. Normalize both to full URLs.
                 if path.startswith("http://") or path.startswith("https://"):
@@ -1196,13 +1196,13 @@ class ProxyServer:
 
     def _is_likely_download(self, url: str, headers: dict) -> bool:
         """Heuristic: is this URL likely a large file download?
-        
+
         If ".*" is in chunked_download_extensions, bypasses extension check
         and returns True for all URLs (enables chunking for any file).
         """
         if self._chunked_bypass_check:
             return True
-        
+
         path = url.split("?")[0].lower()
         for ext in self._chunked_extensions:
             if path.endswith(ext.lower()):
