@@ -20,6 +20,11 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+try:
+    import certifi
+except Exception:  # optional dependency fallback
+    certifi = None
+
 import codec
 from constants import (
     BATCH_MAX,
@@ -175,6 +180,14 @@ class DomainFronter:
 
     def _ssl_ctx(self) -> ssl.SSLContext:
         ctx = ssl.create_default_context()
+        # Some Python builds on macOS ship without a usable system CA path.
+        # Prefer certifi's CA bundle when available to avoid spurious
+        # CERTIFICATE_VERIFY_FAILED errors on valid public certificates.
+        if certifi is not None:
+            try:
+                ctx.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                pass
         if not self.verify_ssl:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE

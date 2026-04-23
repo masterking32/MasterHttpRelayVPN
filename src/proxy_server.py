@@ -15,6 +15,11 @@ import time
 import ipaddress
 from urllib.parse import urlparse
 
+try:
+    import certifi
+except Exception:  # optional dependency fallback
+    certifi = None
+
 from constants import (
     CACHE_MAX_MB,
     CACHE_TTL_MAX,
@@ -854,6 +859,11 @@ class ProxyServer:
 
         # Step 2: open outgoing TLS to target IP with the safe SNI
         ssl_ctx_client = ssl.create_default_context()
+        if certifi is not None:
+            try:
+                ssl_ctx_client.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                pass
         if not self.fronter.verify_ssl:
             ssl_ctx_client.check_hostname = False
             ssl_ctx_client.verify_mode = ssl.CERT_NONE
