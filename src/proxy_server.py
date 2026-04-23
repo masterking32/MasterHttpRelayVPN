@@ -878,14 +878,21 @@ class ProxyServer:
         errors: list[str] = []
         loop = asyncio.get_running_loop()
 
+        # Strip IPv6 brackets (CONNECT may deliver "[::1]" as the hostname).
+        # ipaddress.ip_address() rejects the bracketed form, which would
+        # otherwise force a DNS lookup for an IP literal and fail.
+        lookup_target = target.strip()
+        if lookup_target.startswith("[") and lookup_target.endswith("]"):
+            lookup_target = lookup_target[1:-1]
+
         try:
-            ipaddress.ip_address(target)
-            candidates = [(0, target)]
+            ipaddress.ip_address(lookup_target)
+            candidates = [(0, lookup_target)]
         except ValueError:
             try:
                 infos = await asyncio.wait_for(
                     loop.getaddrinfo(
-                        target,
+                        lookup_target,
                         port,
                         family=socket.AF_UNSPEC,
                         type=socket.SOCK_STREAM,
@@ -893,7 +900,7 @@ class ProxyServer:
                     timeout=timeout,
                 )
             except Exception as exc:
-                raise OSError(f"dns lookup failed for {target}: {exc!r}") from exc
+                raise OSError(f"dns lookup failed for {lookup_target}: {exc!r}") from exc
 
             candidates = []
             seen = set()
@@ -1122,13 +1129,35 @@ class ProxyServer:
                     break
 
                 header_block = first_line
+                oversized_headers = False
                 while True:
                     line = await asyncio.wait_for(reader.readline(), timeout=10)
                     header_block += line
                     if len(header_block) > MAX_HEADER_BYTES:
+                        oversized_headers = True
                         break
                     if line in (b"\r\n", b"\n", b""):
                         break
+
+                # Reject truncated / oversized header blocks cleanly rather
+                # than forwarding a half-parsed request to the relay — doing
+                # so would send malformed JSON payloads to Apps Script and
+                # leave the client hanging until its own timeout fires.
+                if oversized_headers:
+                    log.warning(
+                        "MITM header block exceeds %d bytes — closing (%s)",
+                        MAX_HEADER_BYTES, host,
+                    )
+                    try:
+                        writer.write(
+                            b"HTTP/1.1 431 Request Header Fields Too Large\r\n"
+                            b"Connection: close\r\n"
+                            b"Content-Length: 0\r\n\r\n"
+                        )
+                        await writer.drain()
+                    except Exception:
+                        pass
+                    break
 
                 # Read body
                 body = b""
@@ -1162,11 +1191,11 @@ class ProxyServer:
                     if b":" in raw_line:
                         k, v = raw_line.decode(errors="replace").split(":", 1)
                         headers[k.strip()] = v.strip()
-                        
+
                 # Shortening the length of X API URLs to prevent relay errors.
                 if host == "x.com" and  re.match(r"/i/api/graphql/[^/]+/[^?]+\?variables=", path):
                     path = path.split("&")[0]
-                
+
                 # MITM traffic arrives as origin-form paths; SOCKS/plain HTTP can
                 # also send absolute-form requests. Normalize both to full URLs.
                 if path.startswith("http://") or path.startswith("https://"):
