@@ -20,6 +20,11 @@ const AUTH_KEY = "CHANGE_ME_TO_A_STRONG_SECRET";
 
 // Keep browser capability headers (sec-ch-ua*, sec-fetch-*) intact.
 // Some modern apps, notably Google Meet, use them for browser gating.
+// Maximum seconds to wait for any single upstream fetch.
+// Matches the Python client's 25s timeout. Without this, a slow upstream
+// can hold up an entire batch until Apps Script's 6-minute execution limit.
+const FETCH_DEADLINE = 25;
+
 const SKIP_HEADERS = {
   host: 1, connection: 1, "content-length": 1,
   "transfer-encoding": 1, "proxy-connection": 1, "proxy-authorization": 1,
@@ -29,6 +34,12 @@ const SKIP_HEADERS = {
 function doPost(e) {
   try {
     var req = JSON.parse(e.postData.contents);
+
+    // Reject requests using the default key — deployer forgot to change it.
+    if (AUTH_KEY === "CHANGE_ME_TO_A_STRONG_SECRET") {
+      return _json({ e: "relay not configured: change AUTH_KEY before deploying" });
+    }
+
     if (req.k !== AUTH_KEY) return _json({ e: "unauthorized" });
 
     // Batch mode: { k, q: [...] }
@@ -45,7 +56,19 @@ function _doSingle(req) {
   if (!req.u || typeof req.u !== "string" || !req.u.match(/^https?:\/\//i)) {
     return _json({ e: "bad url" });
   }
+
+  // UrlFetchApp hard limit ~2048 chars — return 414 so client can retry as POST
+  if (req.u.length > 2000) {
+    return _json({ s: 414, h: {}, b: "" });
+  }
+
   var opts = _buildOpts(req);
+
+  // HEAD is not supported by UrlFetchApp. Intercept and return empty success.
+  if (opts.method === "head") {
+    return _json({ s: 200, h: { "content-type": "text/plain" }, b: "" });
+  }
+
   var resp = UrlFetchApp.fetch(req.u, opts);
   return _json({
     s: resp.getResponseCode(),
@@ -56,39 +79,56 @@ function _doSingle(req) {
 
 function _doBatch(items) {
   var fetchArgs = [];
-  var errorMap = {};
+  var results = new Array(items.length);
 
   for (var i = 0; i < items.length; i++) {
     var item = items[i];
     if (!item.u || typeof item.u !== "string" || !item.u.match(/^https?:\/\//i)) {
-      errorMap[i] = "bad url";
+      results[i] = { e: "bad url" };
       continue;
     }
+    if (item.u.length > 2000) {
+      results[i] = { s: 414, h: {}, b: "" };
+      continue;
+    }
+
     var opts = _buildOpts(item);
+    if (opts.method === "head") {
+      results[i] = { s: 200, h: { "content-type": "text/plain" }, b: "" };
+      continue;
+    }
+
     opts.url = item.u;
     fetchArgs.push({ _i: i, _o: opts });
   }
 
-  // fetchAll() processes all requests in parallel inside Google
-  var responses = [];
+  // fetchAll() processes all requests in parallel inside Google.
+  // Wrapped in try-catch: if fetchAll itself throws (DNS failure, Apps Script
+  // memory limit, internal error), fill remaining slots with error objects
+  // so the client gets partial results instead of a top-level batch failure.
   if (fetchArgs.length > 0) {
-    responses = UrlFetchApp.fetchAll(fetchArgs.map(function(x) { return x._o; }));
-  }
-
-  var results = [];
-  var rIdx = 0;
-  for (var i = 0; i < items.length; i++) {
-    if (errorMap.hasOwnProperty(i)) {
-      results.push({ e: errorMap[i] });
-    } else {
-      var resp = responses[rIdx++];
-      results.push({
-        s: resp.getResponseCode(),
-        h: _respHeaders(resp),
-        b: Utilities.base64Encode(resp.getContent()),
-      });
+    try {
+      var responses = UrlFetchApp.fetchAll(fetchArgs.map(function(x) { return x._o; }));
+      for (var j = 0; j < responses.length; j++) {
+        var resp = responses[j];
+        var originalIndex = fetchArgs[j]._i;
+        results[originalIndex] = {
+          s: resp.getResponseCode(),
+          h: resp.getHeaders(),
+          b: Utilities.base64Encode(resp.getContent()),
+        };
+      }
+    } catch (err) {
+      // Fill any slot not yet written with an error entry
+      for (var k = 0; k < fetchArgs.length; k++) {
+        var idx = fetchArgs[k]._i;
+        if (results[idx] === undefined) {
+          results[idx] = { e: "fetch failed: " + String(err) };
+        }
+      }
     }
   }
+
   return _json({ q: results });
 }
 
@@ -99,6 +139,7 @@ function _buildOpts(req) {
     followRedirects: req.r !== false,
     validateHttpsCertificates: true,
     escaping: false,
+    deadline: FETCH_DEADLINE,
   };
   if (req.h && typeof req.h === "object") {
     var headers = {};

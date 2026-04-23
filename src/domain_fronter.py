@@ -10,7 +10,9 @@ returns the response.
 
 import asyncio
 import base64
+import gzip
 import hashlib
+import http
 import json
 import logging
 import re
@@ -18,6 +20,7 @@ import socket
 import ssl
 import time
 from dataclasses import dataclass
+import urllib.parse
 from urllib.parse import urlparse
 
 import codec
@@ -121,8 +124,8 @@ class DomainFronter:
         self.auth_key = config.get("auth_key", "")
         self.verify_ssl = config.get("verify_ssl", True)
 
-        # Connection pool — TTL-based, pre-warmed, with concurrency control
-        self._pool: list[tuple[asyncio.StreamReader, asyncio.StreamWriter, float]] = []
+        # Connection pool
+        self._pool: list[tuple[asyncio.StreamReader, asyncio.StreamWriter, float]] =[]
         self._pool_lock = asyncio.Lock()
         self._pool_max = POOL_MAX
         self._conn_ttl = CONN_TTL
@@ -135,19 +138,19 @@ class DomainFronter:
         self._warm_task: asyncio.Task | None = None
         self._bg_tasks: set[asyncio.Task] = set()
 
-        # Batch collector for grouping concurrent relay() calls
+        # Batch collector
         self._batch_lock = asyncio.Lock()
-        self._batch_pending: list[tuple[dict, asyncio.Future]] = []
+        self._batch_pending: list[tuple[dict, asyncio.Future]] =[]
         self._batch_task: asyncio.Task | None = None
         self._batch_window_micro = BATCH_WINDOW_MICRO
         self._batch_window_macro = BATCH_WINDOW_MACRO
         self._batch_max = BATCH_MAX
         self._batch_enabled = True
 
-        # Request coalescing — dedup concurrent identical GETs
+        # Request coalescing
         self._coalesce: dict[str, list[asyncio.Future]] = {}
 
-        # HTTP/2 multiplexing — one connection handles all requests
+        # HTTP/2 multiplexing
         self._h2 = None
         try:
             from h2_transport import H2Transport, H2_AVAILABLE
@@ -170,8 +173,6 @@ class DomainFronter:
 
         # Capability log for content encodings.
         log.info("Response codecs: %s", codec.supported_encodings())
-
-    # ── helpers ───────────────────────────────────────────────────
 
     def _ssl_ctx(self) -> ssl.SSLContext:
         ctx = ssl.create_default_context()
@@ -214,13 +215,11 @@ class DomainFronter:
         return sni
 
     async def _acquire(self):
-        """Get a healthy TLS connection from pool (TTL-checked) or open new."""
         now = asyncio.get_event_loop().time()
         async with self._pool_lock:
             while self._pool:
                 reader, writer, created = self._pool.pop()
                 if (now - created) < self._conn_ttl and not reader.at_eof():
-                    # Eagerly replace the connection we just took
                     asyncio.create_task(self._add_conn_to_pool())
                     return reader, writer, created
                 try:
@@ -237,7 +236,6 @@ class DomainFronter:
         return reader, writer, asyncio.get_event_loop().time()
 
     async def _release(self, reader, writer, created):
-        """Return a connection to the pool if still young and healthy."""
         now = asyncio.get_event_loop().time()
         if (now - created) >= self._conn_ttl or reader.at_eof():
             try:
@@ -430,7 +428,6 @@ class DomainFronter:
         """Build the /macros/s/<sid>/(dev|exec) path for a specific script ID."""
         return f"/macros/s/{sid}/{'dev' if self._dev_available else 'exec'}"
     async def _flush_pool(self):
-        """Close all pooled connections (they may be stale after errors)."""
         async with self._pool_lock:
             for _, writer, _ in self._pool:
                 try:
@@ -440,7 +437,6 @@ class DomainFronter:
             self._pool.clear()
 
     async def _refill_pool(self):
-        """Background: open connections in parallel to refill empty pool."""
         try:
             coros = [self._add_conn_to_pool() for _ in range(8)]
             await asyncio.gather(*coros, return_exceptions=True)
@@ -448,7 +444,6 @@ class DomainFronter:
             self._refilling = False
 
     async def _add_conn_to_pool(self):
-        """Open one TLS connection and add it to the pool."""
         try:
             r, w = await asyncio.wait_for(self._open(), timeout=5)
             t = asyncio.get_event_loop().time()
@@ -464,15 +459,12 @@ class DomainFronter:
             pass
 
     async def _pool_maintenance(self):
-        """Continuously maintain healthy pool levels in background."""
         while True:
             try:
                 await asyncio.sleep(3)
                 now = asyncio.get_event_loop().time()
-
-                # Purge expired / dead connections
                 async with self._pool_lock:
-                    alive = []
+                    alive =[]
                     for r, w, t in self._pool:
                         if (now - t) < self._conn_ttl and not r.at_eof():
                             alive.append((r, w, t))
@@ -483,21 +475,16 @@ class DomainFronter:
                                 pass
                     self._pool = alive
                     idle = len(self._pool)
-
-                # Refill if below minimum idle threshold
                 needed = max(0, self._pool_min_idle - idle)
                 if needed > 0:
-                    coros = [self._add_conn_to_pool()
-                             for _ in range(min(needed, 5))]
+                    coros = [self._add_conn_to_pool() for _ in range(min(needed, 5))]
                     await asyncio.gather(*coros, return_exceptions=True)
-
             except asyncio.CancelledError:
                 break
             except Exception:
                 pass
 
     async def _warm_pool(self):
-        """Pre-open TLS connections in the background. Never blocks relay()."""
         if self._warmed:
             return
         self._warmed = True
@@ -537,7 +524,6 @@ class DomainFronter:
                 log.debug("h2 close: %s", exc)
 
     async def _h2_connect(self):
-        """Connect the HTTP/2 transport in background."""
         try:
             await self._h2.ensure_connected()
             log.info("H2 multiplexing active — one conn handles all requests")
@@ -545,30 +531,21 @@ class DomainFronter:
             log.warning("H2 connect failed (%s), using H1 pool fallback", e)
 
     async def _h2_connect_and_warm(self):
-        """Connect H2, pre-warm the Apps Script container, start keepalive."""
         await self._h2_connect()
         if self._h2 and self._h2.is_connected:
             asyncio.create_task(self._prewarm_script())
             asyncio.create_task(self._keepalive_loop())
 
     async def _prewarm_script(self):
-        """Pre-warm Apps Script and detect /dev fast path (no redirect)."""
-        payload = json.dumps(
-            {"m": "HEAD", "u": "http://example.com/", "k": self.auth_key}
-        ).encode()
+        payload = json.dumps({"m": "HEAD", "u": "http://example.com/", "k": self.auth_key}).encode()
         hdrs = {"content-type": "application/json"}
         sid = self._script_ids[0]
 
-        # Test /dev endpoint — returns data inline (no 302 redirect).
-        # If it works, saves ~400ms per request by eliminating one round trip.
         try:
             dev_path = f"/macros/s/{sid}/dev"
             t0 = time.perf_counter()
             status, _, body = await asyncio.wait_for(
-                self._h2.request(
-                    method="POST", path=dev_path, host=self.http_host,
-                    headers=hdrs, body=payload,
-                ),
+                self._h2.request(method="POST", path=dev_path, host=self.http_host, headers=hdrs, body=payload),
                 timeout=15,
             )
             dt = (time.perf_counter() - t0) * 1000
@@ -580,15 +557,11 @@ class DomainFronter:
         except Exception as e:
             log.debug("/dev test failed: %s", e)
 
-        # Fallback: warm up with /exec
         try:
             exec_path = f"/macros/s/{sid}/exec"
             t0 = time.perf_counter()
             await asyncio.wait_for(
-                self._h2.request(
-                    method="POST", path=exec_path, host=self.http_host,
-                    headers=hdrs, body=payload,
-                ),
+                self._h2.request(method="POST", path=exec_path, host=self.http_host, headers=hdrs, body=payload),
                 timeout=15,
             )
             dt = (time.perf_counter() - t0) * 1000
@@ -597,7 +570,6 @@ class DomainFronter:
             log.debug("Pre-warm failed: %s", e)
 
     async def _keepalive_loop(self):
-        """Send periodic pings to keep Apps Script warm + H2 connection alive."""
         while True:
             try:
                 await asyncio.sleep(240)  # 4 minutes — saves ~90 quota hits/day vs 180s
@@ -608,19 +580,12 @@ class DomainFronter:
                     except Exception:
                         continue
 
-                # H2 PING to keep connection alive
                 await self._h2.ping()
-
-                # Apps Script keepalive — warm the container
                 payload = {"m": "HEAD", "u": "http://example.com/", "k": self.auth_key}
                 path = self._exec_path("example.com")
                 t0 = time.perf_counter()
                 await asyncio.wait_for(
-                    self._h2.request(
-                        method="POST", path=path, host=self.http_host,
-                        headers={"content-type": "application/json"},
-                        body=json.dumps(payload).encode(),
-                    ),
+                    self._h2.request(method="POST", path=path, host=self.http_host, headers={"content-type": "application/json"}, body=json.dumps(payload).encode()),
                     timeout=20,
                 )
                 dt = (time.perf_counter() - t0) * 1000
@@ -633,7 +598,7 @@ class DomainFronter:
     async def _do_warm(self):
         """Open WARM_POOL_COUNTnnections in parallel — failures are fine."""
         count = 30
-        coros = [self._add_conn_to_pool() for _ in range(count)]
+        coros =[self._add_conn_to_pool() for _ in range(count)]
         results = await asyncio.gather(*coros, return_exceptions=True)
         opened = sum(1 for r in results if not isinstance(r, Exception))
         log.info("Pre-warmed %d/%d TLS connections", opened, count)
@@ -643,23 +608,215 @@ class DomainFronter:
 
     # ── Apps Script relay (apps_script mode) ──────────────────────
 
-    async def relay(self, method: str, url: str,
-                    headers: dict, body: bytes = b"") -> bytes:
-        """Relay an HTTP request through Apps Script.
-
-        Features:
-          - Pre-warms TLS connections on first call
-          - Coalesces concurrent identical GET requests
-          - Batches concurrent calls via fetchAll() (40ms window)
-          - Retries once on connection failure
-          - Concurrency-limited via semaphore
-
-        Returns a raw HTTP response (status + headers + body).
+    def _try_split_long_param(self, url: str) -> list[str] | None:
+        """Find the param with the most comma-separated values and split.
+        CRITICAL FIX: Never split JSON strings (starts with { or[).
+        Uses a 1950 character limit.
         """
+        parsed = urllib.parse.urlparse(url)
+        if not parsed.query:
+            return None
+
+        params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+
+        valid_keys = []
+        for k, v in params.items():
+            if not v or "," not in v[0]:
+                continue
+            val = v[0].strip()
+            # Do not split JSON objects or arrays!
+            if val.startswith("{") or val.startswith("["):
+                continue
+            valid_keys.append(k)
+
+        if not valid_keys:
+            return None
+
+        split_key = max(valid_keys, key=lambda k: len(params[k][0].split(",")))
+        all_values = params[split_key][0].split(",")
+        
+        if len(all_values) <= 1:
+            return None
+
+        fixed_params = {k: v for k, v in params.items() if k != split_key}
+        base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        fixed_qs = urllib.parse.urlencode(fixed_params, doseq=True)
+        sep = "&" if fixed_qs else ""
+        base_len = (len(base_url) + 1 + len(fixed_qs) + len(sep) + len(split_key) + 1)
+
+        urls: list[str] =[]
+        current_group: list[str] =[]
+        current_len = base_len
+
+        for val in all_values:
+            encoded_val = urllib.parse.quote(val, safe="")
+            segment_len = len(encoded_val) + 1
+            if current_len + segment_len > 1950 and current_group:
+                joined = urllib.parse.quote(",".join(current_group), safe=",")
+                urls.append(f"{base_url}?{fixed_qs}{sep}{split_key}={joined}")
+                current_group = [val]
+                current_len = base_len + len(encoded_val)
+            else:
+                current_group.append(val)
+                current_len += segment_len
+
+        if current_group:
+            joined = urllib.parse.quote(",".join(current_group), safe=",")
+            urls.append(f"{base_url}?{fixed_qs}{sep}{split_key}={joined}")
+
+        return urls if len(urls) > 1 else None
+
+    async def _fetch_and_stitch(self, urls: list[str], headers: dict, req_origin: str = "*") -> bytes:
+        """Fetch multiple URLs in parallel and safely merge their bodies."""
+        async def fetch_one(u: str) -> bytes:
+            payload = self._build_payload("GET", u, headers, b"")
+            return await self._batch_submit(payload)
+
+        responses = await asyncio.gather(*[fetch_one(u) for u in urls], return_exceptions=True)
+
+        content_type = b"application/octet-stream"
+        body_parts: list[bytes] =[]
+        separator = b""
+        is_json = False
+
+        for i, resp in enumerate(responses):
+            if isinstance(resp, Exception):
+                continue
+            status, hdrs, chunk_body = self._split_raw_response(resp)
+            if status != 200:
+                continue
+            
+            if not body_parts:
+                ct = hdrs.get("content-type", "application/octet-stream").lower()
+                content_type = ct.encode()
+                if "javascript" in ct:
+                    separator = b"\n;\n"
+                elif "css" in ct:
+                    separator = b"\n"
+                elif "json" in ct:
+                    is_json = True
+                    
+            body_parts.append(chunk_body)
+
+        if not body_parts:
+            return self._error_response(502, "All split requests failed", req_origin)
+
+        # Merge JSON objects/arrays safely
+        if is_json:
+            try:
+                merged_list =[]
+                merged_dict = {}
+                is_array = False
+                for chunk in body_parts:
+                    if not chunk.strip():
+                        continue
+                    data = json.loads(chunk)
+                    if isinstance(data, list):
+                        is_array = True
+                        merged_list.extend(data)
+                    elif isinstance(data, dict):
+                        merged_dict.update(data)
+                final_body = json.dumps(merged_list if is_array else merged_dict).encode()
+            except Exception as e:
+                log.error("Failed to merge JSON chunks: %s", e)
+                final_body = b"".join(body_parts)
+        else:
+            final_body = separator.join(body_parts)
+
+        return (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: " + content_type + b"\r\n"
+            b"Content-Length: " + str(len(final_body)).encode() + b"\r\n"
+            b"Cache-Control: public, max-age=31536000\r\n"
+            b"Access-Control-Allow-Origin: " + req_origin.encode() + b"\r\n"
+            b"Access-Control-Allow-Credentials: true\r\n"
+            b"\r\n"
+        ) + final_body
+
+    def _convert_long_get_to_post(self, method: str, url: str, headers: dict, body: bytes) -> tuple[str, str, dict, bytes]:
+        """Fallback for GET URLs exceeding 1950 chars."""
+        if method != "GET" or len(url) <= 1950 or body:
+            return method, url, headers, body
+
+        parsed = urllib.parse.urlparse(url)
+        if not parsed.query:
+            return method, url, headers, body
+
+        params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        is_json_api = any(v[0].strip().startswith(("{", "[")) for v in params.values() if v)
+        base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        new_headers = dict(headers) if headers else {}
+
+        if is_json_api:
+            body_dict: dict = {}
+            for k, v in params.items():
+                raw_val = v[0] if len(v) == 1 else v
+                try:
+                    body_dict[k] = json.loads(raw_val)
+                except (json.JSONDecodeError, TypeError):
+                    body_dict[k] = raw_val
+            new_headers["Content-Type"] = "application/json"
+            new_body = json.dumps(body_dict).encode()
+        else:
+            new_headers["Content-Type"] = "application/x-www-form-urlencoded"
+            new_body = parsed.query.encode()
+
+        return "POST", base_url, new_headers, new_body
+
+    # ── Apps Script relay ─────────────────────────────────────────
+
+    @staticmethod
+    def _extract_origin(headers: dict | None) -> str:
+        if not headers:
+            return "*"
+        for k, v in headers.items():
+            if k.lower() == "origin":
+                return v
+        return "*"
+
+    async def relay(self, method: str, url: str, headers: dict, body: bytes = b"") -> bytes:
+        req_origin = self._extract_origin(headers)
+
+        if method == "OPTIONS":
+            req_cors_headers = "*"
+            if headers:
+                for k, v in headers.items():
+                    if k.lower() == "access-control-request-headers":
+                        req_cors_headers = v
+                        break
+
+            return (
+                f"HTTP/1.1 204 No Content\r\n"
+                f"Access-Control-Allow-Origin: {req_origin}\r\n"
+                f"Access-Control-Allow-Credentials: true\r\n"
+                f"Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n"
+                f"Access-Control-Allow-Headers: {req_cors_headers}\r\n"
+                f"Access-Control-Max-Age: 86400\r\n"
+                f"\r\n"
+            ).encode()
+
+        if method == "HEAD":
+            status = "204 No Content" if "generate_204" in url else "200 OK"
+            return (
+                f"HTTP/1.1 {status}\r\n"
+                f"Access-Control-Allow-Origin: {req_origin}\r\n"
+                f"Access-Control-Allow-Credentials: true\r\n"
+                f"Access-Control-Allow-Headers: *\r\n"
+                f"Connection: close\r\n"
+                f"\r\n"
+            ).encode()
+
         if not self._warmed:
             await self._warm_pool()
 
+        if method == "GET" and not body and len(url) > 1950:
+            split_urls = self._try_split_long_param(url)
+            if split_urls:
+                return await self._fetch_and_stitch(split_urls, headers, req_origin)
+            method, url, headers, body = self._convert_long_get_to_post(method, url, headers, body)
+
         payload = self._build_payload(method, url, headers, body)
+        has_range = headers and any(k.lower() == "range" for k in headers)
 
         t0 = time.perf_counter()
         errored = False
@@ -674,12 +831,6 @@ class DomainFronter:
             # Coalesce concurrent GETs for the same URL.
             # CRITICAL: do NOT coalesce when a Range header is present —
             # parallel range downloads MUST each hit the server independently.
-            has_range = False
-            if headers:
-                for k in headers:
-                    if k.lower() == "range":
-                        has_range = True
-                        break
             if method == "GET" and not body and not has_range:
                 result = await self._coalesced_submit(url, payload)
                 return result
@@ -732,29 +883,10 @@ class DomainFronter:
                 f.set_result(result)
         return result
 
-    async def relay_parallel(self, method: str, url: str,
-                             headers: dict, body: bytes = b"",
-                             chunk_size: int = 256 * 1024,
-                             max_parallel: int = 16) -> bytes:
-        """Relay with parallel range acceleration for large downloads.
-
-        Strategy:
-          1. Send initial GET with Range: bytes=0-<chunk_size-1>
-          2. If target returns 206 (supports ranges), fetch remaining
-             chunks concurrently via HTTP/2 multiplexing.
-          3. If target returns 200 (no range support) or small file,
-             return the single response.
-
-        Since each Apps Script call takes ~2s regardless of payload size,
-        we use:
-          - 256 KB chunks (safe under Apps Script response limit)
-          - Up to 16 chunks in flight at once via H2 multiplexing
-          - Aggregate throughput of ~2 MB per round-trip (~2-3s)
-        """
+    async def relay_parallel(self, method: str, url: str, headers: dict, body: bytes = b"", chunk_size: int = 256 * 1024, max_parallel: int = 16) -> bytes:
         if method != "GET" or body:
             return await self.relay(method, url, headers, body)
 
-        # Probe: first chunk with Range header
         range_headers = dict(headers) if headers else {}
         range_headers["Range"] = f"bytes=0-{chunk_size - 1}"
         first_resp = await self.relay("GET", url, range_headers, b"")
@@ -767,7 +899,6 @@ class DomainFronter:
         if status != 206:
             return first_resp
 
-        # Parse total size from Content-Range: "bytes 0-262143/1048576"
         content_range = resp_hdrs.get("content-range", "")
         m = re.search(r"/(\d+)", content_range)
         if not m:
@@ -782,73 +913,50 @@ class DomainFronter:
         if total_size <= chunk_size or len(resp_body) >= total_size:
             return self._rewrite_206_to_200(first_resp)
 
-        # Calculate remaining ranges
-        ranges = []
+        ranges =[]
         start = len(resp_body)
         while start < total_size:
             end = min(start + chunk_size - 1, total_size - 1)
             ranges.append((start, end))
             start = end + 1
 
-        log.info("Parallel download: %d bytes, %d chunks of %d KB",
-                 total_size, len(ranges) + 1, chunk_size // 1024)
-
-        # Concurrency-limited parallel fetch
         sem = asyncio.Semaphore(max_parallel)
 
         async def fetch_range(s, e, max_tries: int = 3):
             async with sem:
-                rh_base = dict(headers) if headers else {}
-                rh_base["Range"] = f"bytes={s}-{e}"
+                rh = dict(headers) if headers else {}
+                rh["Range"] = f"bytes={s}-{e}"
                 expected = e - s + 1
                 last_err = None
                 for attempt in range(max_tries):
                     try:
-                        raw = await self.relay("GET", url, rh_base, b"")
+                        raw = await self.relay("GET", url, rh, b"")
                         _, _, chunk_body = self._split_raw_response(raw)
                         if len(chunk_body) == expected:
                             return chunk_body
-                        last_err = (
-                            f"short chunk {len(chunk_body)}/{expected} B"
-                        )
-                    except Exception as e_:
-                        last_err = repr(e_)
-                    log.warning("Range %d-%d retry %d/%d: %s",
-                                s, e, attempt + 1, max_tries, last_err)
+                        last_err = f"short chunk {len(chunk_body)}/{expected} B"
+                    except Exception as ex:
+                        last_err = repr(ex)
                     await asyncio.sleep(0.3 * (attempt + 1))
-                raise RuntimeError(
-                    f"chunk {s}-{e} failed after {max_tries} tries: {last_err}"
-                )
+                raise RuntimeError(f"chunk {s}-{e} failed: {last_err}")
 
-        t0 = asyncio.get_event_loop().time()
-        results = await asyncio.gather(
-            *[fetch_range(s, e) for s, e in ranges],
-            return_exceptions=True,
-        )
-        elapsed = asyncio.get_event_loop().time() - t0
+        chunk_results = await asyncio.gather(*[fetch_range(s, e) for s, e in ranges], return_exceptions=True)
 
-        # Assemble full body
-        parts = [resp_body]
-        for i, r in enumerate(results):
+        parts =[resp_body]
+        for i, r in enumerate(chunk_results):
             if isinstance(r, Exception):
-                log.error("Range chunk %d failed: %s", i, r)
-                return self._error_response(502, f"Parallel download failed: {r}")
+                req_origin = self._extract_origin(headers)
+                return self._error_response(502, f"Parallel download failed: {r}", req_origin)
             parts.append(r)
 
         full_body = b"".join(parts)
-        kbs = (len(full_body) / 1024) / elapsed if elapsed > 0 else 0
-        log.info("Parallel download complete: %d B in %.2fs = %.1f KB/s",
-                 len(full_body), elapsed, kbs)
 
-        # Return as 200 OK (client sent a normal GET)
-        result = f"HTTP/1.1 200 OK\r\n"
-        skip = {"transfer-encoding", "connection", "keep-alive",
-                "content-length", "content-encoding", "content-range"}
+        skip = {"transfer-encoding", "connection", "keep-alive", "content-length", "content-encoding", "content-range"}
+        result = "HTTP/1.1 200 OK\r\n"
         for k, v in resp_hdrs.items():
             if k.lower() not in skip:
                 result += f"{k}: {v}\r\n"
-        result += f"Content-Length: {len(full_body)}\r\n"
-        result += "\r\n"
+        result += f"Content-Length: {len(full_body)}\r\n\r\n"
         return result.encode() + full_body
 
     @staticmethod
@@ -898,10 +1006,11 @@ class DomainFronter:
             # but NOT brotli/zstd — forwarding "br" causes garbled responses.
             filt = {k: v for k, v in headers.items()
                     if k.lower() != "accept-encoding"}
+            filt["accept-encoding"] = "identity"
             payload["h"] = filt if filt else headers
         if body:
             payload["b"] = base64.b64encode(body).decode()
-            ct = headers.get("Content-Type") or headers.get("content-type")
+            ct = (headers or {}).get("Content-Type") or (headers or {}).get("content-type")
             if ct:
                 payload["ct"] = ct
         return payload
@@ -945,18 +1054,13 @@ class DomainFronter:
     # ── Batch collector ───────────────────────────────────────────
 
     async def _batch_submit(self, payload: dict) -> bytes:
-        """Submit a request to the batch collector. Returns raw HTTP response."""
-        # If batching is disabled (old Code.gs), go direct
         if not self._batch_enabled:
             return await self._relay_with_retry(payload)
 
         future = asyncio.get_event_loop().create_future()
-
         async with self._batch_lock:
             self._batch_pending.append((payload, future))
-
             if len(self._batch_pending) >= self._batch_max:
-                # Batch is full — flush now
                 batch = self._batch_pending[:]
                 self._batch_pending.clear()
                 if self._batch_task and not self._batch_task.done():
@@ -970,17 +1074,9 @@ class DomainFronter:
         return await future
 
     async def _batch_timer(self):
-        """Two-tier batch window: 5ms micro + 45ms macro.
-
-        Single requests (link clicks) get only 5ms delay.
-        Burst traffic (page sub-resources, range chunks) gets a 50ms
-        window to accumulate, enabling much larger batches.
-        """
-        # Tier 1: micro-window — detect if burst or single
         await asyncio.sleep(self._batch_window_micro)
         async with self._batch_lock:
             if len(self._batch_pending) <= 1:
-                # Single request — send immediately (only 5ms delay)
                 if self._batch_pending:
                     batch = self._batch_pending[:]
                     self._batch_pending.clear()
@@ -988,7 +1084,6 @@ class DomainFronter:
                     self._spawn(self._batch_send(batch))
                 return
 
-        # Tier 2: burst detected — wait more to accumulate
         await asyncio.sleep(self._batch_window_macro - self._batch_window_micro)
         async with self._batch_lock:
             if self._batch_pending:
@@ -998,7 +1093,6 @@ class DomainFronter:
                 self._spawn(self._batch_send(batch))
 
     async def _batch_send(self, batch: list):
-        """Send a batch of requests. Uses fetchAll for multi, single for one."""
         if len(batch) == 1:
             payload, future = batch[0]
             try:
@@ -1007,35 +1101,29 @@ class DomainFronter:
                     future.set_result(result)
             except Exception as e:
                 if not future.done():
-                    future.set_result(self._error_response(502, str(e)))
+                    req_origin = self._extract_origin(payload.get("h", {}))
+                    future.set_result(self._error_response(502, str(e), req_origin))
         else:
-            log.info("Batch relay: %d requests", len(batch))
             try:
                 results = await self._relay_batch([p for p, _ in batch])
                 for (_, future), result in zip(batch, results):
                     if not future.done():
                         future.set_result(result)
             except Exception as e:
-                log.warning("Batch relay failed, disabling batch mode. "
-                            "Redeploy Code.gs for batch support. Error: %s", e)
                 self._batch_enabled = False
-                # Fallback: send individually
-                tasks = []
-                for payload, future in batch:
-                    tasks.append(self._relay_fallback(payload, future))
-                await asyncio.gather(*tasks)
+                await asyncio.gather(*[self._relay_fallback(p, f) for p, f in batch])
 
-    async def _relay_fallback(self, payload, future):
-        """Fallback: relay a single request from a failed batch."""
+    async def _relay_fallback(self, payload: dict, future: asyncio.Future):
         try:
             result = await self._relay_with_retry(payload)
             if not future.done():
                 future.set_result(result)
         except Exception as e:
             if not future.done():
-                future.set_result(self._error_response(502, str(e)))
+                req_origin = self._extract_origin(payload.get("h", {}))
+                future.set_result(self._error_response(502, str(e), req_origin))
 
-    # ── Core relay with retry ─────────────────────────────────────
+    # ── Core relay ────────────────────────────────────────────────
 
     async def _relay_with_retry(self, payload: dict) -> bytes:
         """Single relay with one retry on failure. Uses H2 if available."""
@@ -1062,16 +1150,13 @@ class DomainFronter:
                     )
                 except Exception as e:
                     if attempt == 0:
-                        log.debug("H2 relay failed (%s), reconnecting", e)
                         try:
                             await self._h2.reconnect()
                         except Exception:
-                            log.warning("H2 reconnect failed, falling back to H1")
                             break
                     else:
                         raise
 
-        # HTTP/1.1 fallback (pool-based)
         async with self._semaphore:
             for attempt in range(2):
                 try:
@@ -1080,8 +1165,6 @@ class DomainFronter:
                     )
                 except Exception as e:
                     if attempt == 0:
-                        log.debug("Relay attempt 1 failed (%s: %s), retrying",
-                                  type(e).__name__, e)
                         await self._flush_pool()
                     else:
                         raise
@@ -1134,14 +1217,10 @@ class DomainFronter:
                 await asyncio.gather(*pending, return_exceptions=True)
 
     async def _relay_single_h2(self, payload: dict) -> bytes:
-        """Execute a relay through HTTP/2 multiplexing.
-
-        Uses the shared H2 connection — no pool checkout needed.
-        Many concurrent calls all share one TLS connection.
-        """
         full_payload = dict(payload)
         full_payload["k"] = self.auth_key
         json_body = json.dumps(full_payload).encode()
+        req_origin = self._extract_origin(payload.get("h", {}))
 
         path = self._exec_path(payload.get("u"))
 
@@ -1151,7 +1230,7 @@ class DomainFronter:
             body=json_body,
         )
 
-        return self._parse_relay_response(body)
+        return self._parse_relay_response(body, req_origin)
 
     async def _relay_single_h2_with_sid(self, payload: dict,
                                         sid: str) -> bytes:
@@ -1175,11 +1254,10 @@ class DomainFronter:
         return self._parse_relay_response(body)
 
     async def _relay_single(self, payload: dict) -> bytes:
-        """Execute a single relay POST → redirect → parse."""
-        # Add auth key
         full_payload = dict(payload)
         full_payload["k"] = self.auth_key
         json_body = json.dumps(full_payload).encode()
+        req_origin = self._extract_origin(payload.get("h", {}))
 
         path = self._exec_path(payload.get("u"))
         reader, writer, created = await self._acquire()
@@ -1199,14 +1277,12 @@ class DomainFronter:
 
             status, resp_headers, resp_body = await self._read_http_response(reader)
 
-            # Follow redirect chain on the SAME connection
             for _ in range(5):
                 if status not in (301, 302, 303, 307, 308):
                     break
                 location = resp_headers.get("location")
                 if not location:
                     break
-
                 parsed = urlparse(location)
                 rpath = parsed.path + ("?" + parsed.query if parsed.query else "")
                 if status in (307, 308):
@@ -1229,7 +1305,7 @@ class DomainFronter:
                 status, resp_headers, resp_body = await self._read_http_response(reader)
 
             await self._release(reader, writer, created)
-            return self._parse_relay_response(resp_body)
+            return self._parse_relay_response(resp_body, req_origin)
 
         except Exception:
             try:
@@ -1239,15 +1315,10 @@ class DomainFronter:
             raise
 
     async def _relay_batch(self, payloads: list[dict]) -> list[bytes]:
-        """Send multiple requests in one POST using Apps Script fetchAll."""
-        batch_payload = {
-            "k": self.auth_key,
-            "q": payloads,
-        }
+        batch_payload = {"k": self.auth_key, "q": payloads}
         json_body = json.dumps(batch_payload).encode()
         path = self._exec_path(payloads[0].get("u") if payloads else None)
 
-        # Try HTTP/2 first
         if self._h2 and self._h2.is_connected:
             try:
                 status, headers, body = await asyncio.wait_for(
@@ -1259,10 +1330,9 @@ class DomainFronter:
                     timeout=30,
                 )
                 return self._parse_batch_body(body, payloads)
-            except Exception as e:
-                log.debug("H2 batch failed (%s), falling back to H1", e)
+            except Exception:
+                pass
 
-        # HTTP/1.1 fallback
         async with self._semaphore:
             reader, writer, created = await self._acquire()
             try:
@@ -1280,7 +1350,6 @@ class DomainFronter:
 
                 status, resp_headers, resp_body = await self._read_http_response(reader)
 
-                # Follow redirects
                 for _ in range(5):
                     if status not in (301, 302, 303, 307, 308):
                         break
@@ -1309,7 +1378,6 @@ class DomainFronter:
                     status, resp_headers, resp_body = await self._read_http_response(reader)
 
                 await self._release(reader, writer, created)
-
             except Exception:
                 try:
                     writer.close()
@@ -1319,9 +1387,7 @@ class DomainFronter:
 
         return self._parse_batch_body(resp_body, payloads)
 
-    def _parse_batch_body(self, resp_body: bytes,
-                          payloads: list[dict]) -> list[bytes]:
-        """Parse a batch response body into individual results."""
+    def _parse_batch_body(self, resp_body: bytes, payloads: list[dict]) -> list[bytes]:
         text = resp_body.decode(errors="replace").strip()
         try:
             data = json.loads(text)
@@ -1333,25 +1399,22 @@ class DomainFronter:
                 data = None
         if not data:
             raise RuntimeError(f"Bad batch response: {text[:200]}")
-
         if "e" in data:
             raise RuntimeError(f"Batch error: {data['e']}")
-
-        items = data.get("q", [])
+            
+        items = data.get("q",[])
         if len(items) != len(payloads):
-            raise RuntimeError(
-                f"Batch size mismatch: {len(items)} vs {len(payloads)}"
-            )
-
-        results = []
-        for item in items:
-            results.append(self._parse_relay_json(item))
+            raise RuntimeError(f"Batch size mismatch: {len(items)} vs {len(payloads)}")
+            
+        results =[]
+        for item, payload in zip(items, payloads):
+            req_origin = self._extract_origin(payload.get("h", {}))
+            results.append(self._parse_relay_json(item, req_origin))
         return results
 
-    # ── HTTP response reading (keep-alive safe) ──────────────────
+    # ── HTTP response reading ─────────────────────────────────────
 
     async def _read_http_response(self, reader: asyncio.StreamReader):
-        """Read one HTTP response. Keep-alive safe (no read-until-EOF)."""
         raw = b""
         while b"\r\n\r\n" not in raw:
             if len(raw) > 65536:  # 64 KB header size limit
@@ -1367,8 +1430,7 @@ class DomainFronter:
         header_section, body = raw.split(b"\r\n\r\n", 1)
         lines = header_section.split(b"\r\n")
 
-        status_line = lines[0].decode(errors="replace")
-        m = re.search(r"\d{3}", status_line)
+        m = re.search(r"\d{3}", lines[0].decode(errors="replace"))
         status = int(m.group()) if m else 0
 
         headers = {}
@@ -1377,23 +1439,26 @@ class DomainFronter:
                 k, v = line.decode(errors="replace").split(":", 1)
                 headers[k.strip().lower()] = v.strip()
 
-        content_length = headers.get("content-length")
         transfer_encoding = headers.get("transfer-encoding", "")
+        content_length = headers.get("content-length")
 
         if "chunked" in transfer_encoding:
             body = await self._read_chunked(reader, body)
         elif content_length:
-            remaining = int(content_length) - len(body)
-            while remaining > 0:
-                chunk = await asyncio.wait_for(
-                    reader.read(min(remaining, 65536)), timeout=20
-                )
-                if not chunk:
-                    break
-                body += chunk
-                remaining -= len(chunk)
+            target = int(content_length)
+            if len(body) > target:
+                body = body[:target]
+            else:
+                remaining = target - len(body)
+                while remaining > 0:
+                    chunk = await asyncio.wait_for(
+                        reader.read(min(remaining, 65536)), timeout=20
+                    )
+                    if not chunk:
+                        break
+                    body += chunk
+                    remaining -= len(chunk)
         else:
-            # No framing — short timeout read (keep-alive safe)
             while True:
                 try:
                     chunk = await asyncio.wait_for(reader.read(65536), timeout=2)
@@ -1410,8 +1475,7 @@ class DomainFronter:
 
         return status, headers, body
 
-    async def _read_chunked(self, reader, buf=b""):
-        """Incrementally read chunked transfer-encoding."""
+    async def _read_chunked(self, reader: asyncio.StreamReader, buf: bytes = b"") -> bytes:
         result = b""
         _MAX_BODY = 200 * 1024 * 1024  # 200 MB total body cap
         while True:
@@ -1422,7 +1486,7 @@ class DomainFronter:
                 buf += data
 
             end = buf.find(b"\r\n")
-            size_str = buf[:end].decode(errors="replace").strip()
+            size_str = buf[:end].split(b";", 1)[0].decode(errors="replace").strip()
             buf = buf[end + 2:]
 
             if not size_str:
@@ -1431,13 +1495,22 @@ class DomainFronter:
                 size = int(size_str, 16)
             except ValueError:
                 break
+                
             if size == 0:
+                while b"\r\n\r\n" not in buf and buf != b"\r\n":
+                    try:
+                        data = await asyncio.wait_for(reader.read(8192), timeout=2)
+                        if not data:
+                            break
+                        buf += data
+                    except asyncio.TimeoutError:
+                        break
                 break
             if size > _MAX_BODY or len(result) + size > _MAX_BODY:
                 log.warning("Chunked body exceeds %d MB cap — truncating", _MAX_BODY // (1024 * 1024))
                 break
 
-            while len(buf) < size + 2:
+            while len(buf) < size:
                 data = await asyncio.wait_for(reader.read(65536), timeout=20)
                 if not data:
                     result += buf[:size]
@@ -1445,49 +1518,55 @@ class DomainFronter:
                 buf += data
 
             result += buf[:size]
-            buf = buf[size + 2:]
+            buf = buf[size:]
+
+            while len(buf) < 2:
+                data = await asyncio.wait_for(reader.read(8192), timeout=20)
+                if not data:
+                    return result
+                buf += data
+            buf = buf[2:]
 
         return result
 
     # ── Response parsing ──────────────────────────────────────────
 
-    def _parse_relay_response(self, body: bytes) -> bytes:
-        """Parse JSON from Apps Script and reconstruct an HTTP response."""
+    def _parse_relay_response(self, body: bytes, req_origin: str = "*") -> bytes:
         text = body.decode(errors="replace").strip()
         if not text:
-            return self._error_response(502, "Empty response from relay")
-
+            return self._error_response(502, "Empty response from relay", req_origin)
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
-            m = re.search(r'\{.*\}', text, re.DOTALL)
+            m = re.search(r"\{.*\}", text, re.DOTALL)
             if m:
                 try:
                     data = json.loads(m.group())
                 except json.JSONDecodeError:
-                    return self._error_response(502, f"Bad JSON: {text[:200]}")
+                    return self._error_response(502, f"Bad JSON: {text[:200]}", req_origin)
             else:
-                return self._error_response(502, f"No JSON: {text[:200]}")
+                return self._error_response(502, f"No JSON: {text[:200]}", req_origin)
+        return self._parse_relay_json(data, req_origin)
 
-        return self._parse_relay_json(data)
-
-    def _parse_relay_json(self, data: dict) -> bytes:
-        """Convert a parsed relay JSON dict to raw HTTP response bytes."""
+    def _parse_relay_json(self, data: dict, req_origin: str = "*") -> bytes:
         if "e" in data:
-            return self._error_response(502, f"Relay error: {data['e']}")
+            return self._error_response(502, f"Relay error: {data['e']}", req_origin)
 
         status = data.get("s", 200)
         resp_headers = data.get("h", {})
         resp_body = base64.b64decode(data.get("b", ""))
 
-        status_text = {200: "OK", 206: "Partial Content",
-                       301: "Moved", 302: "Found", 304: "Not Modified",
-                       400: "Bad Request", 403: "Forbidden", 404: "Not Found",
-                       500: "Internal Server Error"}.get(status, "OK")
-        result = f"HTTP/1.1 {status} {status_text}\r\n"
+        try:
+            status_text = http.HTTPStatus(status).phrase
+        except ValueError:
+            status_text = "Unknown"
 
-        skip = {"transfer-encoding", "connection", "keep-alive",
-                "content-length", "content-encoding"}
+        skip = {
+            "transfer-encoding", "connection", "keep-alive",
+            "content-length", "content-encoding",
+            "access-control-allow-origin", "access-control-allow-credentials",
+        }
+        result = f"HTTP/1.1 {status} {status_text}\r\n"
         for k, v in resp_headers.items():
             if k.lower() in skip:
                 continue
@@ -1504,6 +1583,9 @@ class DomainFronter:
                 values = expanded
             for val in values:
                 result += f"{k}: {val}\r\n"
+
+        result += f"Access-Control-Allow-Origin: {req_origin}\r\n"
+        result += f"Access-Control-Allow-Credentials: true\r\n"
         result += f"Content-Length: {len(resp_body)}\r\n"
         result += "\r\n"
         return result.encode() + resp_body
@@ -1540,12 +1622,18 @@ class DomainFronter:
                 headers[k.strip().lower()] = v.strip()
         return status, headers, body
 
-    def _error_response(self, status: int, message: str) -> bytes:
+    def _error_response(self, status: int, message: str, req_origin: str = "*") -> bytes:
         body = f"<html><body><h1>{status}</h1><p>{message}</p></body></html>"
+        try:
+            status_text = http.HTTPStatus(status).phrase
+        except ValueError:
+            status_text = "Error"
         return (
-            f"HTTP/1.1 {status} Error\r\n"
+            f"HTTP/1.1 {status} {status_text}\r\n"
             f"Content-Type: text/html\r\n"
             f"Content-Length: {len(body)}\r\n"
+            f"Access-Control-Allow-Origin: {req_origin}\r\n"
+            f"Access-Control-Allow-Credentials: true\r\n"
             f"\r\n"
             f"{body}"
         ).encode()
