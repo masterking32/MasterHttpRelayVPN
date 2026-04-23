@@ -661,12 +661,17 @@ class ProxyServer:
         #   • port 443 → MITM + relay through Apps Script
         #   • port 80  → plain-HTTP relay through Apps Script
         #   • other    → give up (non-HTTP; can't be relayed)
+        # We use a shorter connect timeout for IP literals (4 s) because
+        # when the route is DPI-dropped, waiting longer doesn't help and
+        # clients like Telegram speed up DC-rotation when we fail fast.
         # We remember per-IP failures for a short while so subsequent
         # connects skip the doomed direct attempt.
         if _is_ip_literal(host):
             if not self._direct_temporarily_disabled(host):
                 log.info("Direct tunnel → %s:%d (IP literal)", host, port)
-                ok = await self._do_direct_tunnel(host, port, reader, writer)
+                ok = await self._do_direct_tunnel(
+                    host, port, reader, writer, timeout=4.0,
+                )
                 if ok:
                     return
                 self._remember_direct_failure(host, ttl=300)
@@ -900,7 +905,8 @@ class ProxyServer:
     async def _do_direct_tunnel(self, host: str, port: int,
                                 reader: asyncio.StreamReader,
                                 writer: asyncio.StreamWriter,
-                                connect_ip: str | None = None):
+                                connect_ip: str | None = None,
+                                timeout: float | None = None):
         """Pipe raw TLS bytes directly to the target server.
 
         connect_ip overrides DNS: the TCP connection goes to that IP
@@ -910,9 +916,12 @@ class ProxyServer:
         normal edge instead of being forced onto the fronting IP.
         """
         target_ip = connect_ip or host
+        effective_timeout = (
+            self._tcp_connect_timeout if timeout is None else float(timeout)
+        )
         try:
             r_remote, w_remote = await self._open_tcp_connection(
-                target_ip, port, timeout=self._tcp_connect_timeout,
+                target_ip, port, timeout=effective_timeout,
             )
         except Exception as e:
             log.error("Direct tunnel connect failed (%s via %s): %s",
@@ -1044,17 +1053,15 @@ class ProxyServer:
             #   • Telegram Desktop / MTProto over port 443 sends obfuscated
             #     non-TLS bytes — we literally cannot decrypt these, and
             #     since the target IP is blocked we can't direct-tunnel
-            #     either. The only workaround is to configure Telegram as
-            #     an HTTP proxy (not SOCKS5), so it sends hostnames our
-            #     SNI-rewrite path can handle.
+            #     either. Telegram will rotate to another DC on its own;
+            #     failing fast here lets that happen sooner.
             #   • Client CONNECTs but never speaks TLS (some probes).
             if _is_ip_literal(host) and port == 443:
-                log.warning(
-                    "MITM TLS handshake failed for %s:%d (%s). "
-                    "Likely non-TLS traffic (e.g. Telegram MTProto over "
-                    "SOCKS5). Cannot relay raw TCP to a blocked IP — "
-                    "use the HTTP proxy instead so hostnames are preserved.",
-                    host, port, e,
+                log.info(
+                    "Non-TLS traffic on %s:%d (likely Telegram MTProto / "
+                    "obfuscated protocol). This DC appears blocked; the "
+                    "client should rotate to another endpoint shortly.",
+                    host, port,
                 )
             elif port != 443:
                 log.debug(

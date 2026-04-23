@@ -16,6 +16,28 @@ For the latest news, releases, and project updates, follow our Telegram channel:
 
 ---
 
+### If you like this project, please support it by starring it on GitHub (⭐). It helps the project get discovered.
+
+---
+
+### Optional Financial Support 💸
+
+- TON network:
+
+`masterking32.ton`
+
+- EVM-compatible networks (ETH and compatible chains):
+
+`0x517f07305D6ED781A089322B6cD93d1461bF8652`
+
+- TRC20 network (TRON):
+
+`TLApdY8APWkFHHoxebxGY8JhMeChiETqFH`
+
+Every contribution and every piece of feedback is appreciated. Support directly helps ongoing development and improvement.
+
+---
+
 ## Disclaimer
 
 MasterHttpRelayVPN is provided for educational, testing, and research purposes only.
@@ -287,7 +309,7 @@ Install everything from [`requirements.txt`](requirements.txt). All listed packa
 | `h2` | HTTP/2 multiplexing to the Apps Script relay (significantly faster) |
 | `brotli` | Decompression of `Content-Encoding: br` responses |
 | `zstandard` | Decompression of `Content-Encoding: zstd` responses |
-| `netifaces` | Better network interface detection for LAN sharing (fallback available without it) |
+
 
 ### Load Balancing
 

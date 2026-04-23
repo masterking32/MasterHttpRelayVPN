@@ -1,101 +1,103 @@
 """
-LAN utilities for detecting network interfaces and IP addresses.
+LAN utilities for detecting network interfaces and IPv4 addresses.
 
-Provides functionality to enumerate local network interfaces and their
-associated IP addresses for LAN proxy sharing.
+Provides functionality to enumerate local IPv4 addresses for LAN proxy
+sharing. IPv6 is intentionally not reported — this project only exposes
+the proxy over IPv4 LANs, which is what every consumer router and
+phone/desktop client actually uses.
+
+Implementation notes
+--------------------
+This module relies only on the Python standard library so it works
+out-of-the-box on every supported OS (Windows, Linux, macOS,
+Android/Termux, *BSD) without requiring a C compiler or native build
+tools (previous versions depended on ``netifaces``, which needs
+"Microsoft Visual C++ 14.0 or greater" on Windows and was a frequent
+install blocker for users on slow connections).
+
+Strategy (in order):
+1. "UDP connect trick" to reliably discover the primary outbound
+   IPv4 address on any OS.
+2. ``socket.getaddrinfo(hostname, AF_INET)`` to enumerate any additional
+   IPv4 addresses bound to the host (covers multi-homed machines).
 """
 
 import ipaddress
 import logging
 import socket
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 log = logging.getLogger("LAN")
 
 
+# ---------------------------------------------------------------------------
+# Primary-IP discovery (UDP connect trick)
+# ---------------------------------------------------------------------------
+def _primary_ipv4() -> Optional[str]:
+    """
+    Return the primary local IPv4 the OS would use for outbound traffic.
+
+    Uses a connected UDP socket which does *not* actually send packets —
+    the kernel just picks the source address from its routing table.
+    Works identically on Windows, Linux, macOS, and Android.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.settimeout(0.5)
+        # TEST-NET-1 address, port is arbitrary; no packet is sent for UDP connect().
+        s.connect(('192.0.2.1', 80))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 def get_network_interfaces() -> Dict[str, List[str]]:
     """
-    Get all network interfaces and their associated IP addresses.
-
-    Returns a dictionary mapping interface names to lists of IP addresses
-    (both IPv4 and IPv6). Only includes interfaces with valid IP addresses
-    that are not loopback.
+    Get network interfaces and their associated non-loopback IPv4 addresses.
 
     Returns:
-        Dict[str, List[str]]: Interface name -> list of IP addresses
+        Dict[str, List[str]]: Interface label -> list of IPv4 addresses.
+        Labels are best-effort synthetic names such as ``"primary"``
+        and ``"host"``.
     """
-    interfaces = {}
+    interfaces: Dict[str, List[str]] = {}
+    seen_ips: Set[str] = set()
 
+    def _add(label: str, ip: Optional[str]) -> None:
+        if not ip or ip in seen_ips:
+            return
+        if ip.startswith('127.'):
+            return
+        seen_ips.add(ip)
+        interfaces.setdefault(label, []).append(ip)
+
+    # 1) Primary outbound IPv4 (most reliable, cross-platform).
+    _add('primary', _primary_ipv4())
+
+    # 2) Enumerate via hostname resolution (picks up multi-homed hosts).
     try:
-        import netifaces
-        for iface in netifaces.interfaces():
-            addrs = netifaces.ifaddresses(iface)
-            ips = []
-            # IPv4 addresses
-            if netifaces.AF_INET in addrs:
-                for addr in addrs[netifaces.AF_INET]:
-                    ip = addr.get('addr')
-                    if ip and not ip.startswith('127.'):
-                        ips.append(ip)
-            # IPv6 addresses (without scope)
-            if netifaces.AF_INET6 in addrs:
-                for addr in addrs[netifaces.AF_INET6]:
-                    ip = addr.get('addr')
-                    if ip and not ip.startswith('::1') and not '%' in ip:
-                        # Remove scope if present
-                        ips.append(ip.split('%')[0])
-            if ips:
-                interfaces[iface] = ips
-    except ImportError:
-        # Fallback to socket method for basic detection
-        log.debug("netifaces not available, using socket fallback")
-        interfaces = _get_interfaces_socket_fallback()
-
-    return interfaces
-
-
-def _get_interfaces_socket_fallback() -> Dict[str, List[str]]:
-    """
-    Fallback method to get network interfaces using socket.
-
-    This is less comprehensive than netifaces but works without extra dependencies.
-    """
-    interfaces = {}
-
-    try:
-        # Get hostname and try to resolve to IPs
         hostname = socket.gethostname()
-        try:
-            # Get IPv4 addresses
-            ipv4_info = socket.getaddrinfo(hostname, None, socket.AF_INET)
-            ipv4_addrs = [info[4][0] for info in ipv4_info if not info[4][0].startswith('127.')]
-            if ipv4_addrs:
-                interfaces['primary'] = list(set(ipv4_addrs))  # Remove duplicates
-        except socket.gaierror:
-            pass
+    except OSError:
+        hostname = ''
 
+    if hostname:
         try:
-            # Get IPv6 addresses
-            ipv6_info = socket.getaddrinfo(hostname, None, socket.AF_INET6)
-            ipv6_addrs = []
-            for info in ipv6_info:
-                ip = info[4][0]
-                if not ip.startswith('::1') and not '%' in ip:
-                    ipv6_addrs.append(ip.split('%')[0])
-            if ipv6_addrs:
-                interfaces['primary_ipv6'] = list(set(ipv6_addrs))
-        except socket.gaierror:
+            for info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+                _add('host', info[4][0])
+        except (socket.gaierror, OSError):
             pass
-
-    except Exception as e:
-        log.debug("Socket fallback failed: %s", e)
 
     return interfaces
 
 
 def get_lan_ips(port: int = 8085) -> List[str]:
     """
-    Get list of LAN-accessible proxy addresses.
+    Get list of LAN-accessible proxy addresses (IPv4 only).
 
     Returns a list of IP:port combinations that can be used to access
     the proxy from other devices on the local network.
@@ -107,21 +109,22 @@ def get_lan_ips(port: int = 8085) -> List[str]:
         List[str]: List of "IP:port" strings for LAN access
     """
     interfaces = get_network_interfaces()
-    lan_addresses = []
+    lan_addresses: List[str] = []
 
     for iface_ips in interfaces.values():
         for ip in iface_ips:
             try:
-                # Validate IP and check if it's a private address
-                addr = ipaddress.ip_address(ip)
-                if addr.is_private or addr.is_link_local:
-                    lan_addresses.append(f"{ip}:{port}")
-            except ValueError:
+                addr = ipaddress.IPv4Address(ip)
+            except (ValueError, ipaddress.AddressValueError):
                 continue
+            if addr.is_loopback or addr.is_unspecified:
+                continue
+            if addr.is_private or addr.is_link_local:
+                lan_addresses.append(f"{ip}:{port}")
 
-    # Remove duplicates while preserving order
-    seen = set()
-    unique_addresses = []
+    # Remove duplicates while preserving order.
+    seen: Set[str] = set()
+    unique_addresses: List[str] = []
     for addr in lan_addresses:
         if addr not in seen:
             seen.add(addr)
