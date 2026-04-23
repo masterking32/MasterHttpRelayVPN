@@ -278,7 +278,7 @@ Install everything from [`requirements.txt`](requirements.txt). All listed packa
 | `h2` | HTTP/2 multiplexing to the Apps Script relay (significantly faster) |
 | `brotli` | Decompression of `Content-Encoding: br` responses |
 | `zstandard` | Decompression of `Content-Encoding: zstd` responses |
-| `netifaces` | Better network interface detection for LAN sharing (fallback available without it) |
+
 
 ### Load Balancing
 
