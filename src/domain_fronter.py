@@ -1449,6 +1449,21 @@ class DomainFronter:
         filtered.append(f"Content-Length: {len(body)}")
         return ("\r\n".join(filtered) + "\r\n\r\n").encode() + body
 
+    # Headers that must never be forwarded to the upstream server because
+    # they expose the user's real IP address or internal network topology.
+    _STRIP_HEADERS: frozenset = frozenset({
+        "accept-encoding",       # Apps Script auto-decompresses gzip only
+        "x-forwarded-for",       # would leak the client's real IP
+        "x-forwarded-host",
+        "x-forwarded-proto",
+        "x-forwarded-port",
+        "x-real-ip",             # nginx / CDN header that carries real IP
+        "forwarded",             # RFC 7239 — same problem
+        "via",                   # reveals intermediate proxy hops
+        "proxy-authorization",   # never forward credentials to origin
+        "proxy-connection",
+    })
+
     def _build_payload(self, method, url, headers, body):
         """Build the JSON relay payload dict."""
         payload = {
@@ -1458,10 +1473,10 @@ class DomainFronter:
             "r": False,
         }
         if headers:
-            # Strip Accept-Encoding: Apps Script auto-decompresses gzip
-            # but NOT brotli/zstd — forwarding "br" causes garbled responses.
+            # Strip headers that would leak the user's real IP or expose
+            # internal proxy metadata to the upstream destination server.
             filt = {k: v for k, v in headers.items()
-                    if k.lower() != "accept-encoding"}
+                    if k.lower() not in self._STRIP_HEADERS}
             payload["h"] = filt if filt else headers
         if body:
             payload["b"] = base64.b64encode(body).decode()
