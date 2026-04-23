@@ -99,6 +99,8 @@ FRONT_SNI_POOL_GOOGLE: tuple[str, ...] = (
     "translate.google.com",
     "play.google.com",
     "lens.google.com",
+    "scholar.google.com",
+    "chromewebstore.google.com",
 )
 
 
