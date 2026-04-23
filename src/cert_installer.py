@@ -358,6 +358,172 @@ def _install_firefox(cert_path: str, cert_name: str):
             log.warning("Firefox profile %s: %s", os.path.basename(profile), exc)
 
 
+def _uninstall_firefox(cert_name: str):
+    """Remove certificate from all detected Firefox profile NSS databases."""
+    if not _has_cmd("certutil"):
+        log.debug("NSS certutil not found — skipping Firefox uninstall.")
+        return
+
+    profile_dirs: list[str] = []
+    system = platform.system()
+
+    if system == "Windows":
+        appdata = os.environ.get("APPDATA", "")
+        profile_dirs += glob.glob(os.path.join(appdata, r"Mozilla\Firefox\Profiles\*"))
+    elif system == "Darwin":
+        profile_dirs += glob.glob(os.path.expanduser("~/Library/Application Support/Firefox/Profiles/*"))
+    else:
+        profile_dirs += glob.glob(os.path.expanduser("~/.mozilla/firefox/*.default*"))
+        profile_dirs += glob.glob(os.path.expanduser("~/.mozilla/firefox/*.release*"))
+
+    if not profile_dirs:
+        log.debug("No Firefox profiles found.")
+        return
+
+    for profile in profile_dirs:
+        db = f"sql:{profile}" if os.path.exists(os.path.join(profile, "cert9.db")) else f"dbm:{profile}"
+        try:
+            _run(["certutil", "-D", "-n", cert_name, "-d", db], check=False)
+            log.info("Removed from Firefox profile: %s", os.path.basename(profile))
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            log.debug("Firefox profile %s: %s", os.path.basename(profile), exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Uninstall functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _uninstall_windows(cert_name: str) -> bool:
+    """Remove certificate from the Windows Trusted Root store."""
+    # Try per-user store first (no admin required)
+    try:
+        _run(["certutil", "-delstore", "-user", "Root", cert_name])
+        log.info("Certificate removed from Windows user Trusted Root store.")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        log.warning("certutil user store removal failed: %s", exc)
+
+    # Try system store (requires admin)
+    try:
+        _run(["certutil", "-delstore", "Root", cert_name])
+        log.info("Certificate removed from Windows system Trusted Root store.")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        log.warning("certutil system store removal failed: %s", exc)
+
+    # Fallback: use PowerShell
+    try:
+        ps_cmd = (
+            f"Remove-Item -Path Cert:\\CurrentUser\\Root\\{cert_name} -Force -ErrorAction SilentlyContinue"
+        )
+        _run(["powershell", "-NoProfile", "-Command", ps_cmd], check=False)
+        log.info("Attempted certificate removal via PowerShell.")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        log.error("PowerShell removal failed: %s", exc)
+
+    return False
+
+
+def _uninstall_macos(cert_name: str) -> bool:
+    """Remove certificate from the macOS keychains."""
+    login_keychain = os.path.expanduser("~/Library/Keychains/login.keychain-db")
+    if not os.path.exists(login_keychain):
+        login_keychain = os.path.expanduser("~/Library/Keychains/login.keychain")
+
+    try:
+        _run([
+            "security", "delete-certificate",
+            "-c", cert_name,
+            login_keychain,
+        ], check=False)
+        log.info("Certificate removed from macOS login keychain.")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        log.warning("login keychain removal failed: %s", exc)
+
+    # Try system keychain (needs sudo)
+    try:
+        _run([
+            "sudo", "security", "delete-certificate",
+            "-c", cert_name,
+            "/Library/Keychains/System.keychain",
+        ], check=False)
+        log.info("Certificate removed from macOS system keychain.")
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        log.debug("System keychain removal failed: %s", exc)
+
+    return False
+
+
+def _uninstall_linux(cert_path: str, cert_name: str) -> bool:
+    """Remove certificate from Linux trust stores."""
+    distro = _detect_linux_distro()
+    log.info("Detected Linux distro family: %s", distro)
+
+    removed = False
+
+    if distro == "debian":
+        dest_file = f"/usr/local/share/ca-certificates/{cert_name.replace(' ', '_')}.crt"
+        try:
+            if os.path.exists(dest_file):
+                os.remove(dest_file)
+            _run(["update-ca-certificates"])
+            log.info("Certificate removed via update-ca-certificates.")
+            removed = True
+        except (OSError, subprocess.CalledProcessError) as exc:
+            log.warning("Debian removal failed (needs sudo?): %s", exc)
+            try:
+                _run(["sudo", "rm", "-f", dest_file])
+                _run(["sudo", "update-ca-certificates"])
+                log.info("Certificate removed via sudo update-ca-certificates.")
+                removed = True
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc2:
+                log.warning("sudo Debian removal failed: %s", exc2)
+
+    elif distro == "rhel":
+        dest_file = f"/etc/pki/ca-trust/source/anchors/{cert_name.replace(' ', '_')}.crt"
+        try:
+            if os.path.exists(dest_file):
+                os.remove(dest_file)
+            _run(["update-ca-trust", "extract"])
+            log.info("Certificate removed via update-ca-trust.")
+            removed = True
+        except (OSError, subprocess.CalledProcessError) as exc:
+            log.warning("RHEL removal failed (needs sudo?): %s", exc)
+            try:
+                _run(["sudo", "rm", "-f", dest_file])
+                _run(["sudo", "update-ca-trust", "extract"])
+                log.info("Certificate removed via sudo update-ca-trust.")
+                removed = True
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc2:
+                log.warning("sudo RHEL removal failed: %s", exc2)
+
+    elif distro == "arch":
+        dest_file = f"/etc/ca-certificates/trust-source/anchors/{cert_name.replace(' ', '_')}.crt"
+        try:
+            if os.path.exists(dest_file):
+                os.remove(dest_file)
+            _run(["trust", "extract-compat"])
+            log.info("Certificate removed via trust extract-compat.")
+            removed = True
+        except (OSError, subprocess.CalledProcessError) as exc:
+            log.warning("Arch removal failed (needs sudo?): %s", exc)
+            try:
+                _run(["sudo", "rm", "-f", dest_file])
+                _run(["sudo", "trust", "extract-compat"])
+                log.info("Certificate removed via sudo trust extract-compat.")
+                removed = True
+            except (subprocess.CalledProcessError, FileNotFoundError) as exc2:
+                log.warning("sudo Arch removal failed: %s", exc2)
+
+    else:
+        log.warning("Unknown Linux distro. Manually remove %s from trusted CAs.", cert_name)
+
+    return removed
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
@@ -401,5 +567,31 @@ def install_ca(cert_path: str, cert_name: str = CERT_NAME) -> bool:
 
     # Best-effort Firefox install on all platforms
     _install_firefox(cert_path, cert_name)
+
+    return ok
+
+
+def uninstall_ca(cert_path: str, cert_name: str = CERT_NAME) -> bool:
+    """
+    Remove *cert_name* from the system's trusted root CAs on the current platform.
+    Also attempts Firefox NSS removal.
+
+    Returns True if the system store removal succeeded.
+    """
+    system = platform.system()
+    log.info("Removing CA certificate from %s…", system)
+
+    if system == "Windows":
+        ok = _uninstall_windows(cert_name)
+    elif system == "Darwin":
+        ok = _uninstall_macos(cert_name)
+    elif system == "Linux":
+        ok = _uninstall_linux(cert_path, cert_name)
+    else:
+        log.error("Unsupported platform: %s", system)
+        return False
+
+    # Best-effort Firefox uninstall on all platforms
+    _uninstall_firefox(cert_name)
 
     return ok

@@ -20,7 +20,7 @@ _SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from cert_installer import install_ca, is_ca_trusted
+from cert_installer import install_ca, uninstall_ca, is_ca_trusted
 from constants import __version__
 from lan_utils import log_lan_access
 from logging_utils import configure as configure_logging, print_banner
@@ -86,6 +86,11 @@ def parse_args():
         "--install-cert",
         action="store_true",
         help="Install the MITM CA certificate as a trusted root and exit.",
+    )
+    parser.add_argument(
+        "--uninstall-cert",
+        action="store_true",
+        help="Remove the MITM CA certificate from trusted roots and exit.",
     )
     parser.add_argument(
         "--no-cert-check",
@@ -190,6 +195,18 @@ def main():
         _log = logging.getLogger("Main")
         _log.info("Installing CA certificate…")
         ok = install_ca(CA_CERT_FILE)
+        sys.exit(0 if ok else 1)
+
+    # ── Certificate uninstallation ───────────────────────────────────────────
+    if args.uninstall_cert:
+        setup_logging("INFO")
+        _log = logging.getLogger("Main")
+        _log.info("Removing CA certificate…")
+        ok = uninstall_ca(CA_CERT_FILE)
+        if ok:
+            _log.info("CA certificate removed successfully.")
+        else:
+            _log.warning("CA certificate removal may have failed. Check logs above.")
         sys.exit(0 if ok else 1)
 
     setup_logging(config.get("log_level", "INFO"))

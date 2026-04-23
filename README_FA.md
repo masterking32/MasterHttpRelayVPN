@@ -260,6 +260,7 @@ python3 main.py --disable-socks5
 python3 main.py --log-level DEBUG
 python3 main.py -c /path/to/config.json
 python3 main.py --install-cert        # نصب گواهی CA و خروج
+python3 main.py --uninstall-cert      # حذف گراهی CA و خروج
 python3 main.py --no-cert-check       # رد شدن از بررسی خودکار گواهی
 ```
 
