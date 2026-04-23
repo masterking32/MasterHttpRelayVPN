@@ -283,8 +283,17 @@ This project focuses entirely on the **Apps Script** relay — a free Google acc
 |---------|---------|-------------|
 | `google_ip` | `216.239.38.120` | Google IP address to connect through |
 | `front_domain` | `www.google.com` | Domain shown to the firewall/filter |
-| `verify_ssl` | `true` | Verify TLS certificates |
+| `verify_ssl` | `true` | Verify the TLS certificate on the local fronted connection to Google/CDN |
+| `relay_timeout` | `25` | Total timeout for one relayed request before it fails |
+| `tls_connect_timeout` | `15` | Timeout for the proxy's TLS connection to the fronted Google/CDN endpoint |
+| `tcp_connect_timeout` | `10` | Timeout for direct TCP tunnels and outbound SNI-rewrite connects |
+| `max_response_body_bytes` | `209715200` | Hard cap for a single relay response body after buffering/decoding |
 | `script_ids` | — | Multiple Script IDs for load balancing (array) |
+| `chunked_download_extensions` | see [config.example.json](config.example.json) | File extensions that should use parallel range downloading. Supports `".*"` to probe all GET downloads. |
+| `chunked_download_min_size` | `5242880` | Minimum total file size (5 MB) before range-parallel download stays enabled |
+| `chunked_download_chunk_size` | `524288` | Per-range chunk size used by parallel downloads |
+| `chunked_download_max_parallel` | `8` | Maximum simultaneous range requests for one download |
+| `chunked_download_max_chunks` | `256` | Soft upper bound for total chunk requests; chunk size is raised automatically for very large files |
 | `block_hosts` | `[]` | Hosts that must never be tunneled (return HTTP 403). Supports exact names (`ads.example.com`) or leading-dot suffixes (`.doubleclick.net`). |
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | Hosts that go direct (no MITM, no relay). Useful for LAN resources or sites that break under MITM. |
 | `direct_google_exclude` | see [config.example.json](config.example.json) | Google apps that must use the MITM relay path instead of the fast direct tunnel. |

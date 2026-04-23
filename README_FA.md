@@ -232,8 +232,17 @@ json
 |------|---------------|-------|
 | `google_ip` | `216.239.38.120` | IP مورد استفاده برای مسیر Google |
 | `front_domain` | `www.google.com` | دامنه‌ای که فیلتر می‌بیند |
-| `verify_ssl` | `true` | بررسی اعتبار TLS |
+| `verify_ssl` | `true` | بررسی اعتبار TLS فقط برای اتصال fronted محلی به Google/CDN |
+| `relay_timeout` | `25` | مهلت کل برای هر درخواست relay قبل از fail شدن |
+| `tls_connect_timeout` | `15` | مهلت اتصال TLS پروکسی به endpoint fronted روی Google/CDN |
+| `tcp_connect_timeout` | `10` | مهلت اتصال برای tunnel مستقیم و SNI-rewrite |
+| `max_response_body_bytes` | `209715200` | سقف نهایی برای اندازه body هر پاسخ relay بعد از buffer/decode |
 | `script_ids` | - | چند Deployment ID برای load balancing |
+| `chunked_download_extensions` | مطابق [config.example.json](config.example.json) | پسوند فایل‌هایی که باید از دانلود range-parallel استفاده کنند. از `".*"` هم برای probe همه دانلودهای GET پشتیبانی می‌شود. |
+| `chunked_download_min_size` | `5242880` | حداقل اندازه کل فایل (۵ مگابایت) برای فعال ماندن دانلود موازی |
+| `chunked_download_chunk_size` | `524288` | اندازه هر chunk در دانلود موازی |
+| `chunked_download_max_parallel` | `8` | حداکثر تعداد range request همزمان برای یک دانلود |
+| `chunked_download_max_chunks` | `256` | سقف نرم برای تعداد کل chunk request ها؛ برای فایل‌های خیلی بزرگ اندازه chunk به‌صورت خودکار بیشتر می‌شود |
 | `block_hosts` | `[]` | هاست‌هایی که هرگز نباید tunnel شوند (پاسخ 403). نام دقیق (`ads.example.com`) یا پسوند با نقطه‌ی ابتدایی (`.doubleclick.net`). |
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | هاست‌هایی که مستقیم می‌روند (بدون MITM و بدون رله). برای منابع داخلی شبکه یا سایت‌هایی که با MITM مشکل دارند. |
 | `direct_google_exclude` | مراجعه به [config.example.json](config.example.json) | اپ‌های Google که باید از مسیر MITM برای رله استفاده کنند به‌جای tunnel مستقیم. |

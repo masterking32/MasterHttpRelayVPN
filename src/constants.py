@@ -198,6 +198,7 @@ STATIC_EXTS: tuple[str, ...] = (
     ".mp3", ".mp4", ".webm", ".wasm", ".avif",
 )
 LARGE_FILE_EXTS = frozenset({
+    ".bin",
     ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
     ".exe", ".msi", ".dmg", ".deb", ".rpm", ".apk",
     ".iso", ".img",
