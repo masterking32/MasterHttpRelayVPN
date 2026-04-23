@@ -16,6 +16,7 @@ import logging
 import re
 import socket
 import ssl
+import tempfile
 import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -27,6 +28,7 @@ from constants import (
     BATCH_WINDOW_MICRO,
     CONN_TTL,
     FRONT_SNI_POOL_GOOGLE,
+    MAX_RESPONSE_BODY_BYTES,
     POOL_MAX,
     POOL_MIN_IDLE,
     RELAY_TIMEOUT,
@@ -83,6 +85,18 @@ def _build_sni_pool(front_domain: str, overrides: list | None) -> list[str]:
 
 class DomainFronter:
     _STATIC_EXTS = STATIC_EXTS
+    _H2_FAILURE_COOLDOWN = 60.0
+    _H2_FAILURE_THRESHOLD = 3
+    _DOWNLOAD_STREAM_COOLDOWN = 300.0
+    _COALESCE_VARY_HEADERS = (
+        "accept",
+        "accept-language",
+        "user-agent",
+        "sec-fetch-dest",
+        "sec-fetch-mode",
+        "sec-fetch-site",
+    )
+    _SAFE_RETRY_METHODS = {"GET", "HEAD", "OPTIONS"}
 
     def __init__(self, config: dict):
         self.connect_host = config.get("google_ip", "216.239.38.120")
@@ -120,6 +134,16 @@ class DomainFronter:
 
         self.auth_key = config.get("auth_key", "")
         self.verify_ssl = config.get("verify_ssl", True)
+        self._relay_timeout = self._cfg_float(
+            config, "relay_timeout", RELAY_TIMEOUT, minimum=1.0,
+        )
+        self._tls_connect_timeout = self._cfg_float(
+            config, "tls_connect_timeout", TLS_CONNECT_TIMEOUT, minimum=1.0,
+        )
+        self._max_response_body_bytes = self._cfg_int(
+            config, "max_response_body_bytes", MAX_RESPONSE_BODY_BYTES,
+            minimum=1024,
+        )
 
         # Connection pool — TTL-based, pre-warmed, with concurrency control
         self._pool: list[tuple[asyncio.StreamReader, asyncio.StreamWriter, float]] = []
@@ -146,6 +170,9 @@ class DomainFronter:
 
         # Request coalescing — dedup concurrent identical GETs
         self._coalesce: dict[str, list[asyncio.Future]] = {}
+        self._h2_failure_streak = 0
+        self._h2_disabled_until = 0.0
+        self._stream_download_disabled_until: dict[str, float] = {}
 
         # HTTP/2 multiplexing — one connection handles all requests
         self._h2 = None
@@ -173,12 +200,77 @@ class DomainFronter:
 
     # ── helpers ───────────────────────────────────────────────────
 
+    @staticmethod
+    def _cfg_int(config: dict, key: str, default: int, *, minimum: int = 1) -> int:
+        try:
+            value = int(config.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, value)
+
+    @staticmethod
+    def _cfg_float(config: dict, key: str, default: float,
+                   *, minimum: float = 0.1) -> float:
+        try:
+            value = float(config.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, value)
+
     def _ssl_ctx(self) -> ssl.SSLContext:
         ctx = ssl.create_default_context()
         if not self.verify_ssl:
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
         return ctx
+
+    def _h2_available(self) -> bool:
+        return (
+            self._h2 is not None
+            and self._h2.is_connected
+            and time.time() >= self._h2_disabled_until
+        )
+
+    def _record_h2_success(self) -> None:
+        self._h2_failure_streak = 0
+
+    def _record_h2_failure(self, exc: Exception) -> None:
+        self._h2_failure_streak += 1
+        if self._h2_failure_streak >= self._H2_FAILURE_THRESHOLD:
+            self._h2_disabled_until = time.time() + self._H2_FAILURE_COOLDOWN
+            log.warning(
+                "H2 temporarily disabled for %.0fs after %d consecutive failures (%s)",
+                self._H2_FAILURE_COOLDOWN,
+                self._h2_failure_streak,
+                type(exc).__name__,
+            )
+            self._h2_failure_streak = 0
+
+    def _stream_download_allowed(self, url: str) -> bool:
+        host = self._host_key(url)
+        if not host:
+            return True
+        until = self._stream_download_disabled_until.get(host, 0.0)
+        if until > time.time():
+            return False
+        if until:
+            self._stream_download_disabled_until.pop(host, None)
+        return True
+
+    def _mark_stream_download_failure(self, url: str, reason: str) -> None:
+        host = self._host_key(url)
+        if not host:
+            return
+        self._stream_download_disabled_until[host] = (
+            time.time() + self._DOWNLOAD_STREAM_COOLDOWN
+        )
+        log.warning(
+            "Parallel streaming disabled for host %s for %.0fs after failure (%s)",
+            host, self._DOWNLOAD_STREAM_COOLDOWN, reason,
+        )
+
+    def stream_download_allowed(self, url: str) -> bool:
+        return self._stream_download_allowed(url)
 
     async def _open(self):
         """Open a TLS connection to the CDN.
@@ -228,7 +320,7 @@ class DomainFronter:
                 except Exception:
                     pass
         reader, writer = await asyncio.wait_for(
-            self._open(), timeout=TLS_CONNECT_TIMEOUT
+            self._open(), timeout=self._tls_connect_timeout
         )
         # Pool was empty — trigger aggressive background refill
         if not self._refilling:
@@ -326,6 +418,171 @@ class DomainFronter:
         parsed = urlparse(url_or_host if "://" in url_or_host else f"https://{url_or_host}")
         host = parsed.hostname or url_or_host
         return host.lower().rstrip(".")
+
+    @classmethod
+    def _coalesce_key(cls, url: str, headers: dict | None) -> str:
+        key = [url]
+        if headers:
+            lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+            for name in cls._COALESCE_VARY_HEADERS:
+                value = lowered.get(name)
+                if value:
+                    key.append(f"{name}={value}")
+        return "\n".join(key)
+
+    @classmethod
+    def _retry_attempts_for_payload(cls, payload: dict) -> int:
+        method = str(payload.get("m", "GET")).upper()
+        return 2 if method in cls._SAFE_RETRY_METHODS else 1
+
+    @staticmethod
+    def _render_streaming_headers(resp_headers: dict, total_size: int) -> bytes:
+        lines = ["HTTP/1.1 200 OK"]
+        skip = {
+            "transfer-encoding",
+            "connection",
+            "keep-alive",
+            "content-length",
+            "content-range",
+        }
+        for key, value in resp_headers.items():
+            if key.lower() in skip:
+                continue
+            lines.append(f"{key}: {value}")
+        lines.append(f"Content-Length: {total_size}")
+        lines.append("")
+        lines.append("")
+        return "\r\n".join(lines).encode()
+
+    @staticmethod
+    def _parse_content_range(value: str) -> tuple[int, int, int] | None:
+        match = re.match(r"^\s*bytes\s+(\d+)-(\d+)/(\d+)\s*$", value or "")
+        if not match:
+            return None
+        start, end, total = (int(group) for group in match.groups())
+        if start < 0 or end < start or total <= end:
+            return None
+        return start, end, total
+
+    @classmethod
+    def _validate_range_response(cls, status: int, resp_headers: dict,
+                                 body: bytes, start_off: int,
+                                 end_off: int,
+                                 total_size: int | None = None) -> str | None:
+        if status != 206:
+            return f"status {status}"
+        parsed = cls._parse_content_range(resp_headers.get("content-range", ""))
+        if not parsed:
+            return "missing/invalid Content-Range"
+        got_start, got_end, got_total = parsed
+        if got_start != start_off or got_end != end_off:
+            return f"Content-Range mismatch {got_start}-{got_end}"
+        if total_size is not None and got_total != total_size:
+            return f"Content-Range total mismatch {got_total}/{total_size}"
+        expected = end_off - start_off + 1
+        if len(body) != expected:
+            return f"short chunk {len(body)}/{expected} B"
+        return None
+
+    @staticmethod
+    def _spool_write(file_obj, offset: int, data: bytes) -> None:
+        file_obj.seek(offset)
+        file_obj.write(data)
+        file_obj.flush()
+
+    @staticmethod
+    def _spool_read(file_obj, offset: int, size: int) -> bytes:
+        file_obj.seek(offset)
+        return file_obj.read(size)
+
+    @staticmethod
+    def _format_bytes_human(num_bytes: int) -> str:
+        value = float(max(0, num_bytes))
+        units = ("B", "KiB", "MiB", "GiB", "TiB")
+        unit = units[0]
+        for unit in units:
+            if value < 1024.0 or unit == units[-1]:
+                break
+            value /= 1024.0
+        if unit == "B":
+            return f"{int(value)} {unit}"
+        return f"{value:.1f} {unit}"
+
+    @staticmethod
+    def _format_elapsed_short(seconds: float) -> str:
+        total = max(0, int(seconds))
+        minutes, secs = divmod(total, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _render_progress_bar(done: int, total: int, width: int = 34) -> str:
+        if total <= 0:
+            return "[" + ("-" * width) + "]"
+        ratio = max(0.0, min(1.0, done / total))
+        filled = min(width, int(round(ratio * width)))
+        return "[" + ("#" * filled) + ("-" * (width - filled)) + "]"
+
+    @classmethod
+    def _progress_line(cls, *, elapsed: float, done: int, total: int,
+                       speed_bytes_per_sec: float) -> str:
+        return (
+            f"[{cls._format_elapsed_short(elapsed)}] "
+            f"{cls._render_progress_bar(done, total)} "
+            f"{cls._format_bytes_human(done)} / {cls._format_bytes_human(total)} "
+            f"({cls._format_bytes_human(int(speed_bytes_per_sec))}/s)"
+        )
+
+    async def _relay_payload_h1(self, payload: dict) -> bytes:
+        attempts = self._retry_attempts_for_payload(payload)
+        async with self._semaphore:
+            for attempt in range(attempts):
+                try:
+                    return await asyncio.wait_for(
+                        self._relay_single(payload), timeout=self._relay_timeout,
+                    )
+                except Exception as exc:
+                    if attempt < attempts - 1:
+                        log.debug(
+                            "H1 relay attempt %d failed (%s: %s), retrying",
+                            attempt + 1, type(exc).__name__, exc,
+                        )
+                        await self._flush_pool()
+                    else:
+                        raise
+
+    async def _range_probe(self, url: str, headers: dict, start_off: int,
+                           end_off: int, *, max_tries: int = 3) -> bytes:
+        probe_headers = dict(headers) if headers else {}
+        probe_headers["Range"] = f"bytes={start_off}-{end_off}"
+        probe_payload = self._build_payload("GET", url, probe_headers, b"")
+        last_raw = b""
+        last_status = 0
+        for attempt in range(max_tries):
+            try:
+                last_raw = await self._relay_payload_h1(probe_payload)
+            except Exception as exc:
+                if attempt == max_tries - 1:
+                    raise
+                log.warning(
+                    "Initial range probe %d-%d retry %d/%d failed: %r",
+                    start_off, end_off, attempt + 1, max_tries, exc,
+                )
+                await asyncio.sleep(0.3 * (attempt + 1))
+                continue
+
+            last_status, _, _ = self._split_raw_response(last_raw)
+            if last_status == 206 or last_status < 500:
+                return last_raw
+            if attempt < max_tries - 1:
+                log.warning(
+                    "Initial range probe %d-%d retry %d/%d: status %d",
+                    start_off, end_off, attempt + 1, max_tries, last_status,
+                )
+                await asyncio.sleep(0.3 * (attempt + 1))
+        return last_raw
 
     # ── Per-host stats ────────────────────────────────────────────
 
@@ -521,12 +778,17 @@ class DomainFronter:
 
     async def close(self):
         """Cancel background tasks and close all pooled / H2 connections."""
-        for task in list(self._bg_tasks):
+        tasks = list(self._bg_tasks)
+        for task in tasks:
             task.cancel()
-        if self._bg_tasks:
-            self._spawn(self._prewarm_script())
-            if self._keepalive_task is None or self._keepalive_task.done():
-                self._keepalive_task = self._spawn
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._bg_tasks.clear()
+
+        self._warm_task = None
+        self._maintenance_task = None
+        self._stats_task = None
+        self._keepalive_task = None
 
         await self._flush_pool()
 
@@ -538,18 +800,25 @@ class DomainFronter:
 
     async def _h2_connect(self):
         """Connect the HTTP/2 transport in background."""
+        if self._h2 is None:
+            return
+        if time.time() < self._h2_disabled_until:
+            return
         try:
             await self._h2.ensure_connected()
+            self._record_h2_success()
             log.info("H2 multiplexing active — one conn handles all requests")
         except Exception as e:
+            self._record_h2_failure(e)
             log.warning("H2 connect failed (%s), using H1 pool fallback", e)
 
     async def _h2_connect_and_warm(self):
         """Connect H2, pre-warm the Apps Script container, start keepalive."""
         await self._h2_connect()
-        if self._h2 and self._h2.is_connected:
-            asyncio.create_task(self._prewarm_script())
-            asyncio.create_task(self._keepalive_loop())
+        if self._h2_available():
+            self._spawn(self._prewarm_script())
+            if self._keepalive_task is None or self._keepalive_task.done():
+                self._keepalive_task = self._spawn(self._keepalive_loop())
 
     async def _prewarm_script(self):
         """Pre-warm Apps Script and detect /dev fast path (no redirect)."""
@@ -602,10 +871,12 @@ class DomainFronter:
             try:
                 await asyncio.sleep(240)  # 4 minutes — saves ~90 quota hits/day vs 180s
                                           # Google's container timeout is ~5 min idle
-                if not self._h2 or not self._h2.is_connected:
+                if not self._h2_available():
                     try:
                         await self._h2.reconnect()
-                    except Exception:
+                        self._record_h2_success()
+                    except Exception as exc:
+                        self._record_h2_failure(exc)
                         continue
 
                 # H2 PING to keep connection alive
@@ -681,7 +952,9 @@ class DomainFronter:
                         has_range = True
                         break
             if method == "GET" and not body and not has_range:
-                result = await self._coalesced_submit(url, payload)
+                result = await self._coalesced_submit(
+                    self._coalesce_key(url, headers), payload,
+                )
                 return result
 
             result = await self._batch_submit(payload)
@@ -693,7 +966,7 @@ class DomainFronter:
             latency_ns = int((time.perf_counter() - t0) * 1e9)
             self._record_site(url, len(result), latency_ns, errored)
 
-    async def _coalesced_submit(self, url: str, payload: dict) -> bytes:
+    async def _coalesced_submit(self, key: str, payload: dict) -> bytes:
         """Dedup concurrent requests for the same URL (no Range header).
 
         Uses `_batch_lock` to atomically check-and-append, preventing a
@@ -702,14 +975,14 @@ class DomainFronter:
         """
         loop = asyncio.get_event_loop()
         async with self._batch_lock:
-            waiters = self._coalesce.get(url)
+            waiters = self._coalesce.get(key)
             if waiters is not None:
                 future = loop.create_future()
                 waiters.append(future)
-                log.debug("Coalesced request: %s", url[:60])
+                log.debug("Coalesced request: %s", key.split("\n", 1)[0][:60])
                 waiting = True
             else:
-                self._coalesce[url] = []
+                self._coalesce[key] = []
                 waiting = False
 
         if waiting:
@@ -719,14 +992,14 @@ class DomainFronter:
             result = await self._batch_submit(payload)
         except Exception as e:
             async with self._batch_lock:
-                waiters = self._coalesce.pop(url, [])
+                waiters = self._coalesce.pop(key, [])
             for f in waiters:
                 if not f.done():
                     f.set_exception(e)
             raise
 
         async with self._batch_lock:
-            waiters = self._coalesce.pop(url, [])
+            waiters = self._coalesce.pop(key, [])
         for f in waiters:
             if not f.done():
                 f.set_result(result)
@@ -734,8 +1007,10 @@ class DomainFronter:
 
     async def relay_parallel(self, method: str, url: str,
                              headers: dict, body: bytes = b"",
-                             chunk_size: int = 256 * 1024,
-                             max_parallel: int = 16) -> bytes:
+                             chunk_size: int = 512 * 1024,
+                             max_parallel: int = 8,
+                             max_chunks: int = 256,
+                             min_size: int = 0) -> bytes:
         """Relay with parallel range acceleration for large downloads.
 
         Strategy:
@@ -747,17 +1022,15 @@ class DomainFronter:
 
         Since each Apps Script call takes ~2s regardless of payload size,
         we use:
-          - 256 KB chunks (safe under Apps Script response limit)
-          - Up to 16 chunks in flight at once via H2 multiplexing
+          - 512 KB chunks (fewer relay calls, lower quota pressure)
+          - Up to 8 chunks in flight at once via H2 multiplexing
           - Aggregate throughput of ~2 MB per round-trip (~2-3s)
         """
         if method != "GET" or body:
             return await self.relay(method, url, headers, body)
 
         # Probe: first chunk with Range header
-        range_headers = dict(headers) if headers else {}
-        range_headers["Range"] = f"bytes=0-{chunk_size - 1}"
-        first_resp = await self.relay("GET", url, range_headers, b"")
+        first_resp = await self._range_probe(url, headers, 0, chunk_size - 1)
 
         status, resp_hdrs, resp_body = self._split_raw_response(first_resp)
 
@@ -768,13 +1041,40 @@ class DomainFronter:
             return first_resp
 
         # Parse total size from Content-Range: "bytes 0-262143/1048576"
-        content_range = resp_hdrs.get("content-range", "")
-        m = re.search(r"/(\d+)", content_range)
-        if not m:
+        parsed_range = self._parse_content_range(resp_hdrs.get("content-range", ""))
+        if not parsed_range:
             # Can't parse — downgrade to 200 so the client (which sent a
             # plain GET) doesn't get confused by 206 + Content-Range.
             return self._rewrite_206_to_200(first_resp)
-        total_size = int(m.group(1))
+        first_start, first_end, total_size = parsed_range
+        first_err = self._validate_range_response(
+            status, resp_hdrs, resp_body, first_start, first_end, total_size,
+        )
+        if first_start != 0 or first_err:
+            return self._rewrite_206_to_200(first_resp)
+        if total_size > self._max_response_body_bytes:
+            return self._error_response(
+                502,
+                "Relay response exceeds cap "
+                f"({self._max_response_body_bytes} bytes). "
+                "Increase max_response_body_bytes if your system has enough RAM.",
+            )
+        if min_size > 0 and total_size < min_size:
+            return self._rewrite_206_to_200(first_resp)
+        if max_chunks > 0:
+            required_chunk_size = max(
+                chunk_size,
+                (total_size + max_chunks - 1) // max_chunks,
+            )
+            if required_chunk_size != chunk_size:
+                log.info(
+                    "Parallel download tuning: chunk size raised from %d KB to %d KB "
+                    "to keep request count under %d",
+                    chunk_size // 1024,
+                    required_chunk_size // 1024,
+                    max_chunks,
+                )
+                chunk_size = required_chunk_size
 
         # Small file: probe already fetched it all. MUST rewrite to 200
         # because the client never sent a Range header — a stray 206 here
@@ -795,22 +1095,54 @@ class DomainFronter:
 
         # Concurrency-limited parallel fetch
         sem = asyncio.Semaphore(max_parallel)
+        progress_lock = asyncio.Lock()
+        completed_chunks = 1  # first range probe already succeeded
+        completed_bytes = len(resp_body)
+        last_progress_log = time.perf_counter()
+        total_chunks = len(ranges) + 1
+        total_bytes = total_size
 
         async def fetch_range(s, e, max_tries: int = 3):
+            nonlocal completed_chunks, completed_bytes, last_progress_log
             async with sem:
                 rh_base = dict(headers) if headers else {}
                 rh_base["Range"] = f"bytes={s}-{e}"
+                payload = self._build_payload("GET", url, rh_base, b"")
                 expected = e - s + 1
                 last_err = None
                 for attempt in range(max_tries):
                     try:
-                        raw = await self.relay("GET", url, rh_base, b"")
-                        _, _, chunk_body = self._split_raw_response(raw)
-                        if len(chunk_body) == expected:
-                            return chunk_body
-                        last_err = (
-                            f"short chunk {len(chunk_body)}/{expected} B"
+                        raw = await self._relay_payload_h1(payload)
+                        chunk_status, chunk_headers, chunk_body = self._split_raw_response(raw)
+                        err = self._validate_range_response(
+                            chunk_status, chunk_headers, chunk_body,
+                            s, e, total_size,
                         )
+                        if err is None:
+                            now = time.perf_counter()
+                            async with progress_lock:
+                                completed_chunks += 1
+                                completed_bytes += len(chunk_body)
+                                should_log = (
+                                    completed_chunks == total_chunks
+                                    or (now - last_progress_log) >= 5.0
+                                )
+                                if should_log:
+                                    elapsed = max(0.001, now - t0)
+                                    speed_bps = completed_bytes / elapsed
+                                    log.info(
+                                        "Parallel download progress: %s [%d/%d chunks]",
+                                        self._progress_line(
+                                            elapsed=elapsed,
+                                            done=completed_bytes,
+                                            total=total_bytes,
+                                            speed_bytes_per_sec=speed_bps,
+                                        ),
+                                        completed_chunks, total_chunks,
+                                    )
+                                    last_progress_log = now
+                            return chunk_body
+                        last_err = err
                     except Exception as e_:
                         last_err = repr(e_)
                     log.warning("Range %d-%d retry %d/%d: %s",
@@ -837,8 +1169,15 @@ class DomainFronter:
 
         full_body = b"".join(parts)
         kbs = (len(full_body) / 1024) / elapsed if elapsed > 0 else 0
-        log.info("Parallel download complete: %d B in %.2fs = %.1f KB/s",
-                 len(full_body), elapsed, kbs)
+        log.info(
+            "Parallel download complete: %s",
+            self._progress_line(
+                elapsed=elapsed,
+                done=len(full_body),
+                total=len(full_body),
+                speed_bytes_per_sec=kbs * 1024,
+            ),
+        )
 
         # Return as 200 OK (client sent a normal GET)
         result = f"HTTP/1.1 200 OK\r\n"
@@ -850,6 +1189,219 @@ class DomainFronter:
         result += f"Content-Length: {len(full_body)}\r\n"
         result += "\r\n"
         return result.encode() + full_body
+
+    async def stream_parallel_download(self, url: str, headers: dict,
+                                       writer,
+                                       *,
+                                       chunk_size: int = 512 * 1024,
+                                       max_parallel: int = 8,
+                                       max_chunks: int = 256,
+                                       min_size: int = 0) -> bool:
+        """Stream a large range-capable download to the client incrementally.
+
+        Returns False when the target should fall back to the normal relay
+        path (for example no range support or the file is too small).
+        Returns True once this method has taken ownership of the client
+        response, even if the stream later aborts.
+        """
+        first_resp = await self._range_probe(url, headers, 0, chunk_size - 1)
+
+        status, resp_hdrs, resp_body = self._split_raw_response(first_resp)
+        if status != 206:
+            log.info(
+                "Streaming download fallback: initial probe returned %s for %s",
+                status, url[:80],
+            )
+            return False
+
+        parsed_range = self._parse_content_range(resp_hdrs.get("content-range", ""))
+        if not parsed_range:
+            log.info(
+                "Streaming download fallback: missing/invalid Content-Range for %s",
+                url[:80],
+            )
+            return False
+        first_start, first_end, total_size = parsed_range
+        first_err = self._validate_range_response(
+            status, resp_hdrs, resp_body, first_start, first_end, total_size,
+        )
+        if first_start != 0 or first_err:
+            log.info(
+                "Streaming download fallback: invalid first range (%s) for %s",
+                first_err or f"start={first_start}",
+                url[:80],
+            )
+            return False
+        if min_size > 0 and total_size < min_size:
+            log.info(
+                "Streaming download fallback: file too small (%d < %d) for %s",
+                total_size, min_size, url[:80],
+            )
+            return False
+        if max_chunks > 0:
+            required_chunk_size = max(
+                chunk_size,
+                (total_size + max_chunks - 1) // max_chunks,
+            )
+            if required_chunk_size != chunk_size:
+                log.info(
+                    "Parallel download tuning: chunk size raised from %d KB to %d KB "
+                    "to keep request count under %d",
+                    chunk_size // 1024,
+                    required_chunk_size // 1024,
+                    max_chunks,
+                )
+                chunk_size = required_chunk_size
+
+        if total_size <= chunk_size or len(resp_body) >= total_size:
+            writer.write(self._render_streaming_headers(resp_hdrs, total_size))
+            writer.write(resp_body)
+            await writer.drain()
+            return True
+
+        ranges = []
+        start = len(resp_body)
+        while start < total_size:
+            end = min(start + chunk_size - 1, total_size - 1)
+            ranges.append((start, end))
+            start = end + 1
+
+        log.info("Parallel streaming download: %d bytes, %d chunks of %d KB",
+                 total_size, len(ranges) + 1, chunk_size // 1024)
+
+        temp_file = tempfile.TemporaryFile(prefix="mhrvpn_dl_")
+        file_lock = asyncio.Lock()
+        sem = asyncio.Semaphore(max_parallel)
+        cancel_event = asyncio.Event()
+        tasks: list[asyncio.Task] = []
+        ready = [asyncio.Event() for _ in ranges]
+        errors: list[Exception | None] = [None for _ in ranges]
+        delivered_chunks = 1
+        delivered_bytes = len(resp_body)
+        total_chunks = len(ranges) + 1
+        last_progress_log = time.perf_counter()
+        t0 = time.perf_counter()
+
+        async def _write_progress(force: bool = False) -> None:
+            nonlocal last_progress_log
+            now = time.perf_counter()
+            if not force and (now - last_progress_log) < 5.0:
+                return
+            elapsed = max(0.001, now - t0)
+            speed_bps = delivered_bytes / elapsed
+            log.info(
+                "Parallel download progress: %s [%d/%d chunks]",
+                self._progress_line(
+                    elapsed=elapsed,
+                    done=delivered_bytes,
+                    total=total_size,
+                    speed_bytes_per_sec=speed_bps,
+                ),
+                delivered_chunks, total_chunks,
+            )
+            last_progress_log = now
+
+        async def fetch_range(index: int, start_off: int, end_off: int,
+                              max_tries: int = 3) -> None:
+            async with sem:
+                base_headers = dict(headers) if headers else {}
+                base_headers["Range"] = f"bytes={start_off}-{end_off}"
+                payload = self._build_payload("GET", url, base_headers, b"")
+                expected = end_off - start_off + 1
+                last_err = "unknown"
+                try:
+                    for attempt in range(max_tries):
+                        if cancel_event.is_set():
+                            return
+                        try:
+                            raw = await self._relay_payload_h1(payload)
+                            chunk_status, chunk_headers, chunk_body = self._split_raw_response(raw)
+                            err = self._validate_range_response(
+                                chunk_status, chunk_headers, chunk_body,
+                                start_off, end_off, total_size,
+                            )
+                            if err is None:
+                                async with file_lock:
+                                    await asyncio.to_thread(
+                                        self._spool_write, temp_file, start_off, chunk_body,
+                                    )
+                                ready[index].set()
+                                return
+                            last_err = err
+                        except Exception as exc:
+                            last_err = repr(exc)
+                        if cancel_event.is_set():
+                            return
+                        log.warning("Range %d-%d retry %d/%d: %s",
+                                    start_off, end_off, attempt + 1, max_tries, last_err)
+                        await asyncio.sleep(0.3 * (attempt + 1))
+                    errors[index] = RuntimeError(
+                        f"chunk {start_off}-{end_off} failed after {max_tries} tries: {last_err}"
+                    )
+                    ready[index].set()
+                except asyncio.CancelledError:
+                    raise
+
+        try:
+            writer.write(self._render_streaming_headers(resp_hdrs, total_size))
+            writer.write(resp_body)
+            await writer.drain()
+
+            for index, (start_off, end_off) in enumerate(ranges):
+                tasks.append(asyncio.create_task(fetch_range(index, start_off, end_off)))
+
+            for index, (start_off, end_off) in enumerate(ranges):
+                await ready[index].wait()
+                if errors[index] is not None:
+                    raise errors[index]
+                expected = end_off - start_off + 1
+                async with file_lock:
+                    chunk = await asyncio.to_thread(
+                        self._spool_read, temp_file, start_off, expected,
+                    )
+                if len(chunk) != expected:
+                    raise RuntimeError(
+                        f"spooled chunk {start_off}-{end_off} was truncated "
+                        f"({len(chunk)}/{expected} B)"
+                    )
+                writer.write(chunk)
+                await writer.drain()
+                delivered_chunks += 1
+                delivered_bytes += len(chunk)
+                await _write_progress(force=(index == len(ranges) - 1))
+
+            elapsed = max(0.001, time.perf_counter() - t0)
+            log.info(
+                "Parallel streaming download complete: %s",
+                self._progress_line(
+                    elapsed=elapsed,
+                    done=total_size,
+                    total=total_size,
+                    speed_bytes_per_sec=total_size / elapsed,
+                ),
+            )
+            return True
+        except (ConnectionError, BrokenPipeError, TimeoutError) as exc:
+            log.info("Parallel download cancelled by client: %s", exc)
+            cancel_event.set()
+            return True
+        except Exception as exc:
+            self._mark_stream_download_failure(url, str(exc))
+            log.error("Parallel streaming download failed (%s): %s", url[:60], exc)
+            cancel_event.set()
+            try:
+                if not writer.is_closing():
+                    writer.close()
+            except Exception:
+                pass
+            return True
+        finally:
+            cancel_event.set()
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            temp_file.close()
 
     @staticmethod
     def _rewrite_206_to_200(raw: bytes) -> bytes:
@@ -1039,33 +1591,43 @@ class DomainFronter:
 
     async def _relay_with_retry(self, payload: dict) -> bytes:
         """Single relay with one retry on failure. Uses H2 if available."""
+        attempts = self._retry_attempts_for_payload(payload)
         # Fan-out: race N Apps Script instances when enabled and H2 is up.
         # Cuts tail latency when one container is slow/cold. Only kicks in
         # if multiple script IDs are configured and the H2 transport is live.
-        if (self._parallel_relay > 1
+        if (attempts > 1
+                and self._parallel_relay > 1
                 and len(self._script_ids) > 1
-                and self._h2 and self._h2.is_connected):
+                and self._h2_available()):
             try:
-                return await asyncio.wait_for(
-                    self._relay_fanout(payload), timeout=RELAY_TIMEOUT,
+                result = await asyncio.wait_for(
+                    self._relay_fanout(payload), timeout=self._relay_timeout,
                 )
+                self._record_h2_success()
+                return result
             except Exception as e:
+                self._record_h2_failure(e)
                 log.debug("Fan-out relay failed (%s), falling back", e)
                 # fall through to single-path logic below
 
         # Try HTTP/2 first — much faster (multiplexed, no pool checkout)
-        if self._h2 and self._h2.is_connected:
-            for attempt in range(2):
+        if self._h2_available():
+            for attempt in range(attempts):
                 try:
-                    return await asyncio.wait_for(
-                        self._relay_single_h2(payload), timeout=RELAY_TIMEOUT
+                    result = await asyncio.wait_for(
+                        self._relay_single_h2(payload), timeout=self._relay_timeout
                     )
+                    self._record_h2_success()
+                    return result
                 except Exception as e:
-                    if attempt == 0:
+                    self._record_h2_failure(e)
+                    if attempt < attempts - 1:
                         log.debug("H2 relay failed (%s), reconnecting", e)
                         try:
                             await self._h2.reconnect()
-                        except Exception:
+                            self._record_h2_success()
+                        except Exception as reconnect_exc:
+                            self._record_h2_failure(reconnect_exc)
                             log.warning("H2 reconnect failed, falling back to H1")
                             break
                     else:
@@ -1073,14 +1635,15 @@ class DomainFronter:
 
         # HTTP/1.1 fallback (pool-based)
         async with self._semaphore:
-            for attempt in range(2):
+            for attempt in range(attempts):
                 try:
                     return await asyncio.wait_for(
-                        self._relay_single(payload), timeout=RELAY_TIMEOUT
+                        self._relay_single(payload), timeout=self._relay_timeout
                     )
                 except Exception as e:
-                    if attempt == 0:
-                        log.debug("Relay attempt 1 failed (%s: %s), retrying",
+                    if attempt < attempts - 1:
+                        log.debug("Relay attempt %d failed (%s: %s), retrying",
+                                  attempt + 1,
                                   type(e).__name__, e)
                         await self._flush_pool()
                     else:
@@ -1248,7 +1811,7 @@ class DomainFronter:
         path = self._exec_path(payloads[0].get("u") if payloads else None)
 
         # Try HTTP/2 first
-        if self._h2 and self._h2.is_connected:
+        if self._h2_available():
             try:
                 status, headers, body = await asyncio.wait_for(
                     self._h2.request(
@@ -1258,8 +1821,10 @@ class DomainFronter:
                     ),
                     timeout=30,
                 )
+                self._record_h2_success()
                 return self._parse_batch_body(body, payloads)
             except Exception as e:
+                self._record_h2_failure(e)
                 log.debug("H2 batch failed (%s), falling back to H1", e)
 
         # HTTP/1.1 fallback
@@ -1383,7 +1948,13 @@ class DomainFronter:
         if "chunked" in transfer_encoding:
             body = await self._read_chunked(reader, body)
         elif content_length:
-            remaining = int(content_length) - len(body)
+            total = int(content_length)
+            if total > self._max_response_body_bytes:
+                raise RuntimeError(
+                    "Relay response exceeds configured size cap "
+                    f"({total} > {self._max_response_body_bytes} bytes)"
+                )
+            remaining = total - len(body)
             while remaining > 0:
                 chunk = await asyncio.wait_for(
                     reader.read(min(remaining, 65536)), timeout=20
@@ -1391,6 +1962,10 @@ class DomainFronter:
                 if not chunk:
                     break
                 body += chunk
+                if len(body) > self._max_response_body_bytes:
+                    raise RuntimeError(
+                        "Relay response exceeded configured size cap while reading body"
+                    )
                 remaining -= len(chunk)
         else:
             # No framing — short timeout read (keep-alive safe)
@@ -1400,6 +1975,10 @@ class DomainFronter:
                     if not chunk:
                         break
                     body += chunk
+                    if len(body) > self._max_response_body_bytes:
+                        raise RuntimeError(
+                            "Relay response exceeded configured size cap while streaming"
+                        )
                 except asyncio.TimeoutError:
                     break
 
@@ -1407,13 +1986,17 @@ class DomainFronter:
         enc = headers.get("content-encoding", "")
         if enc:
             body = codec.decode(body, enc)
+            if len(body) > self._max_response_body_bytes:
+                raise RuntimeError(
+                    "Decoded relay response exceeded configured size cap"
+                )
 
         return status, headers, body
 
     async def _read_chunked(self, reader, buf=b""):
         """Incrementally read chunked transfer-encoding."""
         result = b""
-        _MAX_BODY = 200 * 1024 * 1024  # 200 MB total body cap
+        max_body = self._max_response_body_bytes
         while True:
             while b"\r\n" not in buf:
                 data = await asyncio.wait_for(reader.read(8192), timeout=20)
@@ -1433,9 +2016,11 @@ class DomainFronter:
                 break
             if size == 0:
                 break
-            if size > _MAX_BODY or len(result) + size > _MAX_BODY:
-                log.warning("Chunked body exceeds %d MB cap — truncating", _MAX_BODY // (1024 * 1024))
-                break
+            if size > max_body or len(result) + size > max_body:
+                raise RuntimeError(
+                    "Chunked relay response exceeded configured size cap "
+                    f"({max_body} bytes)"
+                )
 
             while len(buf) < size + 2:
                 data = await asyncio.wait_for(reader.read(65536), timeout=20)
@@ -1479,6 +2064,13 @@ class DomainFronter:
         status = data.get("s", 200)
         resp_headers = data.get("h", {})
         resp_body = base64.b64decode(data.get("b", ""))
+        if len(resp_body) > self._max_response_body_bytes:
+            return self._error_response(
+                502,
+                "Relay response exceeds cap "
+                f"({self._max_response_body_bytes} bytes). "
+                "Increase max_response_body_bytes if your system has enough RAM.",
+            )
 
         status_text = {200: "OK", 206: "Partial Content",
                        301: "Moved", 302: "Found", 304: "Not Modified",

@@ -230,7 +230,7 @@ def main():
             log.info("MITM CA is already trusted.")
 
     # ── LAN sharing configuration ────────────────────────────────────────
-    lan_sharing = config.get("lan_sharing", True)
+    lan_sharing = config.get("lan_sharing", False)
     if lan_sharing:
         # If LAN sharing is enabled and host is still localhost, change to all interfaces
         if config.get("listen_host", "127.0.0.1") == "127.0.0.1":

@@ -65,6 +65,23 @@ def _parse_content_length(header_block: bytes) -> int:
     return 0
 
 
+def _has_unsupported_transfer_encoding(header_block: bytes) -> bool:
+    """True when the request uses Transfer-Encoding, which we don't stream."""
+    for raw_line in header_block.split(b"\r\n"):
+        name, sep, value = raw_line.partition(b":")
+        if not sep:
+            continue
+        if name.strip().lower() != b"transfer-encoding":
+            continue
+        encodings = [
+            token.strip().lower()
+            for token in value.decode(errors="replace").split(",")
+            if token.strip()
+        ]
+        return any(token != "identity" for token in encodings)
+    return False
+
+
 class ResponseCache:
     """Simple LRU response cache — avoids repeated relay calls."""
 
@@ -147,6 +164,14 @@ class ProxyServer:
     _GOOGLE_DIRECT_ALLOW_EXACT    = GOOGLE_DIRECT_ALLOW_EXACT
     _GOOGLE_DIRECT_ALLOW_SUFFIXES = GOOGLE_DIRECT_ALLOW_SUFFIXES
     _TRACE_HOST_SUFFIXES          = TRACE_HOST_SUFFIXES
+    _DOWNLOAD_DEFAULT_EXTS        = tuple(sorted(LARGE_FILE_EXTS))
+    _DOWNLOAD_ACCEPT_MARKERS      = (
+        "application/octet-stream",
+        "application/zip",
+        "application/x-bittorrent",
+        "video/",
+        "audio/",
+    )
 
     def __init__(self, config: dict):
         self.host = config.get("listen_host", "127.0.0.1")
@@ -159,6 +184,30 @@ class ProxyServer:
         self._cache = ResponseCache(max_mb=CACHE_MAX_MB)
         self._direct_fail_until: dict[str, float] = {}
         self._servers: list[asyncio.base_events.Server] = []
+        self._client_tasks: set[asyncio.Task] = set()
+        self._tcp_connect_timeout = self._cfg_float(
+            config, "tcp_connect_timeout", TCP_CONNECT_TIMEOUT, minimum=1.0,
+        )
+        self._download_min_size = self._cfg_int(
+            config, "chunked_download_min_size", 5 * 1024 * 1024, minimum=0,
+        )
+        self._download_chunk_size = self._cfg_int(
+            config, "chunked_download_chunk_size", 512 * 1024, minimum=64 * 1024,
+        )
+        self._download_max_parallel = self._cfg_int(
+            config, "chunked_download_max_parallel", 8, minimum=1,
+        )
+        self._download_max_chunks = self._cfg_int(
+            config, "chunked_download_max_chunks", 256, minimum=1,
+        )
+        self._download_extensions, self._download_any_extension = (
+            self._normalize_download_extensions(
+                config.get(
+                    "chunked_download_extensions",
+                    list(self._DOWNLOAD_DEFAULT_EXTS),
+                )
+            )
+        )
 
         # hosts override — DNS fake-map: domain/suffix → IP
         # Checked before any real DNS lookup; supports exact and suffix matching.
@@ -197,6 +246,55 @@ class ProxyServer:
             raise SystemExit(1)
 
     # ── Host-policy helpers ───────────────────────────────────────
+
+    @staticmethod
+    def _cfg_int(config: dict, key: str, default: int, *, minimum: int = 1) -> int:
+        try:
+            value = int(config.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, value)
+
+    @staticmethod
+    def _cfg_float(config: dict, key: str, default: float,
+                   *, minimum: float = 0.1) -> float:
+        try:
+            value = float(config.get(key, default))
+        except (TypeError, ValueError):
+            value = default
+        return max(minimum, value)
+
+    @classmethod
+    def _normalize_download_extensions(cls, raw) -> tuple[tuple[str, ...], bool]:
+        values = raw if isinstance(raw, (list, tuple)) else cls._DOWNLOAD_DEFAULT_EXTS
+        normalized: list[str] = []
+        any_extension = False
+        seen: set[str] = set()
+        for item in values:
+            ext = str(item).strip().lower()
+            if not ext:
+                continue
+            if ext in {"*", ".*"}:
+                any_extension = True
+                continue
+            if not ext.startswith("."):
+                ext = "." + ext
+            if ext not in seen:
+                seen.add(ext)
+                normalized.append(ext)
+        if not normalized and not any_extension:
+            normalized = list(cls._DOWNLOAD_DEFAULT_EXTS)
+        return tuple(normalized), any_extension
+
+    def _track_current_task(self) -> asyncio.Task | None:
+        task = asyncio.current_task()
+        if task is not None:
+            self._client_tasks.add(task)
+        return task
+
+    def _untrack_task(self, task: asyncio.Task | None) -> None:
+        if task is not None:
+            self._client_tasks.discard(task)
 
     @staticmethod
     def _load_host_rules(raw) -> tuple[set[str], tuple[str, ...]]:
@@ -352,15 +450,18 @@ class ProxyServer:
                 self.socks_host, self.socks_port,
             )
 
-        async with http_srv:
-            if socks_srv:
-                async with socks_srv:
-                    await asyncio.gather(
-                        http_srv.serve_forever(),
-                        socks_srv.serve_forever(),
-                    )
-            else:
-                await http_srv.serve_forever()
+        try:
+            async with http_srv:
+                if socks_srv:
+                    async with socks_srv:
+                        await asyncio.gather(
+                            http_srv.serve_forever(),
+                            socks_srv.serve_forever(),
+                        )
+                else:
+                    await http_srv.serve_forever()
+        except asyncio.CancelledError:
+            raise
 
     async def stop(self):
         """Shut down all listeners and release relay resources."""
@@ -375,6 +476,15 @@ class ProxyServer:
             except Exception:
                 pass
         self._servers = []
+
+        current = asyncio.current_task()
+        client_tasks = [task for task in self._client_tasks if task is not current]
+        for task in client_tasks:
+            task.cancel()
+        if client_tasks:
+            await asyncio.gather(*client_tasks, return_exceptions=True)
+        self._client_tasks.clear()
+
         try:
             await self.fronter.close()
         except Exception as exc:
@@ -384,6 +494,7 @@ class ProxyServer:
 
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info("peername")
+        task = self._track_current_task()
         try:
             first_line = await asyncio.wait_for(reader.readline(), timeout=30)
             if not first_line:
@@ -400,6 +511,16 @@ class ProxyServer:
                 if line in (b"\r\n", b"\n", b""):
                     break
 
+            if _has_unsupported_transfer_encoding(header_block):
+                log.warning("Unsupported Transfer-Encoding on client request")
+                writer.write(
+                    b"HTTP/1.1 501 Not Implemented\r\n"
+                    b"Connection: close\r\n"
+                    b"Content-Length: 0\r\n\r\n"
+                )
+                await writer.drain()
+                return
+
             request_line = first_line.decode(errors="replace").strip()
             parts = request_line.split(" ", 2)
             if len(parts) < 2:
@@ -412,11 +533,14 @@ class ProxyServer:
             else:
                 await self._do_http(header_block, reader, writer)
 
+        except asyncio.CancelledError:
+            pass
         except asyncio.TimeoutError:
             log.debug("Timeout: %s", addr)
         except Exception as e:
             log.error("Error (%s): %s", addr, e)
         finally:
+            self._untrack_task(task)
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -426,6 +550,7 @@ class ProxyServer:
     async def _on_socks_client(self, reader: asyncio.StreamReader,
                                writer: asyncio.StreamWriter):
         addr = writer.get_extra_info("peername")
+        task = self._track_current_task()
         try:
             header = await asyncio.wait_for(reader.readexactly(2), timeout=15)
             ver, nmethods = header[0], header[1]
@@ -475,11 +600,14 @@ class ProxyServer:
 
         except asyncio.IncompleteReadError:
             pass
+        except asyncio.CancelledError:
+            pass
         except asyncio.TimeoutError:
             log.debug("SOCKS5 timeout: %s", addr)
         except Exception as e:
             log.error("SOCKS5 error (%s): %s", addr, e)
         finally:
+            self._untrack_task(task)
             try:
                 writer.close()
                 await writer.wait_closed()
@@ -783,7 +911,9 @@ class ProxyServer:
         """
         target_ip = connect_ip or host
         try:
-            r_remote, w_remote = await self._open_tcp_connection(target_ip, port, timeout=10)
+            r_remote, w_remote = await self._open_tcp_connection(
+                target_ip, port, timeout=self._tcp_connect_timeout,
+            )
         except Exception as e:
             log.error("Direct tunnel connect failed (%s via %s): %s",
                       host, target_ip, e)
@@ -858,7 +988,7 @@ class ProxyServer:
                     ssl=ssl_ctx_client,
                     server_hostname=sni_out,
                 ),
-                timeout=10,
+                timeout=self._tcp_connect_timeout,
             )
         except Exception as e:
             log.error("SNI-rewrite outbound connect failed (%s via %s): %s",
@@ -969,6 +1099,15 @@ class ProxyServer:
 
                 # Read body
                 body = b""
+                if _has_unsupported_transfer_encoding(header_block):
+                    log.warning("Unsupported Transfer-Encoding → %s:%d", host, port)
+                    writer.write(
+                        b"HTTP/1.1 501 Not Implemented\r\n"
+                        b"Connection: close\r\n"
+                        b"Content-Length: 0\r\n\r\n"
+                    )
+                    await writer.drain()
+                    break
                 length = _parse_content_length(header_block)
                 if length > MAX_REQUEST_BODY_BYTES:
                     raise ValueError(f"Request body too large: {length} bytes")
@@ -1008,25 +1147,7 @@ class ProxyServer:
 
                 log.info("MITM → %s %s", method, url)
 
-                # ── CORS: extract relevant request headers ────────────────────
-                origin = next(
-                    (v for k, v in headers.items() if k.lower() == "origin"), ""
-                )
-                acr_method = next(
-                    (v for k, v in headers.items()
-                     if k.lower() == "access-control-request-method"), ""
-                )
-                acr_headers = next(
-                    (v for k, v in headers.items()
-                     if k.lower() == "access-control-request-headers"), ""
-                )
-
-                # CORS preflight — respond directly; UrlFetchApp doesn't
-                # support OPTIONS so forwarding it would always fail.
-                if method.upper() == "OPTIONS" and acr_method:
-                    log.debug("CORS preflight → %s (responding locally)", url[:60])
-                    writer.write(self._cors_preflight_response(origin, acr_method, acr_headers))
-                    await writer.drain()
+                if await self._maybe_stream_download(method, url, headers, body, writer):
                     continue
 
                 # Check local cache first (GET only)
@@ -1057,11 +1178,6 @@ class ProxyServer:
                             self._cache.put(url, response, ttl)
                             log.debug("Cached (%ds): %s", ttl, url[:60])
 
-                # Inject permissive CORS headers whenever the browser
-                # sent an Origin (cross-origin XHR / fetch).
-                if origin and response:
-                    response = self._inject_cors_headers(response, origin)
-
                 self._log_response_summary(url, response)
 
                 writer.write(response)
@@ -1076,64 +1192,6 @@ class ProxyServer:
             except Exception as e:
                 log.error("MITM handler error (%s): %s", host, e)
                 break
-
-    # ── CORS helpers ──────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _cors_preflight_response(origin: str, acr_method: str, acr_headers: str) -> bytes:
-        """Return a 204 No Content response that satisfies a CORS preflight."""
-        allow_origin = origin or "*"
-        allow_methods = (
-            f"{acr_method}, GET, POST, PUT, DELETE, PATCH, OPTIONS"
-            if acr_method else
-            "GET, POST, PUT, DELETE, PATCH, OPTIONS"
-        )
-        allow_headers = acr_headers or "*"
-        return (
-            "HTTP/1.1 204 No Content\r\n"
-            f"Access-Control-Allow-Origin: {allow_origin}\r\n"
-            f"Access-Control-Allow-Methods: {allow_methods}\r\n"
-            f"Access-Control-Allow-Headers: {allow_headers}\r\n"
-            "Access-Control-Allow-Credentials: true\r\n"
-            "Access-Control-Max-Age: 86400\r\n"
-            "Vary: Origin\r\n"
-            "Content-Length: 0\r\n"
-            "\r\n"
-        ).encode()
-
-    @staticmethod
-    def _inject_cors_headers(response: bytes, origin: str) -> bytes:
-        """Inject CORS headers only if the upstream response lacks them.
-
-        We must NOT overwrite the origin server's CORS headers: sites like
-        x.com return carefully-scoped Access-Control-Allow-Headers that list
-        specific custom headers (e.g. x-csrf-token). Replacing them with
-        wildcards together with Allow-Credentials: true makes browsers
-        reject the response (per the Fetch spec, "*" is literal when
-        credentials are included), which the site then blames on privacy
-        extensions. So we only fill in what the server omitted.
-        """
-        sep = b"\r\n\r\n"
-        if sep not in response:
-            return response
-        header_section, body = response.split(sep, 1)
-        lines = header_section.decode(errors="replace").split("\r\n")
-
-        existing = {ln.split(":", 1)[0].strip().lower()
-                    for ln in lines if ":" in ln}
-
-        # If the upstream already handled CORS, leave it completely alone.
-        if "access-control-allow-origin" in existing:
-            return response
-
-        # Otherwise inject a minimal, credential-safe set (no wildcards,
-        # since wildcards combined with credentials are invalid).
-        allow_origin = origin or "*"
-        additions = [f"Access-Control-Allow-Origin: {allow_origin}"]
-        if allow_origin != "*":
-            additions.append("Access-Control-Allow-Credentials: true")
-            additions.append("Vary: Origin")
-        return ("\r\n".join(lines + additions) + "\r\n\r\n").encode() + body
 
     async def _relay_smart(self, method, url, headers, body):
         """Choose optimal relay strategy based on request type.
@@ -1156,22 +1214,67 @@ class ProxyServer:
             # Only probe with Range when the URL looks like a big file.
             if self._is_likely_download(url, headers):
                 return await self.fronter.relay_parallel(
-                    method, url, headers, body
+                    method,
+                    url,
+                    headers,
+                    body,
+                    chunk_size=self._download_chunk_size,
+                    max_parallel=self._download_max_parallel,
+                    max_chunks=self._download_max_chunks,
+                    min_size=self._download_min_size,
                 )
         return await self.fronter.relay(method, url, headers, body)
 
     def _is_likely_download(self, url: str, headers: dict) -> bool:
         """Heuristic: is this URL likely a large file download?"""
         path = url.split("?")[0].lower()
-        for ext in LARGE_FILE_EXTS:
+        if self._download_any_extension:
+            return True
+        for ext in self._download_extensions:
             if path.endswith(ext):
                 return True
+        accept = self._header_value(headers, "accept").lower()
+        if any(marker in accept for marker in self._DOWNLOAD_ACCEPT_MARKERS):
+            return True
         return False
+
+    async def _maybe_stream_download(self, method: str, url: str,
+                                     headers: dict | None, body: bytes,
+                                     writer) -> bool:
+        if method.upper() != "GET" or body:
+            return False
+        if headers:
+            for key in headers:
+                if key.lower() == "range":
+                    return False
+        effective_headers = headers or {}
+        if not self._is_likely_download(url, effective_headers):
+            return False
+        if not self.fronter.stream_download_allowed(url):
+            return False
+        return await self.fronter.stream_parallel_download(
+            url,
+            effective_headers,
+            writer,
+            chunk_size=self._download_chunk_size,
+            max_parallel=self._download_max_parallel,
+            max_chunks=self._download_max_chunks,
+            min_size=self._download_min_size,
+        )
 
     # ── Plain HTTP forwarding ─────────────────────────────────────
 
     async def _do_http(self, header_block: bytes, reader, writer):
         body = b""
+        if _has_unsupported_transfer_encoding(header_block):
+            log.warning("Unsupported Transfer-Encoding on plain HTTP request")
+            writer.write(
+                b"HTTP/1.1 501 Not Implemented\r\n"
+                b"Connection: close\r\n"
+                b"Content-Length: 0\r\n\r\n"
+            )
+            await writer.drain()
+            return
         length = _parse_content_length(header_block)
         if length > MAX_REQUEST_BODY_BYTES:
             writer.write(b"HTTP/1.1 413 Content Too Large\r\n\r\n")
@@ -1194,22 +1297,7 @@ class ProxyServer:
                 k, v = raw_line.decode(errors="replace").split(":", 1)
                 headers[k.strip()] = v.strip()
 
-        # ── CORS preflight over plain HTTP ────────────────────────────
-        origin = next(
-            (v for k, v in headers.items() if k.lower() == "origin"), ""
-        )
-        acr_method = next(
-            (v for k, v in headers.items()
-             if k.lower() == "access-control-request-method"), ""
-        )
-        acr_headers_val = next(
-            (v for k, v in headers.items()
-             if k.lower() == "access-control-request-headers"), ""
-        )
-        if method.upper() == "OPTIONS" and acr_method:
-            log.debug("CORS preflight (HTTP) → %s (responding locally)", url[:60])
-            writer.write(self._cors_preflight_response(origin, acr_method, acr_headers_val))
-            await writer.drain()
+        if await self._maybe_stream_download(method, url, headers, body, writer):
             return
 
         # Cache check for GET
@@ -1227,9 +1315,6 @@ class ProxyServer:
                 if ttl > 0:
                     self._cache.put(url, response, ttl)
 
-        # Inject CORS headers for cross-origin requests
-        if origin and response:
-            response = self._inject_cors_headers(response, origin)
         self._log_response_summary(url, response)
 
         writer.write(response)

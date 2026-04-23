@@ -86,6 +86,15 @@ def load_base_config() -> dict:
         "socks5_port": 1080,
         "log_level": "INFO",
         "verify_ssl": True,
+        "lan_sharing": False,
+        "relay_timeout": 25,
+        "tls_connect_timeout": 15,
+        "tcp_connect_timeout": 10,
+        "max_response_body_bytes": 200 * 1024 * 1024,
+        "chunked_download_min_size": 5 * 1024 * 1024,
+        "chunked_download_chunk_size": 512 * 1024,
+        "chunked_download_max_parallel": 8,
+        "chunked_download_max_chunks": 256,
         "hosts": {},
     }
 
@@ -118,7 +127,15 @@ def configure_apps_script(cfg: dict) -> dict:
 def configure_network(cfg: dict) -> dict:
     print()
     print(bold("Network settings") + dim("  (press enter to accept defaults)"))
-    cfg["listen_host"] = prompt("Listen host", default=str(cfg.get("listen_host", "127.0.0.1")))
+    cfg["lan_sharing"] = prompt_yes_no(
+        "Enable LAN sharing?",
+        default=bool(cfg.get("lan_sharing", False)),
+    )
+
+    default_host = str(cfg.get("listen_host", "127.0.0.1"))
+    if cfg["lan_sharing"] and default_host == "127.0.0.1":
+        default_host = "0.0.0.0"
+    cfg["listen_host"] = prompt("Listen host", default=default_host)
 
     port = prompt("HTTP proxy port", default=str(cfg.get("listen_port", 8085)))
     try:
