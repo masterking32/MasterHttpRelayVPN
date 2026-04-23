@@ -1209,6 +1209,30 @@ class ProxyServer:
 
                 log.info("MITM → %s %s", method, url)
 
+                # ── CORS: extract relevant request headers ─────────────
+                origin = self._header_value(headers, "origin")
+                acr_method = self._header_value(
+                    headers, "access-control-request-method",
+                )
+                acr_headers = self._header_value(
+                    headers, "access-control-request-headers",
+                )
+
+                # CORS preflight — respond directly. Apps Script's
+                # UrlFetchApp does not support the OPTIONS method, so
+                # forwarding preflights would always fail and break every
+                # cross-origin fetch/XHR the browser runs through us.
+                if method.upper() == "OPTIONS" and acr_method:
+                    log.debug(
+                        "CORS preflight → %s (responding locally)",
+                        url[:60],
+                    )
+                    writer.write(self._cors_preflight_response(
+                        origin, acr_method, acr_headers,
+                    ))
+                    await writer.drain()
+                    continue
+
                 if await self._maybe_stream_download(method, url, headers, body, writer):
                     continue
 
@@ -1240,6 +1264,13 @@ class ProxyServer:
                             self._cache.put(url, response, ttl)
                             log.debug("Cached (%ds): %s", ttl, url[:60])
 
+                # Inject permissive CORS headers whenever the browser sent
+                # an Origin (cross-origin XHR / fetch). Without this, the
+                # browser blocks the response even though the relay fetched
+                # it successfully.
+                if origin and response:
+                    response = self._inject_cors_headers(response, origin)
+
                 self._log_response_summary(url, response)
 
                 writer.write(response)
@@ -1254,6 +1285,61 @@ class ProxyServer:
             except Exception as e:
                 log.error("MITM handler error (%s): %s", host, e)
                 break
+
+    # ── CORS helpers ──────────────────────────────────────────────
+
+    @staticmethod
+    def _cors_preflight_response(origin: str, acr_method: str,
+                                 acr_headers: str) -> bytes:
+        """Build a 204 response that satisfies a CORS preflight locally.
+
+        Apps Script's UrlFetchApp does not support OPTIONS, so we have to
+        answer preflights here instead of forwarding them.
+        """
+        allow_origin = origin or "*"
+        allow_methods = (
+            f"{acr_method}, GET, POST, PUT, DELETE, PATCH, OPTIONS"
+            if acr_method else
+            "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        )
+        allow_headers = acr_headers or "*"
+        return (
+            "HTTP/1.1 204 No Content\r\n"
+            f"Access-Control-Allow-Origin: {allow_origin}\r\n"
+            f"Access-Control-Allow-Methods: {allow_methods}\r\n"
+            f"Access-Control-Allow-Headers: {allow_headers}\r\n"
+            "Access-Control-Allow-Credentials: true\r\n"
+            "Access-Control-Max-Age: 86400\r\n"
+            "Vary: Origin\r\n"
+            "Content-Length: 0\r\n"
+            "\r\n"
+        ).encode()
+
+    @staticmethod
+    def _inject_cors_headers(response: bytes, origin: str) -> bytes:
+        """Strip existing Access-Control-* headers and add permissive ones.
+
+        Keeps the body untouched; only rewrites the header block. Using
+        the exact browser-supplied Origin (rather than "*") is required
+        when the request is credentialed (cookies, Authorization).
+        """
+        sep = b"\r\n\r\n"
+        if sep not in response:
+            return response
+        header_section, body = response.split(sep, 1)
+        lines = header_section.decode(errors="replace").split("\r\n")
+        lines = [ln for ln in lines
+                 if not ln.lower().startswith("access-control-")]
+        allow_origin = origin or "*"
+        lines += [
+            f"Access-Control-Allow-Origin: {allow_origin}",
+            "Access-Control-Allow-Credentials: true",
+            "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS",
+            "Access-Control-Allow-Headers: *",
+            "Access-Control-Expose-Headers: *",
+            "Vary: Origin",
+        ]
+        return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
 
     async def _relay_smart(self, method, url, headers, body):
         """Choose optimal relay strategy based on request type.
@@ -1359,6 +1445,18 @@ class ProxyServer:
                 k, v = raw_line.decode(errors="replace").split(":", 1)
                 headers[k.strip()] = v.strip()
 
+        # ── CORS preflight over plain HTTP ─────────────────────────────
+        origin = self._header_value(headers, "origin")
+        acr_method = self._header_value(headers, "access-control-request-method")
+        acr_headers = self._header_value(headers, "access-control-request-headers")
+        if method.upper() == "OPTIONS" and acr_method:
+            log.debug("CORS preflight (HTTP) → %s (responding locally)", url[:60])
+            writer.write(self._cors_preflight_response(
+                origin, acr_method, acr_headers,
+            ))
+            await writer.drain()
+            return
+
         if await self._maybe_stream_download(method, url, headers, body, writer):
             return
 
@@ -1376,6 +1474,9 @@ class ProxyServer:
                 ttl = ResponseCache.parse_ttl(response, url)
                 if ttl > 0:
                     self._cache.put(url, response, ttl)
+
+        if origin and response:
+            response = self._inject_cors_headers(response, origin)
 
         self._log_response_summary(url, response)
 
