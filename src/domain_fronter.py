@@ -148,6 +148,8 @@ class DomainFronter:
         self._batch_window_macro = BATCH_WINDOW_MACRO
         self._batch_max = BATCH_MAX
         self._batch_enabled = True
+        self._batch_disabled_at = 0.0  # timestamp when batching was disabled; 0 = never disabled
+        self._batch_cooldown = 60  # seconds before re-enabling after failure
 
         # Request coalescing — dedup concurrent identical GETs
         self._coalesce: dict[str, list[asyncio.Future]] = {}
@@ -1141,9 +1143,15 @@ class DomainFronter:
 
     async def _batch_submit(self, payload: dict) -> bytes:
         """Submit a request to the batch collector. Returns raw HTTP response."""
-        # If batching is disabled (old Code.gs), go direct
+        # If batching is disabled, check if cooldown has expired
         if not self._batch_enabled:
-            return await self._relay_with_retry(payload)
+            if self._batch_disabled_at > 0 and (time.time() - self._batch_disabled_at) >= self._batch_cooldown:
+                # Cooldown expired — try re-enabling batching
+                self._batch_enabled = True
+                log.info("Batch mode re-enabled after %ds cooldown", self._batch_cooldown)
+            else:
+                # Still in cooldown or permanently disabled (old Code.gs) — go direct
+                return await self._relay_with_retry(payload)
 
         future = asyncio.get_running_loop().create_future()
 
@@ -1211,9 +1219,10 @@ class DomainFronter:
                     if not future.done():
                         future.set_result(result)
             except Exception as e:
-                log.warning("Batch relay failed, disabling batch mode. "
-                            "Redeploy Code.gs for batch support. Error: %s", e)
+                log.warning("Batch relay failed, disabling batch mode for %ds cooldown. "
+                            "Error: %s", self._batch_cooldown, e)
                 self._batch_enabled = False
+                self._batch_disabled_at = time.time()
                 # Fallback: send individually
                 tasks = []
                 for payload, future in batch:
