@@ -20,6 +20,11 @@ import socket
 import ssl
 from urllib.parse import urlparse
 
+try:
+    import certifi
+except Exception:  # optional dependency fallback
+    certifi = None
+
 import codec
 
 log = logging.getLogger("H2")
@@ -106,6 +111,13 @@ class H2Transport:
     async def _do_connect(self):
         """Establish the HTTP/2 connection with optimized socket settings."""
         ctx = ssl.create_default_context()
+        # Some Python builds don't expose a usable default CA store.
+        # Load certifi bundle when present to keep TLS verification stable.
+        if certifi is not None:
+            try:
+                ctx.load_verify_locations(cafile=certifi.where())
+            except Exception:
+                pass
         # Advertise both h2 and http/1.1 — some DPI blocks h2-only ALPN
         ctx.set_alpn_protocols(["h2", "http/1.1"])
         if not self.verify_ssl:
