@@ -184,6 +184,13 @@ class ProxyServer:
         self.socks_enabled = config.get("socks5_enabled", True)
         self.socks_host = config.get("socks5_host", self.host)
         self.socks_port = config.get("socks5_port", 1080)
+        if self.socks_enabled and self.socks_host == self.host \
+                and int(self.socks_port) == int(self.port):
+            raise ValueError(
+                f"listen_port and socks5_port must differ on the same host "
+                f"(both set to {self.port} on {self.host}). "
+                f"Change one of them in config.json."
+            )
         self.fronter = DomainFronter(config)
         self.mitm = None
         self._cache = ResponseCache(max_mb=CACHE_MAX_MB)
