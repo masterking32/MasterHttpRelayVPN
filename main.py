@@ -271,7 +271,29 @@ def main():
         log.info("Stopped")
 
 
+def _make_exception_handler(log):
+    """Return an asyncio exception handler that silences Windows WinError 10054
+    noise from connection cleanup (ConnectionResetError in
+    _ProactorBasePipeTransport._call_connection_lost), which is harmless but
+    verbose on Python/Windows when a remote host force-closes a socket."""
+    def handler(loop, context):
+        exc = context.get("exception")
+        cb  = context.get("handle") or context.get("source_traceback", "")
+        if (
+            isinstance(exc, ConnectionResetError)
+            and "_call_connection_lost" in str(cb)
+        ):
+            return  # suppress: benign Windows socket cleanup race
+        log.error("[asyncio]  %s", context.get("message", context))
+        if exc:
+            loop.default_exception_handler(context)
+    return handler
+
+
 async def _run(config):
+    loop = asyncio.get_running_loop()
+    _log = logging.getLogger("asyncio")
+    loop.set_exception_handler(_make_exception_handler(_log))
     server = ProxyServer(config)
     try:
         await server.start()
