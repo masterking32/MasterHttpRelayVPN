@@ -178,6 +178,7 @@ SNI_REWRITE_SUFFIXES: tuple[str, ...] = (
     "googletagmanager.com",
     "googletagservices.com",
     "fonts.googleapis.com",
+    "script.google.com",
 )
 
 
