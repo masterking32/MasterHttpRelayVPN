@@ -16,6 +16,28 @@ For the latest news, releases, and project updates, follow our Telegram channel:
 
 ---
 
+### If you like this project, please support it by starring it on GitHub (⭐). It helps the project get discovered.
+
+---
+
+### Optional Financial Support 💸
+
+- TON network:
+
+`masterking32.ton`
+
+- EVM-compatible networks (ETH and compatible chains):
+
+`0x517f07305D6ED781A089322B6cD93d1461bF8652`
+
+- TRC20 network (TRON):
+
+`TLApdY8APWkFHHoxebxGY8JhMeChiETqFH`
+
+Every contribution and every piece of feedback is appreciated. Support directly helps ongoing development and improvement.
+
+---
+
 ## Disclaimer
 
 MasterHttpRelayVPN is provided for educational, testing, and research purposes only.
@@ -263,12 +285,22 @@ This project focuses entirely on the **Apps Script** relay — a free Google acc
 |---------|---------|-------------|
 | `google_ip` | `216.239.38.120` | Google IP address to connect through |
 | `front_domain` | `www.google.com` | Domain shown to the firewall/filter |
-| `verify_ssl` | `true` | Verify TLS certificates |
+| `verify_ssl` | `true` | Verify the TLS certificate on the local fronted connection to Google/CDN |
+| `relay_timeout` | `25` | Total timeout for one relayed request before it fails |
+| `tls_connect_timeout` | `15` | Timeout for the proxy's TLS connection to the fronted Google/CDN endpoint |
+| `tcp_connect_timeout` | `10` | Timeout for direct TCP tunnels and outbound SNI-rewrite connects |
+| `max_response_body_bytes` | `209715200` | Hard cap for a single relay response body after buffering/decoding |
 | `script_ids` | — | Multiple Script IDs for load balancing (array) |
+| `chunked_download_extensions` | see [config.example.json](config.example.json) | File extensions that should use parallel range downloading. Supports `".*"` to probe all GET downloads. |
+| `chunked_download_min_size` | `5242880` | Minimum total file size (5 MB) before range-parallel download stays enabled |
+| `chunked_download_chunk_size` | `524288` | Per-range chunk size used by parallel downloads |
+| `chunked_download_max_parallel` | `8` | Maximum simultaneous range requests for one download |
+| `chunked_download_max_chunks` | `256` | Soft upper bound for total chunk requests; chunk size is raised automatically for very large files |
 | `block_hosts` | `[]` | Hosts that must never be tunneled (return HTTP 403). Supports exact names (`ads.example.com`) or leading-dot suffixes (`.doubleclick.net`). |
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | Hosts that go direct (no MITM, no relay). Useful for LAN resources or sites that break under MITM. |
 | `direct_google_exclude` | see [config.example.json](config.example.json) | Google apps that must use the MITM relay path instead of the fast direct tunnel. |
 | `hosts` | `{}` | Manual DNS override: map a hostname to a specific IP. |
+| `youtube_via_relay` | `false` | Route YouTube (`youtube.com`, `youtu.be`, `youtube-nocookie.com`) through the Apps Script relay instead of the SNI-rewrite path. The SNI-rewrite path uses Google's frontend IP which enforces SafeSearch and can cause **"Video Unavailable"** errors. Setting this to `true` fixes playback at the cost of using more Apps Script executions and slightly higher latency. |
 
 ### Optional Dependencies
 
@@ -280,7 +312,7 @@ Install everything from [`requirements.txt`](requirements.txt). All listed packa
 | `h2` | HTTP/2 multiplexing to the Apps Script relay (significantly faster) |
 | `brotli` | Decompression of `Content-Encoding: br` responses |
 | `zstandard` | Decompression of `Content-Encoding: zstd` responses |
-| `netifaces` | Better network interface detection for LAN sharing (fallback available without it) |
+
 
 ### Load Balancing
 
@@ -316,9 +348,52 @@ python3 main.py -c /path/to/config.json  # Use a different config file
 python3 main.py --install-cert           # Install MITM CA certificate and exit
 python3 main.py --uninstall-cert         # Remove MITM CA certificate and exit
 python3 main.py --no-cert-check          # Skip automatic CA install check on startup
+python3 main.py --scan                   # Scan Google IPs and find the fastest one
 ```
 
 > **Auto-install:** On startup (MITM mode), the proxy automatically checks if the CA certificate is trusted and attempts to install it. Use `--no-cert-check` to skip this. If auto-install fails (e.g. needs elevation), run `python main.py --install-cert` manually or follow Step 6 above.
+
+### Scanning for the Fastest Google IP
+
+If your current `google_ip` in `config.json` is blocked or slow, you can scan to find a faster one:
+
+```bash
+python3 main.py --scan
+```
+
+This will:
+1. Probe 27 candidate Google IPs in parallel
+2. Measure latency from your network
+3. Display results in a table
+4. Recommend the fastest IP
+5. Exit with exit code 0 if at least one IP is reachable, 1 otherwise
+
+**Example output:**
+```
+Scanning 27 Google frontend IPs
+  SNI: www.google.com
+  Timeout: 4s per IP
+  Concurrency: 8 parallel probes
+
+IP                   LATENCY      STATUS
+-------------------- ------------ -------------------------
+216.239.32.120          42ms   OK
+216.239.34.120          45ms   OK
+216.239.36.120          52ms   OK
+142.250.80.142       timeout   timeout
+...
+
+Result: 15 / 27 reachable
+
+Top 3 fastest IPs:
+  1. 216.239.32.120 (42ms)
+  2. 216.239.34.120 (45ms)
+  3. 216.239.36.120 (52ms)
+
+Recommended: Set "google_ip": "216.239.32.120" in config.json
+```
+
+After scanning, update your `config.json` with the recommended IP and restart the proxy.
 
 ---
 
@@ -356,6 +431,7 @@ MasterHttpRelayVPN/
     ├── mitm.py                # On-the-fly TLS interception
     ├── cert_installer.py      # Cross-platform CA installer (Windows/macOS/Linux + Firefox)
     ├── codec.py               # Content-Encoding decoder (gzip/deflate/br/zstd)
+    ├── google_ip_scanner.py   # Scanner to find the fastest reachable Google IP
     ├── constants.py           # Tunable defaults and shared data
     └── logging_utils.py       # Colored, aligned log formatter
 ```

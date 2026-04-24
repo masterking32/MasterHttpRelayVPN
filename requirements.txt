@@ -7,11 +7,14 @@ cryptography>=41.0.0
 # Optional: HTTP/2 multiplexing (faster apps_script relay)
 h2>=4.1.0
 
+# Optional: CA bundle for TLS verification (recommended on macOS / Windows)
+certifi>=2024.1.0
+
 # Optional: Brotli decompression (modern websites send `br` encoding)
 brotli>=1.1.0
 
 # Optional: Zstandard decompression (some CDNs now serve `zstd`)
 zstandard>=0.22.0
 
-# Optional: Better network interface detection for LAN sharing
-netifaces>=0.11.0
+# LAN interface detection now uses only the Python standard library
+# (works on Windows, Linux, macOS, Android/Termux without a C compiler).
