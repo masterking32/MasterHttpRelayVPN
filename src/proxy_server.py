@@ -1359,15 +1359,21 @@ class ProxyServer:
           challenge pages.
         """
         if method == "GET" and not body:
-            # Respect client's own Range header verbatim.
+            # Respect client's own Range header verbatim —
+            # EXCEPT for YouTube: stream_parallel_download handles chunking
+            # internally using clen, so yt-dlp's own Range header is ignored.
             if headers:
                 for k in headers:
                     if k.lower() == "range":
+                        if "googlevideo.com" in url and "clen=" in url:
+                            break  # fall through to relay_parallel below
                         return await self.fronter.relay(
                             method, url, headers, body
                         )
             # Only probe with Range when the URL looks like a big file.
-            if self._is_likely_download(url, headers):
+            if self._is_likely_download(url, headers) or (
+                "googlevideo.com" in url and "clen=" in url
+            ):
                 return await self.fronter.relay_parallel(
                     method,
                     url,
@@ -1401,9 +1407,14 @@ class ProxyServer:
         if headers:
             for key in headers:
                 if key.lower() == "range":
+                    # YouTube fast path: yt-dlp sends Range for resume, but
+                    # stream_parallel_download handles chunking from clen.
+                    if "googlevideo.com" in url and "clen=" in url:
+                        break
                     return False
         effective_headers = headers or {}
-        if not self._is_likely_download(url, effective_headers):
+        is_yt = "googlevideo.com" in url and "clen=" in url
+        if not is_yt and not self._is_likely_download(url, effective_headers):
             return False
         if not self.fronter.stream_download_allowed(url):
             return False
