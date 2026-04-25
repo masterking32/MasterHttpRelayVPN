@@ -104,6 +104,11 @@ function _buildOpts(req) {
     var headers = {};
     for (var k in req.h) {
       if (req.h.hasOwnProperty(k) && !SKIP_HEADERS[k.toLowerCase()]) {
+
+        // Remove the user's real IP address to bypass sanctions
+      	var lower = k.toLowerCase();
+      	if (lower === "x-forwarded-for") continue;
+
         headers[k] = req.h[k];
       }
     }
