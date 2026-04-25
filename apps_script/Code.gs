@@ -358,9 +358,10 @@ function _doBatch(items) {
     fetchArgs.push({ _i: i, _o: opts });
   }
 
+  // fetchAll() processes all requests in parallel inside Google
   var responses = [];
   if (fetchArgs.length > 0) {
-    responses = UrlFetchApp.fetchAll(fetchArgs.map(function (x) { return x._o; }));
+    responses = UrlFetchApp.fetchAll(fetchArgs.map(function(x) { return x._o; }));
   }
 
   var results = [];
@@ -416,9 +417,9 @@ function _respHeaders(resp) {
 function doGet(e) {
   return HtmlService.createHtmlOutput(
     "<!DOCTYPE html><html><head><title>My App</title></head>" +
-    '<body style="font-family:sans-serif;max-width:600px;margin:40px auto">' +
-    "<h1>Welcome</h1><p>This application is running normally.</p>" +
-    "</body></html>"
+      '<body style="font-family:sans-serif;max-width:600px;margin:40px auto">' +
+      "<h1>Welcome</h1><p>This application is running normally.</p>" +
+      "</body></html>"
   );
 }
 
