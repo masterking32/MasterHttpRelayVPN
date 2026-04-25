@@ -780,6 +780,10 @@ class DomainFronter:
         # Start H2 connection (runs alongside H1 pool)
         if self._h2:
             self._spawn(self._h2_connect_and_warm())
+        # H1 container keepalive — runs unconditionally so the Apps Script
+        # container never goes cold even when H2 is unavailable.  When H2 IS
+        # active its _keepalive_loop skips the ping; they do not double-fire.
+        self._spawn(self._h1_container_keepalive())
 
     def _spawn(self, coro) -> asyncio.Task:
         """Create a task and keep a strong reference for clean cancellation."""
@@ -912,6 +916,34 @@ class DomainFronter:
                 break
             except Exception as e:
                 log.debug("Keepalive failed: %s", e)
+
+    async def _h1_container_keepalive(self):
+        """Keep the Apps Script container warm via H1 when H2 keepalive is absent.
+
+        H2's _keepalive_loop handles pings when H2 is connected.  When H2 is
+        unavailable (library not installed, connection dropped) this coroutine
+        takes over so the container never goes cold and causes slow cold-starts
+        on the first video / streaming request after an idle period.
+        """
+        while True:
+            try:
+                await asyncio.sleep(240)   # same cadence as H2 keepalive
+                if self._h2_available():
+                    continue  # H2 keepalive is already pinging, skip
+                payload = self._build_payload(
+                    "HEAD", "http://example.com/", {}, b""
+                )
+                t0 = time.perf_counter()
+                # _relay_payload_h1 has its own per-attempt timeout internally;
+                # no outer wait_for needed (and adding one with a shorter
+                # timeout would cancel valid in-progress relays early).
+                await self._relay_payload_h1(payload)
+                dt = (time.perf_counter() - t0) * 1000
+                log.debug("H1 container keepalive: %.0fms", dt)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                log.debug("H1 container keepalive failed: %s", exc)
 
     async def _do_warm(self):
         """Open WARM_POOL_COUNT connections in parallel — failures are fine."""
@@ -1666,13 +1698,20 @@ class DomainFronter:
                         log.debug("H2 relay failed (%s), reconnecting", e)
                         try:
                             await self._h2.reconnect()
-                            self._record_h2_success()
+                            # Do NOT record success here — only a successful relay
+                            # response proves the connection works.  Recording
+                            # success after reconnect was resetting the failure
+                            # streak and causing an infinite reconnect storm.
                         except Exception as reconnect_exc:
                             self._record_h2_failure(reconnect_exc)
                             log.warning("H2 reconnect failed, falling back to H1")
                             break
                     else:
-                        raise
+                        # Last H2 attempt failed — fall through to H1 rather
+                        # than raising here, which would bypass H1 entirely.
+                        log.debug("H2 relay failed on final attempt (%s), "
+                                  "falling back to H1", e)
+                        break
 
         # HTTP/1.1 fallback (pool-based)
         async with self._semaphore:

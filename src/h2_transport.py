@@ -86,6 +86,7 @@ class H2Transport:
         self._connect_lock = asyncio.Lock()
         self._read_task: asyncio.Task | None = None
         self._conn_generation = 0
+        self._last_reconnect_at: float = 0.0
 
         # Per-stream tracking
         self._streams: dict[int, _StreamState] = {}
@@ -193,9 +194,19 @@ class H2Transport:
         log.info("H2 connected → %s (SNI=%s, TCP_NODELAY=on)",
                  self.connect_host, sni)
 
+    # Minimum seconds between successive reconnect() calls.  Without this,
+    # concurrent relay failures trigger a rapid reconnect storm that causes
+    # repeated "H2 connected → H2 reader loop ended" within milliseconds.
+    _RECONNECT_MIN_INTERVAL = 1.0
+
     async def reconnect(self):
-        """Close current connection and re-establish."""
+        """Close current connection and re-establish, with backoff."""
         async with self._connect_lock:
+            loop = asyncio.get_running_loop()
+            elapsed = loop.time() - self._last_reconnect_at
+            if elapsed < self._RECONNECT_MIN_INTERVAL:
+                await asyncio.sleep(self._RECONNECT_MIN_INTERVAL - elapsed)
+            self._last_reconnect_at = loop.time()
             await self._close_internal()
             await self._do_connect()
 
@@ -382,7 +393,13 @@ class H2Transport:
             else:
                 log.error("H2 reader error: %s", e)
         except Exception as e:
-            if "application data after close notify" in str(e).lower():
+            # WinError 121 (semaphore timeout) — Windows OS-level socket
+            # timeout meaning the TCP connection stalled and the OS closed
+            # it.  Harmless; treat as a normal drop.  On non-Windows
+            # platforms .winerror is absent so getattr returns None.
+            if getattr(e, 'winerror', None) == 121:
+                log.warning("H2 connection dropped (OS socket timeout)")
+            elif "application data after close notify" in str(e).lower():
                 log.debug("H2 reader closed after close_notify: %s", e)
             else:
                 log.error("H2 reader error: %s", e)
