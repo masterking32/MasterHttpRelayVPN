@@ -88,19 +88,21 @@ SCRIPT_BLACKLIST_TTL    = 600.0   # 10 minutes
 # When `front_domain` is a Google property, we rotate through this pool on
 # each new outbound TLS handshake so DPI systems don't see a constant
 # "always www.google.com" pattern from the client.
+# Looks like that only mail and google.com not have a shaped DPI, the rest are 16kb shape blocked.
+# from my own benchmarks . Google and mail have 658 kb ps but the rest have 16 kb ps.
 FRONT_SNI_POOL_GOOGLE: tuple[str, ...] = (
     "www.google.com",
     "mail.google.com",
-    "drive.google.com",
-    "docs.google.com",
-    "calendar.google.com",
-    "maps.google.com",
-    "chat.google.com",
-    "translate.google.com",
-    "play.google.com",
-    "lens.google.com",
-    "scholar.google.com",
-    "chromewebstore.google.com",
+    # "drive.google.com",
+    # "docs.google.com",
+    # "calendar.google.com",
+    # "maps.google.com",
+    # "chat.google.com",
+    # "translate.google.com",
+    # "play.google.com",
+    # "lens.google.com",
+    # "scholar.google.com",
+    # "chromewebstore.google.com",
 )
 
 
