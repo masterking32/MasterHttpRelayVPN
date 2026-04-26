@@ -212,8 +212,9 @@ The certificate file is created at `ca/ca.crt` inside the project folder after t
 1. Double-click `ca/ca.crt` — it opens in Keychain Access.
 2. It goes into the **login** keychain.
 3. Find the certificate, double-click it.
-4. Expand **Trust** → set **When using this certificate** to **Always Trust**.
-5. Close and enter your password. Restart your browser.
+4. Click on View Certificate then expand **Trust** → set **When using this certificate** to **Always Trust**.
+5. Select System in the Keychain section and press add button.
+6. Close and enter your password. Restart your browser.
 
 #### Linux (Ubuntu/Debian)
 ```bash
