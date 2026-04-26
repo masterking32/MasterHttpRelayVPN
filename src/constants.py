@@ -93,6 +93,7 @@ SCRIPT_BLACKLIST_TTL    = 600.0   # 10 minutes
 FRONT_SNI_POOL_GOOGLE: tuple[str, ...] = (
     "www.google.com",
     "mail.google.com",
+	"accounts.google.com",
     # "drive.google.com",
     # "docs.google.com",
     # "calendar.google.com",
