@@ -170,6 +170,7 @@ SNI_REWRITE_SUFFIXES: tuple[str, ...] = (
     "youtube.com",
     "youtu.be",
     "youtube-nocookie.com",
+	"m.youtube.com",
     "ytimg.com",
     "ggpht.com",
     "gvt1.com",
