@@ -1200,7 +1200,7 @@ class ProxyServer:
                         headers[k.strip()] = v.strip()
 
                 # Shortening the length of X API URLs to prevent relay errors.
-                if host == "x.com" and  re.match(r"/i/api/graphql/[^/]+/[^?]+\?variables=", path):
+                if (host == "x.com" or host == "twitter.com") and  re.match(r"/i/api/graphql/[^/]+/[^?]+\?variables=", path):
                     path = path.split("&")[0]
 
                 # MITM traffic arrives as origin-form paths; SOCKS/plain HTTP can
