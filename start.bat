@@ -10,11 +10,11 @@ set "VENV_DIR=.venv"
 set "PY="
 
 where py >nul 2>&1
-if %errorlevel%==0 (
+if !errorlevel!==0 (
     set "PY=py -3"
 ) else (
     where python >nul 2>&1
-    if %errorlevel%==0 (
+    if !errorlevel!==0 (
         set "PY=python"
     )
 )
