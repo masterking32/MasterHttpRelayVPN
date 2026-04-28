@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag name to publish (example: v1.2.0). Leave empty for non-publishing build."
+        required: false
+        type: string
+      publish:
+        description: "Publish GitHub Release"
+        required: false
+        default: false
+        type: boolean
+      make_public:
+        description: "Make release public immediately (false = hidden draft)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-13
+            target: macos-x64
+          - os: macos-14
+            target: macos-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build standalone binary
+        run: pyinstaller --noconfirm --clean --onefile --name MasterHttpRelayVPN --paths src main.py
+
+      - name: Package release bundle
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python scripts/build_release_bundle.py
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release-assets/*
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-binaries]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true' && startsWith(github.event.inputs.release_tag, 'v'))
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Flatten artifact directories
+        run: |
+          mkdir -p final-assets
+          find release-assets -type f -exec cp {} final-assets/ \;
+          ls -lah final-assets
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.release_tag }}
+          files: final-assets/*
+          generate_release_notes: true
+          prerelease: false
+          draft: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.make_public != 'true' }}
