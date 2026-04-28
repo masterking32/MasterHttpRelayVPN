@@ -265,22 +265,18 @@ def main():
 
     # ── LAN sharing configuration ────────────────────────────────────────
     lan_sharing = config.get("lan_sharing", False)
+    listen_host = config.get("listen_host", "127.0.0.1")
     if lan_sharing:
         # If LAN sharing is enabled and host is still localhost, change to all interfaces
-        if config.get("listen_host", "127.0.0.1") == "127.0.0.1":
+        if listen_host == "127.0.0.1":
             config["listen_host"] = "0.0.0.0"
+            listen_host = "0.0.0.0"
             log.info("LAN sharing enabled — listening on all interfaces")
 
-    log.info("HTTP proxy         : %s:%d",
-             config.get("listen_host", "127.0.0.1"),
-             config.get("listen_port", 8080))
-    if config.get("socks5_enabled", True):
-        log.info("SOCKS5 proxy       : %s:%d",
-                 config.get("socks5_host", config.get("listen_host", "127.0.0.1")),
-                 config.get("socks5_port", 1080))
-
-    # Log LAN access addresses if sharing is enabled
-    if lan_sharing:
+    # If either explicit LAN sharing is enabled or we bind to all interfaces,
+    # print concrete IPv4 addresses users can use on other devices.
+    lan_mode = lan_sharing or listen_host in ("0.0.0.0", "::")
+    if lan_mode:
         socks_port = config.get("socks5_port", 1080) if config.get("socks5_enabled", True) else None
         log_lan_access(config.get("listen_port", 8080), socks_port)
 
