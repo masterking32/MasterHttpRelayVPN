@@ -212,6 +212,12 @@ class ProxyServer:
         self._download_max_chunks = self._cfg_int(
             config, "chunked_download_max_chunks", 256, minimum=1,
         )
+        self._yt_chunk_size = self._cfg_int(
+            config, "yt_chunk_size", 4 * 1024 * 1024, minimum=64 * 1024,
+        )
+        self._yt_max_parallel = self._cfg_int(
+            config, "yt_max_parallel", 4, minimum=1,
+        )
         self._download_extensions, self._download_any_extension = (
             self._normalize_download_extensions(
                 config.get(
@@ -1359,15 +1365,21 @@ class ProxyServer:
           challenge pages.
         """
         if method == "GET" and not body:
-            # Respect client's own Range header verbatim.
+            # Respect client's own Range header verbatim —
+            # EXCEPT for YouTube: stream_parallel_download handles chunking
+            # internally using clen, so yt-dlp's own Range header is ignored.
             if headers:
                 for k in headers:
                     if k.lower() == "range":
+                        if "googlevideo.com" in url and "clen=" in url:
+                            break  # fall through to relay_parallel below
                         return await self.fronter.relay(
                             method, url, headers, body
                         )
             # Only probe with Range when the URL looks like a big file.
-            if self._is_likely_download(url, headers):
+            if self._is_likely_download(url, headers) or (
+                "googlevideo.com" in url and "clen=" in url
+            ):
                 return await self.fronter.relay_parallel(
                     method,
                     url,
@@ -1398,12 +1410,17 @@ class ProxyServer:
                                      writer) -> bool:
         if method.upper() != "GET" or body:
             return False
+        is_yt = "googlevideo.com" in url and "clen=" in url
         if headers:
             for key in headers:
                 if key.lower() == "range":
+                    # YouTube: yt-dlp sends Range for resume but we handle
+                    # chunking internally — let it through to streaming path.
+                    if is_yt:
+                        break
                     return False
         effective_headers = headers or {}
-        if not self._is_likely_download(url, effective_headers):
+        if not is_yt and not self._is_likely_download(url, effective_headers):
             return False
         if not self.fronter.stream_download_allowed(url):
             return False
@@ -1415,6 +1432,8 @@ class ProxyServer:
             max_parallel=self._download_max_parallel,
             max_chunks=self._download_max_chunks,
             min_size=self._download_min_size,
+            yt_chunk_size=self._yt_chunk_size,
+            yt_max_parallel=self._yt_max_parallel,
         )
 
     # ── Plain HTTP forwarding ─────────────────────────────────────
