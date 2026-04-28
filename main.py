@@ -108,6 +108,28 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # Handle cert-only commands before loading config so they can run standalone.
+    if args.install_cert or args.uninstall_cert:
+        setup_logging("INFO")
+        _log = logging.getLogger("Main")
+
+        if args.install_cert:
+            _log.info("Installing CA certificate…")
+            if not os.path.exists(CA_CERT_FILE):
+                from mitm import MITMCertManager
+                MITMCertManager()  # side-effect: creates ca/ca.crt + ca/ca.key
+            ok = install_ca(CA_CERT_FILE)
+            sys.exit(0 if ok else 1)
+
+        _log.info("Removing CA certificate…")
+        ok = uninstall_ca(CA_CERT_FILE)
+        if ok:
+            _log.info("CA certificate removed successfully.")
+        else:
+            _log.warning("CA certificate removal may have failed. Check logs above.")
+        sys.exit(0 if ok else 1)
+
     config_path = args.config
 
     try:
@@ -195,24 +217,6 @@ def main():
         print("Deploy the Apps Script from Code.gs and paste the Deployment ID.")
         sys.exit(1)
 
-    # ── Certificate installation ──────────────────────────────────────────
-    if args.install_cert:
-        setup_logging("INFO")
-        _log = logging.getLogger("Main")
-        _log.info("Installing CA certificate…")
-        ok = install_ca(CA_CERT_FILE)
-        sys.exit(0 if ok else 1)
-
-    # ── Certificate uninstallation ───────────────────────────────────────────
-    if args.uninstall_cert:
-        setup_logging("INFO")
-        _log = logging.getLogger("Main")
-        _log.info("Removing CA certificate…")
-        ok = uninstall_ca(CA_CERT_FILE)
-        if ok:
-            _log.info("CA certificate removed successfully.")
-        else:
-            _log.warning("CA certificate removal may have failed. Check logs above.")
     # ── Google IP Scanner ──────────────────────────────────────────────────
     if args.scan:
         setup_logging("INFO")

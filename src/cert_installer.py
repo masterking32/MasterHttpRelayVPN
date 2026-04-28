@@ -383,8 +383,11 @@ def _uninstall_firefox(cert_name: str):
     for profile in profile_dirs:
         db = f"sql:{profile}" if os.path.exists(os.path.join(profile, "cert9.db")) else f"dbm:{profile}"
         try:
-            _run(["certutil", "-D", "-n", cert_name, "-d", db], check=False)
-            log.info("Removed from Firefox profile: %s", os.path.basename(profile))
+            result = _run(["certutil", "-D", "-n", cert_name, "-d", db], check=False)
+            if result.returncode == 0:
+                log.info("Removed from Firefox profile: %s", os.path.basename(profile))
+            else:
+                log.debug("Firefox profile %s: certificate not present", os.path.basename(profile))
         except (subprocess.CalledProcessError, FileNotFoundError) as exc:
             log.debug("Firefox profile %s: %s", os.path.basename(profile), exc)
 
@@ -393,11 +396,14 @@ def _uninstall_firefox(cert_name: str):
 # Uninstall functions
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _uninstall_windows(cert_name: str) -> bool:
+def _uninstall_windows(cert_path: str, cert_name: str) -> bool:
     """Remove certificate from the Windows Trusted Root store."""
+    thumbprint = _cert_thumbprint(cert_path)
+
     # Try per-user store first (no admin required)
     try:
-        _run(["certutil", "-delstore", "-user", "Root", cert_name])
+        target = thumbprint if thumbprint else cert_name
+        _run(["certutil", "-delstore", "-user", "Root", target])
         log.info("Certificate removed from Windows user Trusted Root store.")
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
@@ -405,7 +411,8 @@ def _uninstall_windows(cert_name: str) -> bool:
 
     # Try system store (requires admin)
     try:
-        _run(["certutil", "-delstore", "Root", cert_name])
+        target = thumbprint if thumbprint else cert_name
+        _run(["certutil", "-delstore", "Root", target])
         log.info("Certificate removed from Windows system Trusted Root store.")
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
@@ -413,11 +420,20 @@ def _uninstall_windows(cert_name: str) -> bool:
 
     # Fallback: use PowerShell
     try:
-        ps_cmd = (
-            f"Remove-Item -Path Cert:\\CurrentUser\\Root\\{cert_name} -Force -ErrorAction SilentlyContinue"
-        )
-        _run(["powershell", "-NoProfile", "-Command", ps_cmd], check=False)
-        log.info("Attempted certificate removal via PowerShell.")
+        if thumbprint:
+            ps_cmd = (
+                "Get-ChildItem Cert:\\CurrentUser\\Root | "
+                f"Where-Object {{ $_.Thumbprint -eq '{thumbprint}' }} | "
+                "Remove-Item -Force -ErrorAction SilentlyContinue"
+            )
+        else:
+            ps_cmd = (
+                "Get-ChildItem Cert:\\CurrentUser\\Root | "
+                f"Where-Object {{ $_.Subject -like '*CN={cert_name}*' -or $_.FriendlyName -eq '{cert_name}' }} | "
+                "Remove-Item -Force -ErrorAction SilentlyContinue"
+            )
+        _run(["powershell", "-NoProfile", "-Command", ps_cmd])
+        log.info("Certificate removal via PowerShell completed.")
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         log.error("PowerShell removal failed: %s", exc)
@@ -436,7 +452,7 @@ def _uninstall_macos(cert_name: str) -> bool:
             "security", "delete-certificate",
             "-c", cert_name,
             login_keychain,
-        ], check=False)
+        ])
         log.info("Certificate removed from macOS login keychain.")
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
@@ -448,7 +464,7 @@ def _uninstall_macos(cert_name: str) -> bool:
             "sudo", "security", "delete-certificate",
             "-c", cert_name,
             "/Library/Keychains/System.keychain",
-        ], check=False)
+        ])
         log.info("Certificate removed from macOS system keychain.")
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
@@ -582,7 +598,7 @@ def uninstall_ca(cert_path: str, cert_name: str = CERT_NAME) -> bool:
     log.info("Removing CA certificate from %s…", system)
 
     if system == "Windows":
-        ok = _uninstall_windows(cert_name)
+        ok = _uninstall_windows(cert_path, cert_name)
     elif system == "Darwin":
         ok = _uninstall_macos(cert_name)
     elif system == "Linux":

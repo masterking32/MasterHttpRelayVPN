@@ -65,7 +65,8 @@ if not exist "config.json" (
 )
 
 REM -------- Check for uninstall flag --------
-if "%~1"=="--uninstall-cert" (
+echo %* | findstr /C:"--uninstall-cert" >nul
+if not errorlevel 1 (
     echo [*] Uninstalling CA certificate ...
     "%VPY%" main.py --uninstall-cert
     exit /b %errorlevel%

@@ -232,7 +232,7 @@ Firefox uses its own certificate store, so even after OS-level install you need 
 
 > **Auto-install on startup:** When running in `apps_script` mode the proxy will automatically detect if the CA is not yet trusted and attempt to install it for you. If it succeeds you'll see a confirmation in the log; if it fails (e.g. needs administrator rights) it will print instructions. You can also run `python main.py --install-cert` at any time to (re-)install the certificate.
 
-> **Uninstalling:** To remove the certificate from your system's trust stores, run `python main.py --uninstall-cert` or use `python start.bat --uninstall-cert` on Windows. This removes the certificate from all system trust stores and Firefox profiles.
+> **Uninstalling:** To remove the certificate from your system's trust stores, run `python main.py --uninstall-cert` or use `start.bat --uninstall-cert` on Windows. This removes the certificate from all system trust stores and Firefox profiles.
 
 > ⚠️ **Security note:** This certificate only works locally on your machine. Don't share the `ca/` folder with anyone. If you want to start fresh, delete the `ca/` folder and the tool will generate a new one.
 
