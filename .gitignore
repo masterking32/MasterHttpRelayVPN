@@ -1,3 +1,4 @@
+HEAD
 # Secrets & user config
 config.json
 .env
@@ -34,3 +35,7 @@ Thumbs.db
 
 # Temp MITM certs
 domainfront_certs_*/
+Python Edition
+config.toml
+.gocache
+upstream/main

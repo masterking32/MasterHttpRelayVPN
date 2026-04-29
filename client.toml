@@ -1,0 +1,387 @@
+# ==============================================================================
+# MasterHttpRelayVPN - Client Configuration
+# ------------------------------------------------------------------------------
+# This file controls the local SOCKS client and its HTTP relay behavior.
+# Each option below includes:
+# - purpose
+# - default value used by the code when omitted
+# - allowed values or constraints
+# ------------------------------------------------------------------------------
+# Notes:
+# - String values must stay inside quotes.
+# - Time values here are in milliseconds unless stated otherwise.
+# - Size values here are in bytes.
+# ==============================================================================
+
+# ==============================================================================
+# SECURITY / RELAY
+# ------------------------------------------------------------------------------
+# AES_ENCRYPTION_KEY:
+# Shared symmetric key used to encrypt and decrypt every HTTP batch body.
+# This value must match the server configuration exactly.
+# Default: none, required
+# Allowed: any non-empty string
+AES_ENCRYPTION_KEY = "c4710a45afed2fdc00e0522c70802e71"
+
+# RELAY_URLS:
+# Array of relay endpoints used by the client for sending encrypted batches.
+# Each entry can point directly to the Go server or to a PHP relay/fronting endpoint.
+# The client chooses one endpoint per request using RELAY_URL_SELECTION.
+# Example:
+# RELAY_URLS = ["https://a.example/relay.php", "https://b.example/relay.php"]
+# Default: one local relay URL
+# Allowed: one or more http:// / https:// URLs
+RELAY_URLS = ["http://127.0.0.1/relay.php"]
+
+# RELAY_URL_SELECTION:
+# Selection algorithm used when RELAY_URLS contains more than one endpoint.
+# "round_robin" = rotate endpoints in order per request
+# "random"      = choose a random endpoint per request
+# Default: "round_robin"
+# Allowed: "round_robin", "random"
+RELAY_URL_SELECTION = "round_robin"
+
+# ==============================================================================
+# HTTP DISGUISE / HEADER SHAPE
+# ------------------------------------------------------------------------------
+# HTTP_USER_AGENTS_FILE:
+# Path to a text file containing one User-Agent per line.
+# The client randomly selects one entry for outgoing relay requests.
+# If the file is missing or empty, built-in defaults are used.
+# Default: "user-agents.txt"
+# Allowed: any relative or absolute file path
+HTTP_USER_AGENTS_FILE = "user-agents.txt"
+
+# HTTP_HEADER_PROFILE:
+# Controls which family of HTTP headers is generated for relay requests.
+# "browser" = browser-like fetch headers
+# "cdn"     = proxy/CDN-friendly generic fetch headers
+# "api"     = API/client-like request headers
+# "minimal" = only essential headers, lowest disguise
+# Default: "browser"
+# Allowed: "browser", "cdn", "api", "minimal"
+HTTP_HEADER_PROFILE = "browser"
+
+# HTTP_RANDOMIZE_HEADERS:
+# Enables random decorative headers such as padding and nonce values.
+# Helps requests look less static across time.
+# Default: true
+# Allowed: true, false
+HTTP_RANDOMIZE_HEADERS = true
+
+# HTTP_RANDOMIZE_TRANSPORT:
+# Enables bounded transport-level randomization so request behavior is not too
+# fixed over time. When enabled, the client may vary:
+# - mux burst threshold
+# - mux rotation cadence
+# - ping intervals
+# - HTTP connection reuse lifetime
+# Default: false
+# Allowed: true, false
+HTTP_RANDOMIZE_TRANSPORT = false
+
+# HTTP_PADDING_HEADER:
+# Name of the extra padding header added when HTTP_RANDOMIZE_HEADERS=true.
+# The client fills it with random hex text.
+# Default: "X-Padding"
+# Allowed: any non-empty HTTP header name
+HTTP_PADDING_HEADER = "X-Padding"
+
+# HTTP_PADDING_MIN_BYTES:
+# Minimum random padding payload length placed into HTTP_PADDING_HEADER.
+# Default: 16
+# Allowed: integer >= 0
+HTTP_PADDING_MIN_BYTES = 16
+
+# HTTP_PADDING_MAX_BYTES:
+# Maximum random padding payload length placed into HTTP_PADDING_HEADER.
+# Must be >= HTTP_PADDING_MIN_BYTES.
+# Default: 48
+# Allowed: integer >= HTTP_PADDING_MIN_BYTES
+HTTP_PADDING_MAX_BYTES = 48
+
+# HTTP_REFERER:
+# Optional fixed Referer header.
+# If left empty, the client auto-generates referers derived from RELAY_URL.
+# Default: ""
+# Allowed: empty string, or any valid URL string
+HTTP_REFERER = ""
+
+# HTTP_ACCEPT_LANGUAGE:
+# Optional fixed Accept-Language header.
+# If empty, the client randomly selects from built-in language profiles.
+# Default: ""
+# Allowed: empty string, or any valid Accept-Language header value
+HTTP_ACCEPT_LANGUAGE = ""
+
+# HTTP_RANDOMIZE_QUERY_SUFFIX:
+# If true, the client appends a randomized query parameter to RELAY_URL on each
+# outbound relay request. This can produce patterns such as:
+# - ?webhe=abc123-9kf83d-72jf0a4x-zz91m3e8c2
+# - ?r=<random>
+# - ?_=<random>
+# Existing query parameters in RELAY_URL are preserved.
+# Default: false
+# Allowed: true, false
+HTTP_RANDOMIZE_QUERY_SUFFIX = false
+
+# ==============================================================================
+# HTTP TIMING / BATCH SHAPE RANDOMIZATION
+# ------------------------------------------------------------------------------
+# HTTP_TIMING_JITTER_MS:
+# Adds random delay jitter on top of poll/worker wait intervals.
+# This makes request timing less perfectly periodic.
+# Default: 50
+# Allowed: integer >= 0
+HTTP_TIMING_JITTER_MS = 50
+
+# HTTP_IDLE_CONN_TIMEOUT_MIN_MS / HTTP_IDLE_CONN_TIMEOUT_MAX_MS:
+# When HTTP_RANDOMIZE_TRANSPORT=true, each sender worker picks an idle keepalive
+# timeout inside this range for its HTTP transport.
+# Default: 15000..45000
+# Allowed: integer >= 1, and MAX >= MIN
+HTTP_IDLE_CONN_TIMEOUT_MIN_MS = 15000
+HTTP_IDLE_CONN_TIMEOUT_MAX_MS = 45000
+
+# HTTP_TRANSPORT_REUSE_MIN / HTTP_TRANSPORT_REUSE_MAX:
+# When HTTP_RANDOMIZE_TRANSPORT=true, each worker reuses its HTTP transport for
+# a random number of requests inside this range before recycling idle connections
+# and refreshing the transport profile.
+# Default: 8..24
+# Allowed: integer >= 1, and MAX >= MIN
+HTTP_TRANSPORT_REUSE_MIN = 8
+HTTP_TRANSPORT_REUSE_MAX = 24
+
+# HTTP_BATCH_RANDOMIZE:
+# Enables slight randomization of effective batch size and packet count per send.
+# This reduces a perfectly fixed request shape.
+# Default: true
+# Allowed: true, false
+HTTP_BATCH_RANDOMIZE = true
+
+# HTTP_BATCH_PACKETS_JITTER:
+# Maximum number of packets subtracted from MAX_PACKETS_PER_BATCH randomly.
+# Example: if MAX_PACKETS_PER_BATCH=32 and jitter=4, effective limit may be 28..32.
+# Default: 4
+# Allowed: integer >= 0
+HTTP_BATCH_PACKETS_JITTER = 4
+
+# HTTP_BATCH_BYTES_JITTER:
+# Maximum number of bytes subtracted from MAX_BATCH_BYTES randomly.
+# Example: if MAX_BATCH_BYTES=262144 and jitter=32768, effective limit may be
+# between 229376 and 262144, but never below MAX_CHUNK_SIZE.
+# Default: 32768
+# Allowed: integer >= 0
+HTTP_BATCH_BYTES_JITTER = 32768
+
+# ==============================================================================
+# LOGGING
+# ------------------------------------------------------------------------------
+# LOG_LEVEL:
+# Controls client log verbosity.
+# Default: "INFO"
+# Allowed in practice by logger: "DEBUG", "INFO", "WARN", "ERROR"
+LOG_LEVEL = "DEBUG"
+
+# ==============================================================================
+# LOCAL SOCKS LISTENER
+# ------------------------------------------------------------------------------
+# SOCKS_HOST:
+# Local interface used by the client SOCKS5 listener.
+# Default: "127.0.0.1"
+# Allowed: any valid bind host/IP
+SOCKS_HOST = "127.0.0.1"
+
+# SOCKS_PORT:
+# Local port used by the SOCKS5 listener.
+# Default: 1080
+# Allowed: integer 1..65535
+SOCKS_PORT = 18001
+
+# SOCKS_AUTH:
+# Enables username/password authentication for the local SOCKS listener.
+# Default: false
+# Allowed: true, false
+SOCKS_AUTH = false
+
+# SOCKS_USERNAME:
+# Local SOCKS username used only when SOCKS_AUTH=true.
+# Default: ""
+# Allowed: any string
+SOCKS_USERNAME = "your_socks_username_here"
+
+# SOCKS_PASSWORD:
+# Local SOCKS password used only when SOCKS_AUTH=true.
+# Default: ""
+# Allowed: any string
+SOCKS_PASSWORD = "your_socks_password_here"
+
+# ==============================================================================
+# TRANSPORT / FLOW CONTROL
+# ------------------------------------------------------------------------------
+# MAX_CHUNK_SIZE:
+# Maximum payload size for a single SOCKS data packet before chunking.
+# Also used as the minimum safe lower bound for several queue/body limits.
+# Default: 16384 (16 KiB)
+# Allowed: integer >= 1
+MAX_CHUNK_SIZE = 16384
+
+# MAX_PACKETS_PER_BATCH:
+# Hard upper bound for packet count in one outbound HTTP batch before jitter.
+# Default: 32
+# Allowed: integer >= 1
+MAX_PACKETS_PER_BATCH = 32
+
+# MAX_BATCH_BYTES:
+# Hard upper bound for total payload bytes in one HTTP batch before jitter.
+# Must be >= MAX_CHUNK_SIZE.
+# Default: 262144 (256 KiB)
+# Allowed: integer >= MAX_CHUNK_SIZE
+MAX_BATCH_BYTES = 262144
+
+# WORKER_COUNT:
+# Number of concurrent sender workers posting batches to the relay.
+# Default: 4
+# Allowed: integer >= 1
+WORKER_COUNT = 4
+
+# MAX_CONCURRENT_BATCHES:
+# Global cap for how many relay HTTP batches may be in-flight at the same time.
+# Under light load the client intentionally stays at 1 active batch; when queued
+# bytes reach MUX_BURST_THRESHOLD_BYTES it may expand up to this cap.
+# This value must be <= WORKER_COUNT.
+# Default: 4
+# Allowed: integer 1..WORKER_COUNT
+MAX_CONCURRENT_BATCHES = 4
+
+# MAX_PACKETS_PER_SOCKS_PER_BATCH:
+# Fairness limit per mux round. One SOCKS connection may contribute at most this
+# many packets to a single HTTP batch, which prevents a hot stream from filling
+# the whole batch alone.
+# Default: 2
+# Allowed: integer >= 1
+MAX_PACKETS_PER_SOCKS_PER_BATCH = 2
+
+# MUX_ROTATE_EVERY_BATCHES:
+# Controls how often the round-robin batch start cursor moves to the next SOCKS
+# connection. 1 means rotate every batch, 2 means hold the same start point for
+# two batches before moving, and so on.
+# Default: 1
+# Allowed: integer >= 1
+MUX_ROTATE_EVERY_BATCHES = 1
+
+# MUX_ROTATE_JITTER_BATCHES:
+# Extra random batches added on top of MUX_ROTATE_EVERY_BATCHES when
+# HTTP_RANDOMIZE_TRANSPORT=true.
+# Default: 0
+# Allowed: integer >= 0
+MUX_ROTATE_JITTER_BATCHES = 0
+
+# MUX_BURST_THRESHOLD_BYTES:
+# Total queued outbound payload bytes across all active SOCKS connections that
+# triggers burst mode. Below this threshold the client behaves conservatively
+# with 1 active batch and smaller effective batch shapes; at or above it, the
+# client uses faster polling and may scale up to MAX_CONCURRENT_BATCHES.
+# Must be >= MAX_CHUNK_SIZE.
+# Default: 131072 (128 KiB)
+# Allowed: integer >= MAX_CHUNK_SIZE
+MUX_BURST_THRESHOLD_BYTES = 131072
+
+# MUX_BURST_THRESHOLD_JITTER_BYTES:
+# Random plus/minus jitter applied to MUX_BURST_THRESHOLD_BYTES when
+# HTTP_RANDOMIZE_TRANSPORT=true. The effective threshold never goes below
+# MAX_CHUNK_SIZE.
+# Default: 0
+# Allowed: integer >= 0
+MUX_BURST_THRESHOLD_JITTER_BYTES = 0
+
+# HTTP_REQUEST_TIMEOUT_MS:
+# Timeout for a single relay HTTP request.
+# If exceeded, in-flight packets may be retried according to ACK policy.
+# Default: 15000
+# Allowed: integer >= 1
+HTTP_REQUEST_TIMEOUT_MS = 15000
+
+# WORKER_POLL_INTERVAL_MS:
+# Base idle wait time used by sender workers when no immediate work exists.
+# Lower values may reduce latency but increase CPU wakeups.
+# Default: 200
+# Allowed: integer >= 1
+WORKER_POLL_INTERVAL_MS = 200
+
+# IDLE_POLL_INTERVAL_MS:
+# Minimum ping interval used shortly after real traffic, before idle keepalive
+# backoff starts growing.
+# Must be >= WORKER_POLL_INTERVAL_MS.
+# Default: 1000
+# Allowed: integer >= WORKER_POLL_INTERVAL_MS
+IDLE_POLL_INTERVAL_MS = 1000
+
+# PING_INTERVAL_JITTER_MS:
+# Extra random delay added to aggressive idle ping intervals and ping backoff
+# intervals when HTTP_RANDOMIZE_TRANSPORT=true.
+# Default: 0
+# Allowed: integer >= 0
+PING_INTERVAL_JITTER_MS = 0
+
+# PING_WARM_THRESHOLD_MS:
+# If no real non-ping traffic has been seen for at least this long, the client
+# leaves the aggressive idle poll interval and switches to ping backoff mode.
+# Default: 5000
+# Allowed: integer >= 1
+PING_WARM_THRESHOLD_MS = 5000
+
+# PING_BACKOFF_BASE_MS:
+# First keepalive interval used after the client becomes idle-only.
+# Default: 5000
+# Allowed: integer >= IDLE_POLL_INTERVAL_MS
+PING_BACKOFF_BASE_MS = 5000
+
+# PING_BACKOFF_STEP_MS:
+# Extra delay added after each successful idle-only ping/pong round.
+# Example: with base=5000 and step=5000, intervals become 5s, 10s, 15s, ...
+# Default: 5000
+# Allowed: integer >= 1
+PING_BACKOFF_STEP_MS = 5000
+
+# PING_MAX_INTERVAL_MS:
+# Maximum keepalive interval cap when the connection has stayed idle for a long time.
+# Default: 60000
+# Allowed: integer >= PING_BACKOFF_BASE_MS
+PING_MAX_INTERVAL_MS = 60000
+
+# MAX_QUEUE_BYTES_PER_SOCKS:
+# Maximum queued payload bytes allowed per local SOCKS connection.
+# Prevents unbounded client-side buffering for a single connection.
+# Must be >= MAX_CHUNK_SIZE.
+# Default: 1048576 (1 MiB)
+# Allowed: integer >= MAX_CHUNK_SIZE
+MAX_QUEUE_BYTES_PER_SOCKS = 1048576
+
+# ACK_TIMEOUT_MS:
+# Time to wait before considering an in-flight packet lost and eligible for retry.
+# Default: 5000
+# Allowed: integer >= 1
+ACK_TIMEOUT_MS = 5000
+
+# MAX_RETRY_COUNT:
+# Maximum resend attempts for a packet before the connection is failed.
+# Default: 5
+# Allowed: integer >= 0
+MAX_RETRY_COUNT = 5
+
+# REORDER_TIMEOUT_MS:
+# Maximum time an out-of-order inbound packet may wait for missing earlier packets.
+# If the gap is not filled before this timeout, the connection is reset.
+# Default: 5000
+# Allowed: integer >= 1
+REORDER_TIMEOUT_MS = 5000
+
+# MAX_REORDER_BUFFER_PACKETS:
+# Maximum number of out-of-order inbound packets buffered per SOCKS connection.
+# If exceeded, the connection is reset to avoid unbounded memory growth.
+# Default: 128
+# Allowed: integer >= 1
+MAX_REORDER_BUFFER_PACKETS = 128
+
+# ==============================================================================
