@@ -248,9 +248,30 @@ class ProxyServer:
         #                allowed through the relay (all others get 403).
         # All three accept exact hostnames and leading-dot suffix patterns,
         # e.g. ".local" matches any *.local domain.
-        self._block_hosts  = self._load_host_rules(config.get("block_hosts", []))
+        self._static_block_hosts = config.get("block_hosts", [])
+        self._block_hosts  = self._load_host_rules(self._static_block_hosts)
         self._bypass_hosts = self._load_host_rules(config.get("bypass_hosts", []))
         self._allow_hosts  = self._load_host_rules(config.get("allow_hosts", []))
+
+        # ── Adblock config (loaded async in start()) ───────────────
+        # Accepted forms:
+        #   "adblock": true                      → enable with defaults
+        #   "adblock": {"enabled": true, ...}    → enable with options
+        #   "adblock": false / {"enabled": false} → disabled
+        adblock_cfg = config.get("adblock", False)
+        if adblock_cfg is True:
+            adblock_cfg = {}
+        if isinstance(adblock_cfg, dict) and not adblock_cfg.get("enabled", True):
+            adblock_cfg = None
+        if adblock_cfg:
+            from adblock import AdBlocker, DEFAULT_SOURCES, DEFAULT_UPDATE_HOURS
+            self._adblock = AdBlocker(
+                cache_dir=adblock_cfg.get("cache_dir", "adblock_cache"),
+                sources=adblock_cfg.get("sources", DEFAULT_SOURCES),
+                update_hours=adblock_cfg.get("update_interval_hours", DEFAULT_UPDATE_HOURS),
+            )
+        else:
+            self._adblock = None
 
         # Route YouTube through the relay when requested; the Google frontend
         # IP can enforce SafeSearch on the SNI-rewrite path.
@@ -458,7 +479,21 @@ class ProxyServer:
             else:
                 log.info(log_msg, *log_args)
 
+    async def _load_adblock(self) -> None:
+        """Fetch/refresh adblock blocklists and merge into _block_hosts."""
+        if self._adblock is None:
+            return
+        try:
+            adblock_hosts = await self._adblock.load()
+        except Exception as exc:
+            log.warning("AdBlock: failed to load blocklists: %s", exc)
+            return
+        merged = list(self._static_block_hosts) + list(adblock_hosts)
+        self._block_hosts = self._load_host_rules(merged)
+        log.info("AdBlock: %d domains added to block list", len(adblock_hosts))
+
     async def start(self):
+        await self._load_adblock()
         http_srv = await asyncio.start_server(self._on_client, self.host, self.port)
         socks_srv = None
 

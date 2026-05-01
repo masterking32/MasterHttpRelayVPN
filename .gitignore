@@ -35,5 +35,8 @@ Thumbs.db
 # Temp MITM certs
 domainfront_certs_*/
 
+# Adblock cache (auto-generated, refreshed weekly)
+adblock_cache/
+
 # Personal notes
 ideas.md

@@ -55,6 +55,12 @@
 	"chunked_download_max_chunks": 256,
 	"block_hosts": [],
 	"allow_hosts": [],
+	"adblock": {
+		"enabled": false,
+		"sources": ["stevenblack", "adguard"],
+		"update_interval_hours": 168,
+		"cache_dir": "adblock_cache"
+	},
 	"bypass_hosts": [
 		"localhost",
 		".local",
