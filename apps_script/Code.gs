@@ -1,6 +1,6 @@
 /**
  * MasterHttpRelay — Google Apps Script
- * 
+ *
  * DEPLOYMENT:
  *   1. Go to https://script.google.com → New project
  *   2. Delete the default code, paste THIS entire file
@@ -181,7 +181,10 @@ function doGet(e) {
 }
 
 function _json(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(
-    ContentService.MimeType.JSON
+  // HtmlService responses can stay on script.google.com for /dev, while
+  // ContentService commonly bounces through script.googleusercontent.com.
+  // The Python client extracts the JSON payload from the body either way.
+  return HtmlService.createHtmlOutput(JSON.stringify(obj)).setXFrameOptionsMode(
+    HtmlService.XFrameOptionsMode.ALLOWALL
   );
 }
