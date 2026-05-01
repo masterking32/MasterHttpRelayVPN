@@ -34,3 +34,6 @@ Thumbs.db
 
 # Temp MITM certs
 domainfront_certs_*/
+
+# Personal notes
+ideas.md
