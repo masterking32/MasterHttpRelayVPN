@@ -38,5 +38,8 @@ domainfront_certs_*/
 # Adblock cache (auto-generated, refreshed weekly)
 adblock_cache/
 
+# Smart routing learned decisions (auto-generated)
+routing_cache.json
+
 # Personal notes
 ideas.md

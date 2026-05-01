@@ -253,6 +253,21 @@ class ProxyServer:
         self._bypass_hosts = self._load_host_rules(config.get("bypass_hosts", []))
         self._allow_hosts  = self._load_host_rules(config.get("allow_hosts", []))
 
+        # ── Smart routing cache ────────────────────────────────────
+        # Automatically learns which domains need relay vs direct tunnel
+        # and persists decisions across restarts.
+        if config.get("smart_routing", True):
+            from route_cache import RouteCache
+            self._route_cache: RouteCache | None = RouteCache(
+                config.get("smart_routing_cache", "routing_cache.json")
+            )
+            self._smart_direct_timeout: float = float(
+                config.get("smart_routing_direct_timeout", 3.0)
+            )
+        else:
+            self._route_cache = None
+            self._smart_direct_timeout = 3.0
+
         # ── Adblock config (loaded async in start()) ───────────────
         # Accepted forms:
         #   "adblock": true                      → enable with defaults
@@ -494,6 +509,8 @@ class ProxyServer:
 
     async def start(self):
         await self._load_adblock()
+        if self._route_cache is not None:
+            asyncio.ensure_future(self._route_cache.run_autosave())
         http_srv = await asyncio.start_server(self._on_client, self.host, self.port)
         socks_srv = None
 
@@ -533,6 +550,8 @@ class ProxyServer:
 
     async def stop(self):
         """Shut down all listeners and release relay resources."""
+        if self._route_cache is not None:
+            self._route_cache.save()
         for srv in self._servers:
             try:
                 srv.close()
@@ -799,10 +818,8 @@ class ProxyServer:
                 await self._do_mitm_connect(host, port, reader, writer)
             else:
                 await self._do_plain_http_tunnel(host, port, reader, writer)
-        elif port == 443:
-            await self._do_mitm_connect(host, port, reader, writer)
-        elif port == 80:
-            await self._do_plain_http_tunnel(host, port, reader, writer)
+        elif port in (443, 80):
+            await self._smart_tunnel(host, port, reader, writer)
         else:
             # Non-HTTP port (e.g. mtalk:5228 XMPP, IMAP, SMTP, SSH) —
             # payload isn't HTTP, so we can't relay or MITM. Tunnel bytes.
@@ -932,6 +949,80 @@ class ProxyServer:
         if host.endswith(".googleusercontent.com") or host == "googleusercontent.com":
             keys.append("*.googleusercontent.com")
         return tuple(dict.fromkeys(keys))
+
+    async def _smart_tunnel(
+        self,
+        host: str,
+        port: int,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Smart routing for non-Google, non-SNI domains at port 443/80.
+
+        Decision flow:
+          "direct"  → try direct (fast timeout); on failure downgrade to relay.
+          "relay"   → use relay immediately; if TTL expired fire background probe.
+          "unknown" → probe with fast timeout; cache result; serve accordingly.
+        Falls back to plain relay when smart_routing is disabled in config.
+        """
+        if self._route_cache is None:
+            # Smart routing disabled — legacy behaviour
+            if port == 443:
+                await self._do_mitm_connect(host, port, reader, writer)
+            else:
+                await self._do_plain_http_tunnel(host, port, reader, writer)
+            return
+
+        decision = self._route_cache.get(host)
+
+        if decision == "direct":
+            log.info("Smart routing → %s:%d (cached: direct)", host, port)
+            ok = await self._do_direct_tunnel(
+                host, port, reader, writer,
+                timeout=self._smart_direct_timeout,
+            )
+            if ok:
+                return
+            # Direct no longer works — downgrade and relay this request
+            self._route_cache.downgrade(host)
+            log.warning("Smart routing → %s:%d direct failed, falling back to relay", host, port)
+            if port == 443:
+                await self._do_mitm_connect(host, port, reader, writer)
+            else:
+                await self._do_plain_http_tunnel(host, port, reader, writer)
+            return
+
+        if decision == "relay":
+            # Fire a background re-probe if the relay TTL has expired,
+            # but serve this request via relay immediately (no stall).
+            if self._route_cache.is_relay_expired(host):
+                if not self._route_cache.is_probing(host):
+                    log.debug("Smart routing → %s:%d relay TTL expired, scheduling probe", host, port)
+                    self._route_cache.schedule_probe(host, port)
+            else:
+                log.debug("Smart routing → %s:%d (cached: relay)", host, port)
+            if port == 443:
+                await self._do_mitm_connect(host, port, reader, writer)
+            else:
+                await self._do_plain_http_tunnel(host, port, reader, writer)
+            return
+
+        # "unknown" — first time we see this host; probe synchronously
+        log.info("Smart routing → %s:%d (unknown, probing direct …)", host, port)
+        ok = await self._do_direct_tunnel(
+            host, port, reader, writer,
+            timeout=self._smart_direct_timeout,
+        )
+        if ok:
+            self._route_cache.set_direct(host)
+            log.info("Smart routing → %s:%d learned: direct", host, port)
+        else:
+            self._route_cache.set_relay(host)
+            log.info("Smart routing → %s:%d learned: relay", host, port)
+            if port == 443:
+                await self._do_mitm_connect(host, port, reader, writer)
+            else:
+                await self._do_plain_http_tunnel(host, port, reader, writer)
 
     async def _open_tcp_connection(self, target: str, port: int,
                                    timeout: float = 10.0):

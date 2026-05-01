@@ -53,6 +53,9 @@
 	"chunked_download_chunk_size": 524288,
 	"chunked_download_max_parallel": 8,
 	"chunked_download_max_chunks": 256,
+	"smart_routing": true,
+	"smart_routing_cache": "routing_cache.json",
+	"smart_routing_direct_timeout": 3.0,
 	"block_hosts": [],
 	"allow_hosts": [],
 	"adblock": {
