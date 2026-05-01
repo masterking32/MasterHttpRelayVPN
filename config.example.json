@@ -84,5 +84,12 @@
 		"safebrowsing.google.com"
 	],
 	"youtube_via_relay": false,
-	"hosts": {}
+	"hosts": {},
+	"exit_node": {
+		"enabled": false,
+		"relay_url": "",
+		"psk": "",
+		"mode": "selective",
+		"hosts": []
+	}
 }

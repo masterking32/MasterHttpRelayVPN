@@ -124,7 +124,7 @@ class PrettyFormatter(logging.Formatter):
     def _fmt_time(self, record: logging.LogRecord) -> str:
         t = time.localtime(record.created)
         ms = int((record.created - int(record.created)) * 1000)
-        return f"{time.strftime('%H:%M:%S', t)}.{ms:03d}"
+        return f"{time.strftime('%H:%M:%S', t)}"
 
     def _fmt_level(self, levelname: str) -> str:
         label = LEVEL_LABEL.get(levelname, levelname[:5].ljust(5))
@@ -227,7 +227,7 @@ def _install_asyncio_noise_filter() -> None:
 
 
 def print_banner(version: str, *, stream=None) -> None:
-    """Print a compact startup banner with color fallbacks."""
+    """Print a polished startup banner with color fallbacks."""
     stream = stream or sys.stderr
     color = _supports_color(stream)
 
@@ -235,14 +235,36 @@ def print_banner(version: str, *, stream=None) -> None:
         return code if color else ""
 
     title = "MasterHttpRelayVPN"
-    subtitle = f"Domain-Fronted Apps Script Relay · v{version}"
-    bar = "─" * (len(title) + len(subtitle) + 7)
+    subtitle = "Domain-Fronted Apps Script Relay"
+    version_tag = f"v{version}"
 
-    print(f"{c(DIM)}{c(FG_GRAY)}{bar}{c(RESET)}", file=stream)
-    print(
-        f"  {c(BOLD)}{c(FG_CYAN)}{title}{c(RESET)}"
-        f"  {c(DIM)}·{c(RESET)}  {c(FG_GRAY)}{subtitle}{c(RESET)}",
-        file=stream,
-    )
-    print(f"{c(DIM)}{c(FG_GRAY)}{bar}{c(RESET)}", file=stream)
+    left = f" {title} "
+    center = f" {subtitle} "
+    right = f" {version_tag} "
+    inner_width = max(68, len(left) + len(center) + len(right) + 2)
+
+    gap = inner_width - (len(left) + len(center) + len(right))
+    left_gap = gap // 2
+    right_gap = gap - left_gap
+
+    top = "╭" + ("─" * inner_width) + "╮"
+    mid = "│" + left + (" " * left_gap) + center + (" " * right_gap) + right + "│"
+    bot = "╰" + ("─" * inner_width) + "╯"
+
+    if color:
+        top = f"{DIM}{FG_GRAY}{top}{RESET}"
+        bot = f"{DIM}{FG_GRAY}{bot}{RESET}"
+        mid = (
+            f"{DIM}{FG_GRAY}│{RESET}"
+            f"{BOLD}{FG_CYAN}{left}{RESET}"
+            f"{' ' * left_gap}"
+            f"{FG_GRAY}{center}{RESET}"
+            f"{' ' * right_gap}"
+            f"{BOLD}{FG_TEAL}{right}{RESET}"
+            f"{DIM}{FG_GRAY}│{RESET}"
+        )
+
+    print(top, file=stream)
+    print(mid, file=stream)
+    print(bot, file=stream)
     stream.flush()

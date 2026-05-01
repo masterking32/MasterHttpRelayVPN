@@ -4,7 +4,8 @@ cd /d "%~dp0"
 
 REM -------- MasterHttpRelayVPN one-click launcher (Windows) --------
 REM Creates a local virtualenv, installs deps, runs the setup wizard
-REM if needed, then starts the proxy.
+REM if needed, then starts the proxy. Also checks and installs CA cert
+REM if not already trusted.
 
 set "VENV_DIR=.venv"
 set "PY="
@@ -62,6 +63,15 @@ if not exist "config.json" (
         exit /b 1
     )
 )
+
+REM -------- Check for uninstall flag --------
+echo %* | findstr /C:"--uninstall-cert" >nul
+if not errorlevel 1 (
+    echo [*] Uninstalling CA certificate ...
+    "%VPY%" main.py --uninstall-cert
+    exit /b %errorlevel%
+)
+
 
 echo.
 echo [*] Starting MasterHttpRelayVPN ...

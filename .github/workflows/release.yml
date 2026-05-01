@@ -1,0 +1,258 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag name to publish (example: v1.2.0). Leave empty for non-publishing build."
+        required: false
+        type: string
+      publish:
+        description: "Publish GitHub Release"
+        required: false
+        default: false
+        type: boolean
+      make_public:
+        description: "Make release public immediately (false = hidden draft + prerelease)"
+        required: false
+        default: false
+        type: boolean
+      build_macos_x64:
+        description: "Also build macOS x64 (intel). Optional and non-blocking."
+        required: false
+        default: false
+        type: boolean
+      build_linux_arm64:
+        description: "Also build Linux ARM64. Optional and non-blocking."
+        required: false
+        default: false
+        type: boolean
+      build_termux_bundle:
+        description: "Also publish Termux source bundle (supports arm64/armv7/x86_64 on-device)."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-14
+            target: macos-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build standalone binary
+        run: pyinstaller --noconfirm --clean --onefile --name MasterHttpRelayVPN --paths src main.py
+
+      - name: Package release bundle
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python scripts/build_release_bundle.py
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release-assets/*
+
+  build-macos-x64:
+    name: Build macos-x64 (optional)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_macos_x64 == 'true'
+    runs-on: macos-13
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build standalone binary
+        run: pyinstaller --noconfirm --clean --onefile --name MasterHttpRelayVPN --paths src main.py
+
+      - name: Package release bundle
+        env:
+          TARGET: macos-x64
+        run: python scripts/build_release_bundle.py
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos-x64
+          path: release-assets/*
+
+  build-linux-arm64:
+    name: Build linux-arm64 (optional)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_linux_arm64 == 'true'
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build standalone binary
+        run: pyinstaller --noconfirm --clean --onefile --name MasterHttpRelayVPN --paths src main.py
+
+      - name: Package release bundle
+        env:
+          TARGET: linux-arm64
+        run: python scripts/build_release_bundle.py
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-arm64
+          path: release-assets/*
+
+  build-termux-bundle:
+    name: Build termux-source (optional)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.build_termux_bundle == 'true'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Termux source archive
+        run: |
+          python - <<'PY'
+          import hashlib
+          import re
+          import tarfile
+          from pathlib import Path
+
+          root = Path('.').resolve()
+          constants_py = (root / 'src' / 'constants.py').read_text(encoding='utf-8')
+          m = re.search(r'__version__\s*=\s*"([^"]+)"', constants_py)
+          version = m.group(1) if m else '0.0.0'
+
+          release_dir = root / 'release-assets'
+          release_dir.mkdir(parents=True, exist_ok=True)
+
+          archive_name = f"MasterHttpRelayVPN-{version}-termux-source.tar.gz"
+          archive_path = release_dir / archive_name
+
+          include_items = [
+              'main.py',
+              'setup.py',
+              'requirements.txt',
+              'config.example.json',
+              'README.md',
+              'README_FA.md',
+              'start.sh',
+              'apps_script',
+              'scripts',
+              'src',
+          ]
+
+          with tarfile.open(archive_path, 'w:gz') as tf:
+              for item in include_items:
+                  p = root / item
+                  if p.exists():
+                      tf.add(p, arcname=item)
+
+          digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+          (release_dir / f"{archive_name}.sha256").write_text(
+              f"{digest}  {archive_name}\n",
+              encoding='utf-8',
+          )
+
+          install_script = release_dir / 'termux-install.sh'
+          install_script.write_text(
+              "#!/data/data/com.termux/files/usr/bin/bash\n"
+              "set -euo pipefail\n"
+              "pkg update -y\n"
+              "pkg install -y python git clang libffi openssl\n"
+              "python -m pip install --upgrade pip\n"
+              "if [ ! -f requirements.txt ]; then\n"
+              "  echo 'Run this inside extracted MasterHttpRelayVPN source directory.' >&2\n"
+              "  exit 1\n"
+              "fi\n"
+              "pip install -r requirements.txt\n"
+              "echo 'Done. Next: python setup.py and then python main.py'\n",
+              encoding='utf-8',
+          )
+          install_script.chmod(0o755)
+          print(f"Created {archive_path}")
+          PY
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-termux-source
+          path: release-assets/*
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-binaries, build-macos-x64, build-linux-arm64, build-termux-bundle]
+    runs-on: ubuntu-latest
+    if: always() && !cancelled() && (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true' && startsWith(github.event.inputs.release_tag, 'v')))
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Flatten artifact directories
+        run: |
+          mkdir -p final-assets
+          find release-assets -type f -exec cp {} final-assets/ \;
+          ls -lah final-assets
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.release_tag }}
+          files: final-assets/*
+          generate_release_notes: true
+          prerelease: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.make_public != 'true' }}
+          draft: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.make_public != 'true' }}
+          make_latest: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.make_public == 'true') && 'true' || 'false' }}

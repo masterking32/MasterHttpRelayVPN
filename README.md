@@ -172,6 +172,49 @@ It'll prompt for your Deployment ID, generate a random `auth_key`, and write
    - `script_id` → Paste the Deployment ID from Step 2.
    - `auth_key` → The **same password** you set in `Code.gs`.
 
+### Step 3.5: Optional Exit Node for Full-Tunnel (ChatGPT/Turnstile Friendly)
+
+Some websites block Google datacenter IPs when traffic exits directly from Apps Script.
+To fix that, configure an exit node so traffic path becomes:
+
+```text
+Browser -> Local Proxy -> Apps Script -> val.town -> Target website
+```
+
+1. Open [`apps_script/valtown.ts`](apps_script/valtown.ts) and deploy it on [val.town](https://www.val.town/):
+   - Create a new val
+   - Paste file contents
+   - Add HTTP trigger
+   - Copy your generated URL (`https://<name>.web.val.run`)
+2. Set `PSK` inside the val code to a strong secret.
+3. Add this block to your `config.json`:
+
+```json
+"exit_node": {
+  "enabled": true,
+  "relay_url": "https://YOUR-NAME.web.val.run",
+  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
+  "mode": "full",
+  "hosts": [
+    "chatgpt.com",
+    "openai.com",
+    "claude.ai",
+    "anthropic.com"
+  ]
+}
+```
+
+Notes:
+- `mode: "full"` = everything goes through exit node (ignore `hosts`).
+- `mode: "selective"` = only domains in `hosts` go through exit node.
+- `psk` must be exactly the same as `PSK` in `valtown.ts`.
+
+Production recommendation:
+- Keep `verify_ssl: true`
+- Keep `listen_host: 127.0.0.1` unless LAN sharing is explicitly needed
+- Rotate both secrets periodically
+- Never publish your live val URL with valid PSK
+
 ### Step 4: Run
 
 ```bash
@@ -231,6 +274,8 @@ Firefox uses its own certificate store, so even after OS-level install you need 
 4. Check **Trust this CA to identify websites** → click **OK**.
 
 > **Auto-install on startup:** When running in `apps_script` mode the proxy will automatically detect if the CA is not yet trusted and attempt to install it for you. If it succeeds you'll see a confirmation in the log; if it fails (e.g. needs administrator rights) it will print instructions. You can also run `python main.py --install-cert` at any time to (re-)install the certificate.
+
+> **Uninstalling:** To remove the certificate from your system's trust stores, run `python main.py --uninstall-cert` or use `start.bat --uninstall-cert` on Windows. This removes the certificate from all system trust stores and Firefox profiles.
 
 > ⚠️ **Security note:** This certificate only works locally on your machine. Don't share the `ca/` folder with anyone. If you want to start fresh, delete the `ca/` folder and the tool will generate a new one.
 
@@ -345,6 +390,7 @@ python3 main.py --disable-socks5         # Disable SOCKS5 listener
 python3 main.py --log-level DEBUG        # Show detailed logs
 python3 main.py -c /path/to/config.json  # Use a different config file
 python3 main.py --install-cert           # Install MITM CA certificate and exit
+python3 main.py --uninstall-cert         # Remove MITM CA certificate and exit
 python3 main.py --no-cert-check          # Skip automatic CA install check on startup
 python3 main.py --scan                   # Scan Google IPs and find the fastest one
 ```

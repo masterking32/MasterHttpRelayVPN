@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    tags-ignore: ["v*"]
+  pull_request:
+
+jobs:
+  smoke-test:
+    name: Smoke (${{ matrix.os }} / py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile smoke
+        run: |
+          python - <<'PY'
+          import compileall
+          import pathlib
+
+          files = ["main.py", "setup.py"]
+          for f in files:
+              ok = compileall.compile_file(f, force=True, quiet=1)
+              if not ok:
+                  raise SystemExit(f"compile failed: {f}")
+
+          if not compileall.compile_dir("src", force=True, quiet=1):
+              raise SystemExit("compile failed: src/")
+
+          print("compile smoke ok")
+          PY
+
+      - name: CLI smoke
+        run: |
+          python main.py --help
+          python main.py --version

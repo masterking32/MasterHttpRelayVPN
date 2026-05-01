@@ -20,7 +20,7 @@ _SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from cert_installer import install_ca, is_ca_trusted
+from cert_installer import install_ca, uninstall_ca, is_ca_trusted
 from constants import __version__
 from lan_utils import log_lan_access
 from google_ip_scanner import scan_sync
@@ -89,6 +89,11 @@ def parse_args():
         help="Install the MITM CA certificate as a trusted root and exit.",
     )
     parser.add_argument(
+        "--uninstall-cert",
+        action="store_true",
+        help="Remove the MITM CA certificate from trusted roots and exit.",
+    )
+    parser.add_argument(
         "--no-cert-check",
         action="store_true",
         help="Skip the certificate installation check on startup.",
@@ -103,6 +108,28 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # Handle cert-only commands before loading config so they can run standalone.
+    if args.install_cert or args.uninstall_cert:
+        setup_logging("INFO")
+        _log = logging.getLogger("Main")
+
+        if args.install_cert:
+            _log.info("Installing CA certificate…")
+            if not os.path.exists(CA_CERT_FILE):
+                from mitm import MITMCertManager
+                MITMCertManager()  # side-effect: creates ca/ca.crt + ca/ca.key
+            ok = install_ca(CA_CERT_FILE)
+            sys.exit(0 if ok else 1)
+
+        _log.info("Removing CA certificate…")
+        ok = uninstall_ca(CA_CERT_FILE)
+        if ok:
+            _log.info("CA certificate removed successfully.")
+        else:
+            _log.warning("CA certificate removal may have failed. Check logs above.")
+        sys.exit(0 if ok else 1)
+
     config_path = args.config
 
     try:
@@ -190,14 +217,6 @@ def main():
         print("Deploy the Apps Script from Code.gs and paste the Deployment ID.")
         sys.exit(1)
 
-    # ── Certificate installation ──────────────────────────────────────────
-    if args.install_cert:
-        setup_logging("INFO")
-        _log = logging.getLogger("Main")
-        _log.info("Installing CA certificate…")
-        ok = install_ca(CA_CERT_FILE)
-        sys.exit(0 if ok else 1)
-
     # ── Google IP Scanner ──────────────────────────────────────────────────
     if args.scan:
         setup_logging("INFO")
@@ -246,22 +265,18 @@ def main():
 
     # ── LAN sharing configuration ────────────────────────────────────────
     lan_sharing = config.get("lan_sharing", False)
+    listen_host = config.get("listen_host", "127.0.0.1")
     if lan_sharing:
         # If LAN sharing is enabled and host is still localhost, change to all interfaces
-        if config.get("listen_host", "127.0.0.1") == "127.0.0.1":
+        if listen_host == "127.0.0.1":
             config["listen_host"] = "0.0.0.0"
+            listen_host = "0.0.0.0"
             log.info("LAN sharing enabled — listening on all interfaces")
 
-    log.info("HTTP proxy         : %s:%d",
-             config.get("listen_host", "127.0.0.1"),
-             config.get("listen_port", 8080))
-    if config.get("socks5_enabled", True):
-        log.info("SOCKS5 proxy       : %s:%d",
-                 config.get("socks5_host", config.get("listen_host", "127.0.0.1")),
-                 config.get("socks5_port", 1080))
-
-    # Log LAN access addresses if sharing is enabled
-    if lan_sharing:
+    # If either explicit LAN sharing is enabled or we bind to all interfaces,
+    # print concrete IPv4 addresses users can use on other devices.
+    lan_mode = lan_sharing or listen_host in ("0.0.0.0", "::")
+    if lan_mode:
         socks_port = config.get("socks5_port", 1080) if config.get("socks5_enabled", True) else None
         log_lan_access(config.get("listen_port", 8080), socks_port)
 

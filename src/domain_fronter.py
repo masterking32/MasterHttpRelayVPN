@@ -10,12 +10,14 @@ returns the response.
 
 import asyncio
 import base64
+import codecs
 import hashlib
 import json
 import logging
 import re
 import socket
 import ssl
+import statistics
 import tempfile
 import time
 from dataclasses import dataclass
@@ -82,8 +84,12 @@ def _build_sni_pool(front_domain: str, overrides: list | None) -> list[str]:
             return out
     fd = (front_domain or "").lower().rstrip(".")
     if fd.endswith(".google.com") or fd == "google.com":
-        # Ensure the configured front_domain is first (stable default).
-        pool = [fd] + [h for h in FRONT_SNI_POOL_GOOGLE if h != fd]
+        # For Google fronting we prefer the curated pool order, which can be
+        # latency-biased for common censored networks. Include the configured
+        # front_domain if it is custom, but do not pin it first.
+        pool = list(FRONT_SNI_POOL_GOOGLE)
+        if fd and fd not in pool:
+            pool.insert(0, fd)
         return pool
     return [fd] if fd else ["www.google.com"]
 
@@ -112,6 +118,7 @@ class DomainFronter:
             self.sni_host, config.get("front_domains"),
         )
         self._sni_idx = 0
+        self._sni_probe_task: asyncio.Task | None = None
         self.http_host = "script.google.com"
         # Multi-script round-robin for higher throughput
         script = config.get("script_ids") or config.get("script_id")
@@ -145,6 +152,7 @@ class DomainFronter:
         self._tls_connect_timeout = self._cfg_float(
             config, "tls_connect_timeout", TLS_CONNECT_TIMEOUT, minimum=1.0,
         )
+        self._sni_probe_timeout = min(self._tls_connect_timeout, 4.0)
         self._max_response_body_bytes = self._cfg_int(
             config, "max_response_body_bytes", MAX_RESPONSE_BODY_BYTES,
             minimum=1024,
@@ -201,6 +209,24 @@ class DomainFronter:
         if self._parallel_relay > 1:
             log.info("Fan-out relay: %d parallel Apps Script instances per request",
                      self._parallel_relay)
+
+        # Exit node — optional second-hop relay with a non-Google exit IP.
+        # Useful for sites that block GCP/Apps Script IPs (e.g. ChatGPT).
+        en_cfg = config.get("exit_node") or {}
+        self._exit_node_enabled: bool = bool(en_cfg.get("enabled", False))
+        self._exit_node_url: str = str(en_cfg.get("relay_url") or "").rstrip("/")
+        self._exit_node_psk: str = str(en_cfg.get("psk") or "")
+        self._exit_node_mode: str = str(en_cfg.get("mode") or "selective").lower()
+        self._exit_node_hosts: frozenset[str] = frozenset(
+            str(h).lower().strip().lstrip(".")
+            for h in (en_cfg.get("hosts") or [])
+            if h
+        )
+        if self._exit_node_enabled and self._exit_node_url:
+            log.info(
+                "Exit node enabled [mode=%s]: %s",
+                self._exit_node_mode, self._exit_node_url,
+            )
 
         # Capability log for content encodings.
         log.info("Response codecs: %s", codec.supported_encodings())
@@ -316,6 +342,125 @@ class DomainFronter:
         sni = self._sni_hosts[self._sni_idx % len(self._sni_hosts)]
         self._sni_idx += 1
         return sni
+
+    async def _ensure_sni_ranked(self) -> None:
+        if len(self._sni_hosts) <= 1:
+            return
+        task = self._sni_probe_task
+        if task is None:
+            task = self._spawn(self._rank_sni_hosts())
+            self._sni_probe_task = task
+        try:
+            await task
+        except Exception as exc:
+            log.debug("SNI probe failed: %s", exc)
+
+    async def _rank_sni_hosts(self) -> None:
+        sid = self._script_ids[0]
+        original = list(self._sni_hosts)
+
+        ranked: list[tuple[float, str]] = []
+        failed: list[str] = []
+        for sni in original:
+            result = await self._probe_sni_latency(sni, sid)
+            if result is None:
+                failed.append(sni)
+            else:
+                ranked.append((result, sni))
+
+        if not ranked:
+            return
+
+        ranked.sort(key=lambda item: item[0])
+        reordered = [sni for _, sni in ranked] + failed
+        if reordered == original:
+            log.info(
+                "SNI probe kept order: %s",
+                ", ".join(f"{sni} ({ms:.0f}ms)" for ms, sni in ranked),
+            )
+            return
+
+        self._sni_hosts = reordered
+        self._sni_idx = 0
+        if self._h2 is not None:
+            self._h2._sni_hosts = list(reordered)
+            self._h2._sni_idx = 0
+        log.info(
+            "SNI pool re-ranked by local probe: %s",
+            ", ".join(f"{sni} ({ms:.0f}ms)" for ms, sni in ranked),
+        )
+        if failed:
+            log.info("SNI probe timed out: %s", ", ".join(failed))
+
+    async def _probe_sni_latency(self, sni: str, sid: str) -> float | None:
+        samples: list[float] = []
+        for _ in range(2):
+            sample = await self._probe_sni_latency_once(sni, sid)
+            if sample is not None:
+                samples.append(sample)
+        if not samples:
+            return None
+        return statistics.median(samples)
+
+    async def _probe_sni_latency_once(self, sni: str, sid: str) -> float | None:
+        payload = json.dumps(
+            {"m": "GET", "u": "http://example.com/", "k": self.auth_key}
+        ).encode()
+        request = (
+            f"POST /macros/s/{sid}/exec HTTP/1.1\r\n"
+            f"Host: {self.http_host}\r\n"
+            "Content-Type: application/json\r\n"
+            f"Content-Length: {len(payload)}\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode() + payload
+        loop = asyncio.get_running_loop()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        sock.setblocking(False)
+        started = time.perf_counter()
+        reader = None
+        writer = None
+        try:
+            await asyncio.wait_for(
+                loop.sock_connect(sock, (self.connect_host, 443)),
+                timeout=self._sni_probe_timeout,
+            )
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    sock=sock,
+                    ssl=self._ssl_ctx(),
+                    server_hostname=sni,
+                ),
+                timeout=self._sni_probe_timeout,
+            )
+            writer.write(request)
+            await asyncio.wait_for(writer.drain(), timeout=self._sni_probe_timeout)
+
+            head = b""
+            while b"\r\n\r\n" not in head and len(head) < 8192:
+                chunk = await asyncio.wait_for(
+                    reader.read(512), timeout=self._sni_probe_timeout,
+                )
+                if not chunk:
+                    break
+                head += chunk
+            if not head.startswith(b"HTTP/"):
+                return None
+            return (time.perf_counter() - started) * 1000
+        except Exception:
+            return None
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+            elif sock.fileno() != -1:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
 
     async def _acquire(self):
         """Get a healthy TLS connection from pool (TTL-checked) or open new."""
@@ -770,6 +915,8 @@ class DomainFronter:
         if self._warmed:
             return
         self._warmed = True
+        if self._sni_probe_task is None and len(self._sni_hosts) > 1:
+            self._sni_probe_task = self._spawn(self._rank_sni_hosts())
         self._warm_task = self._spawn(self._do_warm())
         # Start continuous pool maintenance
         if self._maintenance_task is None:
@@ -821,6 +968,7 @@ class DomainFronter:
         if time.time() < self._h2_disabled_until:
             return
         try:
+            await self._ensure_sni_ranked()
             await self._h2.ensure_connected()
             self._record_h2_success()
             log.info("H2 multiplexing active — one conn handles all requests")
@@ -839,7 +987,7 @@ class DomainFronter:
     async def _prewarm_script(self):
         """Pre-warm Apps Script and detect /dev fast path (no redirect)."""
         payload = json.dumps(
-            {"m": "HEAD", "u": "http://example.com/", "k": self.auth_key}
+            {"m": "GET", "u": "http://example.com/", "k": self.auth_key}
         ).encode()
         hdrs = {"content-type": "application/json"}
         sid = self._script_ids[0]
@@ -857,7 +1005,7 @@ class DomainFronter:
                 timeout=15,
             )
             dt = (time.perf_counter() - t0) * 1000
-            data = json.loads(body.decode(errors="replace"))
+            data = self._load_relay_json(body.decode(errors="replace"))
             if "s" in data:
                 self._dev_available = True
                 log.info("/dev fast path active (%.0fms, no redirect)", dt)
@@ -899,7 +1047,7 @@ class DomainFronter:
                 await self._h2.ping()
 
                 # Apps Script keepalive — warm the container
-                payload = {"m": "HEAD", "u": "http://example.com/", "k": self.auth_key}
+                payload = {"m": "GET", "u": "http://example.com/", "k": self.auth_key}
                 path = self._exec_path("example.com")
                 t0 = time.perf_counter()
                 await asyncio.wait_for(
@@ -931,7 +1079,7 @@ class DomainFronter:
                 if self._h2_available():
                     continue  # H2 keepalive is already pinging, skip
                 payload = self._build_payload(
-                    "HEAD", "http://example.com/", {}, b""
+                    "GET", "http://example.com/", {}, b""
                 )
                 t0 = time.perf_counter()
                 # _relay_payload_h1 has its own per-attempt timeout internally;
@@ -947,6 +1095,7 @@ class DomainFronter:
 
     async def _do_warm(self):
         """Open WARM_POOL_COUNT connections in parallel — failures are fine."""
+        await self._ensure_sni_ranked()
         count = WARM_POOL_COUNT
         coros = [self._add_conn_to_pool() for _ in range(count)]
         results = await asyncio.gather(*coros, return_exceptions=True)
@@ -955,6 +1104,73 @@ class DomainFronter:
 
     def _auth_header(self) -> str:
         return f"X-Auth-Key: {self.auth_key}\r\n" if self.auth_key else ""
+
+    # ── Exit node relay ───────────────────────────────────────────
+
+    def _exit_node_matches(self, url: str) -> bool:
+        """Return True if this URL should be routed through the exit node."""
+        if not self._exit_node_enabled or not self._exit_node_url:
+            return False
+        if self._exit_node_mode == "full":
+            return True
+        # selective: check if destination hostname matches configured list
+        host = self._host_key(url)
+        if not host:
+            return False
+        for pattern in self._exit_node_hosts:
+            if host == pattern or host.endswith("." + pattern):
+                return True
+        return False
+
+    async def _relay_via_exit_node(self, payload: dict) -> bytes:
+        """Chain: Apps Script → exit node (val.town) → Destination.
+
+        Traffic path:
+          Client → [domain fronting TLS] → Apps Script (Google)
+                → [UrlFetchApp.fetch] → exit node (val.town / non-Google IP)
+                → [fetch()] → Destination
+
+        This preserves the DPI bypass (Apps Script is always the outbound
+        connection from the client's perspective) while giving the destination
+        a non-Google exit IP — fixing Cloudflare Turnstile, ChatGPT, etc.
+
+        The inner payload going to val.town is base64-encoded and sent as the
+        body of the outer Apps Script relay call, so Apps Script POSTs it to
+        the exit node URL on our behalf.
+        """
+        # Build inner payload: what val.town will execute
+        inner = dict(payload)
+        inner["k"] = self._exit_node_psk
+        inner_json = json.dumps(inner).encode()
+
+        # Build outer payload: what Apps Script will fetch
+        # Apps Script does:  UrlFetchApp.fetch(exit_node_url, { method: "POST", payload: inner_json })
+        outer = self._build_payload(
+            "POST",
+            self._exit_node_url,
+            {"Content-Type": "application/json"},
+            inner_json,
+        )
+        # Override content-type explicitly so Apps Script sets it correctly
+        outer["ct"] = "application/json"
+
+        log.debug(
+            "Exit node chain: Apps Script → %s → %s",
+            self._exit_node_url.split("//", 1)[-1][:50],
+            payload.get("u", "")[:60],
+        )
+
+        # Send through the normal Apps Script relay path (H2 or H1 + retry)
+        raw = await self._relay_with_retry(outer)
+
+        # raw is now the response from val.town (which is the inner relay JSON)
+        # _parse_relay_response will decode it into the final HTTP response.
+        # But we need to unwrap one level: Apps Script gives us val.town's HTTP
+        # response body (which is itself a relay JSON), so parse twice.
+        _, _, apps_script_body = self._split_raw_response(raw)
+        result = self._parse_relay_response(apps_script_body)
+        log.debug("Exit node relay OK: %s", payload.get("u", "")[:80])
+        return result
 
     # ── Apps Script relay (apps_script mode) ──────────────────────
 
@@ -975,6 +1191,26 @@ class DomainFronter:
             await self._warm_pool()
 
         payload = self._build_payload(method, url, headers, body)
+
+        # Exit node short-circuit: route to non-Google IP before Apps Script
+        if self._exit_node_matches(url):
+            t0 = time.perf_counter()
+            errored = False
+            try:
+                return await asyncio.wait_for(
+                    self._relay_via_exit_node(payload),
+                    timeout=self._relay_timeout + self._tls_connect_timeout,
+                )
+            except Exception as exc:
+                errored = True
+                log.warning(
+                    "Exit node failed for %s (%s: %s), falling back to Apps Script",
+                    url[:60], type(exc).__name__, exc,
+                )
+            finally:
+                latency_ns = int((time.perf_counter() - t0) * 1e9)
+                self._record_site(url, 0, latency_ns, errored)
+            # fall through to normal Apps Script relay on failure
 
         t0 = time.perf_counter()
         errored = False
@@ -2122,19 +2358,52 @@ class DomainFronter:
         if not text:
             return self._error_response(502, "Empty response from relay")
 
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            m = re.search(r'\{.*\}', text, re.DOTALL)
-            if m:
-                try:
-                    data = json.loads(m.group())
-                except json.JSONDecodeError:
-                    return self._error_response(502, f"Bad JSON: {text[:200]}")
-            else:
-                return self._error_response(502, f"No JSON: {text[:200]}")
+        data = self._load_relay_json(text)
+        if data is None:
+            return self._error_response(502, f"No JSON: {text[:200]}")
 
         return self._parse_relay_json(data)
+
+    @staticmethod
+    def _load_relay_json(text: str) -> dict | None:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            wrapped = DomainFronter._extract_apps_script_user_html(text)
+            if wrapped:
+                data = DomainFronter._load_relay_json(wrapped)
+                if data is not None:
+                    return data
+
+            match = re.search(r'\{.*\}', text, re.DOTALL)
+            if not match:
+                return None
+            try:
+                data = json.loads(match.group())
+            except json.JSONDecodeError:
+                return None
+            return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _extract_apps_script_user_html(text: str) -> str | None:
+        marker = 'goog.script.init("'
+        start = text.find(marker)
+        if start == -1:
+            return None
+        start += len(marker)
+        end = text.find('", "", undefined', start)
+        if end == -1:
+            return None
+
+        encoded = text[start:end]
+        try:
+            decoded = codecs.decode(encoded, "unicode_escape")
+            payload = json.loads(decoded)
+        except Exception:
+            return None
+
+        user_html = payload.get("userHtml")
+        return user_html if isinstance(user_html, str) else None
 
     def _parse_relay_json(self, data: dict) -> bytes:
         """Convert a parsed relay JSON dict to raw HTTP response bytes."""
