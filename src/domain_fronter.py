@@ -214,9 +214,17 @@ class DomainFronter:
         # Useful for sites that block GCP/Apps Script IPs (e.g. ChatGPT).
         en_cfg = config.get("exit_node") or {}
         self._exit_node_enabled: bool = bool(en_cfg.get("enabled", False))
-        self._exit_node_url: str = str(en_cfg.get("relay_url") or "").rstrip("/")
+        self._exit_node_provider: str = self._normalize_exit_node_provider(
+            en_cfg.get("provider"),
+        )
+        self._exit_node_url: str = self._resolve_exit_node_url(
+            self._exit_node_provider,
+            en_cfg,
+        )
         self._exit_node_psk: str = str(en_cfg.get("psk") or "")
         self._exit_node_mode: str = str(en_cfg.get("mode") or "selective").lower()
+        if self._exit_node_mode not in ("full", "selective"):
+            self._exit_node_mode = "selective"
         self._exit_node_hosts: frozenset[str] = frozenset(
             str(h).lower().strip().lstrip(".")
             for h in (en_cfg.get("hosts") or [])
@@ -224,8 +232,15 @@ class DomainFronter:
         )
         if self._exit_node_enabled and self._exit_node_url:
             log.info(
-                "Exit node enabled [mode=%s]: %s",
-                self._exit_node_mode, self._exit_node_url,
+                "Exit node enabled [mode=%s, provider=%s]: %s",
+                self._exit_node_mode,
+                self._exit_node_provider,
+                self._exit_node_url,
+            )
+        elif self._exit_node_enabled:
+            log.warning(
+                "Exit node is enabled but no URL is configured for provider '%s'",
+                self._exit_node_provider,
             )
 
         # Capability log for content encodings.
@@ -1107,6 +1122,62 @@ class DomainFronter:
 
     # ── Exit node relay ───────────────────────────────────────────
 
+    @staticmethod
+    def _normalize_exit_node_provider(raw: object) -> str:
+        provider = str(raw or "custom").strip().lower()
+        aliases = {
+            "val": "valtown",
+            "val-town": "valtown",
+            "cloudflare_worker": "cloudflare",
+            "worker": "cloudflare",
+            "cf": "cloudflare",
+            "deno_deploy": "deno",
+        }
+        return aliases.get(provider, provider or "custom")
+
+    @classmethod
+    def _resolve_exit_node_url(cls, provider: str,
+                               en_cfg: dict[str, object]) -> str:
+        providers = en_cfg.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+
+        def _pick_from(mapping: dict[str, object], *keys: str) -> str:
+            for key in keys:
+                value = mapping.get(key)
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value:
+                        return value.rstrip("/")
+            return ""
+
+        # Beginner-first: one URL field is enough for all providers.
+        direct = _pick_from(en_cfg, "url")
+        if direct:
+            return direct
+
+        if provider == "valtown":
+            selected = _pick_from(en_cfg, "valtown_url", "val_url") or _pick_from(
+                providers, "valtown", "val_town", "val",
+            )
+        elif provider == "cloudflare":
+            selected = _pick_from(
+                en_cfg, "cloudflare_url", "worker_url", "cf_url",
+            ) or _pick_from(
+                providers, "cloudflare", "cloudflare_worker", "worker", "cf",
+            )
+        elif provider == "deno":
+            selected = _pick_from(en_cfg, "deno_url") or _pick_from(
+                providers, "deno", "deno_deploy",
+            )
+        else:
+            selected = ""
+
+        if selected:
+            return selected
+        # Backward compatibility for older config format.
+        return _pick_from(en_cfg, "relay_url")
+
     def _exit_node_matches(self, url: str) -> bool:
         """Return True if this URL should be routed through the exit node."""
         if not self._exit_node_enabled or not self._exit_node_url:
@@ -1123,22 +1194,22 @@ class DomainFronter:
         return False
 
     async def _relay_via_exit_node(self, payload: dict) -> bytes:
-        """Chain: Apps Script → exit node (val.town) → Destination.
+        """Chain: Apps Script → edge relay (exit node) → Destination.
 
         Traffic path:
           Client → [domain fronting TLS] → Apps Script (Google)
-                → [UrlFetchApp.fetch] → exit node (val.town / non-Google IP)
+                → [UrlFetchApp.fetch] → exit node (non-Google IP)
                 → [fetch()] → Destination
 
         This preserves the DPI bypass (Apps Script is always the outbound
         connection from the client's perspective) while giving the destination
         a non-Google exit IP — fixing Cloudflare Turnstile, ChatGPT, etc.
 
-        The inner payload going to val.town is base64-encoded and sent as the
+        The inner payload going to the exit node is base64-encoded and sent as the
         body of the outer Apps Script relay call, so Apps Script POSTs it to
         the exit node URL on our behalf.
         """
-        # Build inner payload: what val.town will execute
+        # Build inner payload: what the exit node will execute
         inner = dict(payload)
         inner["k"] = self._exit_node_psk
         inner_json = json.dumps(inner).encode()
@@ -1163,9 +1234,9 @@ class DomainFronter:
         # Send through the normal Apps Script relay path (H2 or H1 + retry)
         raw = await self._relay_with_retry(outer)
 
-        # raw is now the response from val.town (which is the inner relay JSON)
+        # raw is now the response from the exit node (inner relay JSON)
         # _parse_relay_response will decode it into the final HTTP response.
-        # But we need to unwrap one level: Apps Script gives us val.town's HTTP
+        # But we need to unwrap one level: Apps Script gives us exit node HTTP
         # response body (which is itself a relay JSON), so parse twice.
         _, _, apps_script_body = self._split_raw_response(raw)
         result = self._parse_relay_response(apps_script_body)

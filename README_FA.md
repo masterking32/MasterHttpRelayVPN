@@ -137,21 +137,27 @@ cp config.example.json config.json
 برای حل این مورد، نود خروجی (exit node) را فعال کنید تا مسیر این‌گونه شود:
 
 ```text
-مرورگر -> پراکسی محلی -> Apps Script -> val.town -> سایت مقصد
+مرورگر -> پراکسی محلی -> Apps Script -> Exit Node (Val Town / Cloudflare / Deno) -> سایت مقصد
 ```
 
-1. فایل [apps_script/valtown.ts](apps_script/valtown.ts) را در val.town deploy کنید:
-   - یک val جدید بسازید
-   - محتوای فایل را paste کنید
-   - HTTP trigger را فعال کنید
-   - آدرس نهایی (`https://<name>.web.val.run`) را کپی کنید
-2. مقدار `PSK` داخل فایل val را با یک رمز قوی تغییر دهید.
-3. در `config.json` این بخش را اضافه/تکمیل کنید:
+می‌توانید یکی از این template های رایگان را deploy کنید:
+
+1. Val Town: [apps_script/valtown.ts](apps_script/valtown.ts)
+2. Cloudflare Workers: [apps_script/cloudflare_worker.js](apps_script/cloudflare_worker.js)
+3. Deno Deploy: [apps_script/deno_deploy.ts](apps_script/deno_deploy.ts)
+
+راهنمای کامل مرحله‌به‌مرحله برای هر provider:
+- [EXIT_NODE_DEPLOYMENT.md](EXIT_NODE_DEPLOYMENT.md)
+
+سپس همان secret را هم در کد نود خروجی (`PSK`) و هم در `config.json` یکسان بگذارید.
+
+نمونه کانفیگ برای سوییچ بین provider ها:
 
 ```json
 "exit_node": {
   "enabled": true,
-  "relay_url": "https://YOUR-NAME.web.val.run",
+  "provider": "valtown",
+  "url": "https://YOUR-NAME.web.val.run",
   "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
   "mode": "full",
   "hosts": [
@@ -164,9 +170,11 @@ cp config.example.json config.json
 ```
 
 نکات:
+- برای تنظیم ساده، فقط `provider`، `url` و `psk` را پر کنید.
+- برای تغییر backend مقدار `exit_node.provider` و `exit_node.url` را عوض کنید.
 - `mode: "full"` یعنی همه ترافیک از exit node عبور می‌کند (`hosts` نادیده گرفته می‌شود).
 - `mode: "selective"` یعنی فقط دامنه‌های داخل `hosts` از exit node عبور می‌کنند.
-- مقدار `psk` باید دقیقا با `PSK` در `valtown.ts` یکی باشد.
+- مقدار `psk` باید دقیقا با secret تنظیم‌شده در runtime برابر باشد.
 
 ### مرحله 4: اجرا
 
@@ -284,6 +292,8 @@ json
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | هاست‌هایی که مستقیم می‌روند (بدون MITM و بدون رله). برای منابع داخلی شبکه یا سایت‌هایی که با MITM مشکل دارند. |
 | `direct_google_exclude` | مراجعه به [config.example.json](config.example.json) | اپ‌های Google که باید از مسیر MITM برای رله استفاده کنند به‌جای tunnel مستقیم. |
 | `youtube_via_relay` | `false` | مسیردهی YouTube (`youtube.com`، `youtu.be`، `youtube-nocookie.com`) از طریق رله Apps Script به‌جای مسیر SNI-rewrite. مسیر SNI-rewrite از IP فرانت‌اند Google عبور می‌کند که SafeSearch را اجباری می‌کند و می‌تواند باعث خطای **«ویدیو در دسترس نیست»** شود. با فعال کردن این گزینه، پخش ویدیو درست می‌شود اما تعداد اجراهای Apps Script بیشتر و تأخیر اندکی بالاتر می‌رود. |
+| `exit_node.provider` | `valtown` | backend انتخاب‌شده برای exit node: `valtown`، `cloudflare`، `deno` یا `custom`. |
+| `exit_node.url` | `""` | آدرس ساده و اصلی برای provider انتخاب‌شده. |
 
 ### وابستگی‌های اختیاری
 
@@ -398,7 +408,10 @@ MasterHttpRelayVPN/
 ├── config.example.json        # نمونه کانفیگ (به config.json کپی شود)
 ├── requirements.txt           # وابستگی‌های اختیاری پایتون
 ├── apps_script/
-│   └── Code.gs                # اسکریپت رله روی Google Apps Script
+│   ├── Code.gs                # اسکریپت رله روی Google Apps Script
+│   ├── valtown.ts             # template نود خروجی برای val.town
+│   ├── cloudflare_worker.js   # template نود خروجی برای Cloudflare Workers
+│   └── deno_deploy.ts         # template نود خروجی برای Deno Deploy
 ├── ca/                        # گواهی MITM (هرگز به اشتراک نگذارید)
 │   ├── ca.crt
 │   └── ca.key

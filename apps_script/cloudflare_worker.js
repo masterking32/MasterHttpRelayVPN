@@ -19,23 +19,23 @@ const STRIP_HEADERS = new Set([
   "via",
 ]);
 
-function decodeBase64ToBytes(input: string): Uint8Array {
+function decodeBase64ToBytes(input) {
   const bin = atob(input);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
 
-function encodeBytesToBase64(bytes: Uint8Array): string {
+function encodeBytesToBase64(bytes) {
   let bin = "";
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 }
 
-function sanitizeHeaders(h: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
+function sanitizeHeaders(h) {
+  const out = {};
   if (!h || typeof h !== "object") return out;
-  for (const [k, v] of Object.entries(h as Record<string, unknown>)) {
+  for (const [k, v] of Object.entries(h)) {
     if (!k) continue;
     if (STRIP_HEADERS.has(k.toLowerCase())) continue;
     out[k] = String(v ?? "");
@@ -44,7 +44,7 @@ function sanitizeHeaders(h: unknown): Record<string, string> {
 }
 
 export default {
-  async fetch(req: Request): Promise<Response> {
+  async fetch(req) {
     try {
       if (req.method !== "POST") {
         return Response.json({ e: "method_not_allowed" }, { status: 405 });
@@ -59,28 +59,28 @@ export default {
         return Response.json({ e: "server_psk_missing" }, { status: 500 });
       }
 
-      const k = String((body as any).k ?? "");
-      const u = String((body as any).u ?? "");
-      const m = String((body as any).m ?? "GET").toUpperCase();
-      const h = sanitizeHeaders((body as any).h);
-      const b64 = (body as any).b;
+      const k = String(body.k ?? "");
+      const u = String(body.u ?? "");
+      const m = String(body.m ?? "GET").toUpperCase();
+      const h = sanitizeHeaders(body.h);
+      const b64 = body.b;
 
       if (k !== PSK) return Response.json({ e: "unauthorized" }, { status: 401 });
       if (!/^https?:\/\//i.test(u)) return Response.json({ e: "bad_url" }, { status: 400 });
 
-      let payload: Uint8Array | undefined;
+      let payload;
       if (typeof b64 === "string" && b64.length > 0) payload = decodeBase64ToBytes(b64);
       const requestBody = payload ? Uint8Array.from(payload) : undefined;
 
       const resp = await fetch(u, {
         method: m,
         headers: h,
-        body: requestBody as unknown as BodyInit,
+        body: requestBody,
         redirect: "manual",
       });
 
       const data = new Uint8Array(await resp.arrayBuffer());
-      const respHeaders: Record<string, string> = {};
+      const respHeaders = {};
       resp.headers.forEach((value, key) => {
         respHeaders[key] = value;
       });

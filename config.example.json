@@ -87,9 +87,13 @@
 	"hosts": {},
 	"exit_node": {
 		"enabled": false,
-		"relay_url": "",
+		"provider": "cloudflare",
+		"url": "",
 		"psk": "",
-		"mode": "selective",
-		"hosts": []
+		"mode": "full",
+		"hosts": [
+			"example.com",
+			"example.org"
+		]
 	}
 }

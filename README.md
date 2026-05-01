@@ -178,21 +178,27 @@ Some websites block Google datacenter IPs when traffic exits directly from Apps 
 To fix that, configure an exit node so traffic path becomes:
 
 ```text
-Browser -> Local Proxy -> Apps Script -> val.town -> Target website
+Browser -> Local Proxy -> Apps Script -> Exit Node (Val Town / Cloudflare / Deno) -> Target website
 ```
 
-1. Open [`apps_script/valtown.ts`](apps_script/valtown.ts) and deploy it on [val.town](https://www.val.town/):
-   - Create a new val
-   - Paste file contents
-   - Add HTTP trigger
-   - Copy your generated URL (`https://<name>.web.val.run`)
-2. Set `PSK` inside the val code to a strong secret.
-3. Add this block to your `config.json`:
+You can deploy any one of these free exit-node templates:
+
+1. Val Town: [`apps_script/valtown.ts`](apps_script/valtown.ts)
+2. Cloudflare Workers: [`apps_script/cloudflare_worker.js`](apps_script/cloudflare_worker.js)
+3. Deno Deploy: [`apps_script/deno_deploy.ts`](apps_script/deno_deploy.ts)
+
+Full step-by-step deployment guide (all providers):
+- [EXIT_NODE_DEPLOYMENT.md](EXIT_NODE_DEPLOYMENT.md)
+
+Set the same PSK secret inside the exit-node code (`PSK` constant) and in `config.json`.
+
+Then configure provider switching like this:
 
 ```json
 "exit_node": {
   "enabled": true,
-  "relay_url": "https://YOUR-NAME.web.val.run",
+  "provider": "valtown",
+  "url": "https://YOUR-NAME.web.val.run",
   "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
   "mode": "full",
   "hosts": [
@@ -205,9 +211,11 @@ Browser -> Local Proxy -> Apps Script -> val.town -> Target website
 ```
 
 Notes:
+- For noob setup, only fill `provider`, `url`, and `psk`.
+- Switch provider by changing `exit_node.provider` and `exit_node.url`.
 - `mode: "full"` = everything goes through exit node (ignore `hosts`).
 - `mode: "selective"` = only domains in `hosts` go through exit node.
-- `psk` must be exactly the same as `PSK` in `valtown.ts`.
+- `psk` must exactly match your deployed exit node secret.
 
 Production recommendation:
 - Keep `verify_ssl: true`
@@ -306,7 +314,7 @@ By default, the proxy only listens on `127.0.0.1` (localhost), meaning only your
 
 ## Modes Overview
 
-This project focuses entirely on the **Apps Script** relay — a free Google account is all you need, no server, no VPS, no Cloudflare setup. Everything is configured out of the box for this mode.
+This project is centered on the **Apps Script** relay (free, no VPS needed). For destinations that block Google egress, you can optionally chain a free edge exit node (Val Town, Cloudflare Workers, or Deno Deploy).
 
 ---
 
@@ -345,6 +353,8 @@ This project focuses entirely on the **Apps Script** relay — a free Google acc
 | `direct_google_exclude` | see [config.example.json](config.example.json) | Google apps that must use the MITM relay path instead of the fast direct tunnel. |
 | `hosts` | `{}` | Manual DNS override: map a hostname to a specific IP. |
 | `youtube_via_relay` | `false` | Route YouTube (`youtube.com`, `youtu.be`, `youtube-nocookie.com`) through the Apps Script relay instead of the SNI-rewrite path. The SNI-rewrite path uses Google's frontend IP which enforces SafeSearch and can cause **"Video Unavailable"** errors. Setting this to `true` fixes playback at the cost of using more Apps Script executions and slightly higher latency. |
+| `exit_node.provider` | `valtown` | Selected exit-node backend: `valtown`, `cloudflare`, `deno`, or `custom`. |
+| `exit_node.url` | `""` | Beginner-friendly single URL for the selected provider. |
 
 ### Optional Dependencies
 
@@ -441,6 +451,52 @@ After scanning, update your `config.json` with the recommended IP and restart th
 
 ---
 
+## CI/CD Releases (Hidden First Release)
+
+This repository includes a release workflow at `.github/workflows/release.yml`.
+
+Default behavior is **hidden for users**:
+- Tag push (`v*`) creates a GitHub Release as **draft** + **prerelease**
+- It is not marked as **Latest**
+
+That means you can run the first release via CI/CD, verify assets, and publish later.
+
+### Create first hidden release from GitHub Actions
+
+1. Push a tag:
+  ```bash
+  git tag v1.1.0
+  git push origin v1.1.0
+  ```
+2. Wait for the **Release** workflow to finish.
+3. Open GitHub Releases and review the draft release artifacts.
+
+### Make it public later
+
+Run **Actions → Release → Run workflow** with:
+- `publish = true`
+- `release_tag = v1.1.0`
+- `make_public = true`
+
+This will publish a non-draft, non-prerelease release and mark it as latest.
+
+### Extra targets (optional, non-blocking)
+
+`macos-13` runners can be heavily queued, which may leave `macos-x64` waiting for a long time.
+To keep normal releases fast and reliable, default tag releases now build:
+- `windows-x64`
+- `linux-x64`
+- `macos-arm64`
+
+If you want extra targets, run **Actions -> Release -> Run workflow** and enable one or more:
+- `build_macos_x64 = true` (intel macOS)
+- `build_linux_arm64 = true` (native ARM64 Linux runner)
+- `build_termux_bundle = true` (Termux source package for arm64/armv7/x86_64 on-device install)
+
+These extra jobs are optional and non-blocking, so even if one is delayed or unavailable, your main release still completes.
+
+---
+
 ## Architecture
 
 ```
@@ -464,7 +520,10 @@ MasterHttpRelayVPN/
 ├── config.example.json        # Copy to config.json and fill in your values
 ├── requirements.txt           # Python dependencies
 ├── apps_script/
-│   └── Code.gs                # The relay script you deploy to Google Apps Script
+│   ├── Code.gs                # The relay script you deploy to Google Apps Script
+│   ├── valtown.ts             # Exit node template for val.town
+│   ├── cloudflare_worker.js   # Exit node template for Cloudflare Workers
+│   └── deno_deploy.ts         # Exit node template for Deno Deploy
 ├── ca/                        # Generated MITM CA (do NOT share)
 │   ├── ca.crt
 │   └── ca.key
