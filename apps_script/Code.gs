@@ -11,7 +11,7 @@
  * CHANGE THE AUTH KEY BELOW TO YOUR OWN SECRET!
  */
 
-const AUTH_KEY = "CHANGE_ME_TO_A_STRONG_SECRET";
+const AUTH_KEY = "dsebg@4979";
 
 // Keep browser capability headers (sec-ch-ua*, sec-fetch-*) intact.
 // Some modern apps, notably Google Meet, use them for browser gating.
