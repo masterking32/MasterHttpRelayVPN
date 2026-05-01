@@ -131,6 +131,43 @@ cp config.example.json config.json
 - `script_id` : همان Deployment ID مرحله 2
 - `auth_key` : همان رمزی که در `Code.gs` گذاشته‌اید
 
+### مرحله 3.5: نود خروجی اختیاری برای Full Tunnel
+
+برخی سایت‌ها (مثل ChatGPT) خروجی مستقیم از IPهای دیتاسنتر Google را مسدود می‌کنند.
+برای حل این مورد، نود خروجی (exit node) را فعال کنید تا مسیر این‌گونه شود:
+
+```text
+مرورگر -> پراکسی محلی -> Apps Script -> val.town -> سایت مقصد
+```
+
+1. فایل [apps_script/valtown.ts](apps_script/valtown.ts) را در val.town deploy کنید:
+   - یک val جدید بسازید
+   - محتوای فایل را paste کنید
+   - HTTP trigger را فعال کنید
+   - آدرس نهایی (`https://<name>.web.val.run`) را کپی کنید
+2. مقدار `PSK` داخل فایل val را با یک رمز قوی تغییر دهید.
+3. در `config.json` این بخش را اضافه/تکمیل کنید:
+
+```json
+"exit_node": {
+  "enabled": true,
+  "relay_url": "https://YOUR-NAME.web.val.run",
+  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
+  "mode": "full",
+  "hosts": [
+    "chatgpt.com",
+    "openai.com",
+    "claude.ai",
+    "anthropic.com"
+  ]
+}
+```
+
+نکات:
+- `mode: "full"` یعنی همه ترافیک از exit node عبور می‌کند (`hosts` نادیده گرفته می‌شود).
+- `mode: "selective"` یعنی فقط دامنه‌های داخل `hosts` از exit node عبور می‌کنند.
+- مقدار `psk` باید دقیقا با `PSK` در `valtown.ts` یکی باشد.
+
 ### مرحله 4: اجرا
 
 ```bash

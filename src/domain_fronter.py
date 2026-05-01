@@ -210,6 +210,24 @@ class DomainFronter:
             log.info("Fan-out relay: %d parallel Apps Script instances per request",
                      self._parallel_relay)
 
+        # Exit node — optional second-hop relay with a non-Google exit IP.
+        # Useful for sites that block GCP/Apps Script IPs (e.g. ChatGPT).
+        en_cfg = config.get("exit_node") or {}
+        self._exit_node_enabled: bool = bool(en_cfg.get("enabled", False))
+        self._exit_node_url: str = str(en_cfg.get("relay_url") or "").rstrip("/")
+        self._exit_node_psk: str = str(en_cfg.get("psk") or "")
+        self._exit_node_mode: str = str(en_cfg.get("mode") or "selective").lower()
+        self._exit_node_hosts: frozenset[str] = frozenset(
+            str(h).lower().strip().lstrip(".")
+            for h in (en_cfg.get("hosts") or [])
+            if h
+        )
+        if self._exit_node_enabled and self._exit_node_url:
+            log.info(
+                "Exit node enabled [mode=%s]: %s",
+                self._exit_node_mode, self._exit_node_url,
+            )
+
         # Capability log for content encodings.
         log.info("Response codecs: %s", codec.supported_encodings())
 
@@ -1087,6 +1105,73 @@ class DomainFronter:
     def _auth_header(self) -> str:
         return f"X-Auth-Key: {self.auth_key}\r\n" if self.auth_key else ""
 
+    # ── Exit node relay ───────────────────────────────────────────
+
+    def _exit_node_matches(self, url: str) -> bool:
+        """Return True if this URL should be routed through the exit node."""
+        if not self._exit_node_enabled or not self._exit_node_url:
+            return False
+        if self._exit_node_mode == "full":
+            return True
+        # selective: check if destination hostname matches configured list
+        host = self._host_key(url)
+        if not host:
+            return False
+        for pattern in self._exit_node_hosts:
+            if host == pattern or host.endswith("." + pattern):
+                return True
+        return False
+
+    async def _relay_via_exit_node(self, payload: dict) -> bytes:
+        """Chain: Apps Script → exit node (val.town) → Destination.
+
+        Traffic path:
+          Client → [domain fronting TLS] → Apps Script (Google)
+                → [UrlFetchApp.fetch] → exit node (val.town / non-Google IP)
+                → [fetch()] → Destination
+
+        This preserves the DPI bypass (Apps Script is always the outbound
+        connection from the client's perspective) while giving the destination
+        a non-Google exit IP — fixing Cloudflare Turnstile, ChatGPT, etc.
+
+        The inner payload going to val.town is base64-encoded and sent as the
+        body of the outer Apps Script relay call, so Apps Script POSTs it to
+        the exit node URL on our behalf.
+        """
+        # Build inner payload: what val.town will execute
+        inner = dict(payload)
+        inner["k"] = self._exit_node_psk
+        inner_json = json.dumps(inner).encode()
+
+        # Build outer payload: what Apps Script will fetch
+        # Apps Script does:  UrlFetchApp.fetch(exit_node_url, { method: "POST", payload: inner_json })
+        outer = self._build_payload(
+            "POST",
+            self._exit_node_url,
+            {"Content-Type": "application/json"},
+            inner_json,
+        )
+        # Override content-type explicitly so Apps Script sets it correctly
+        outer["ct"] = "application/json"
+
+        log.debug(
+            "Exit node chain: Apps Script → %s → %s",
+            self._exit_node_url.split("//", 1)[-1][:50],
+            payload.get("u", "")[:60],
+        )
+
+        # Send through the normal Apps Script relay path (H2 or H1 + retry)
+        raw = await self._relay_with_retry(outer)
+
+        # raw is now the response from val.town (which is the inner relay JSON)
+        # _parse_relay_response will decode it into the final HTTP response.
+        # But we need to unwrap one level: Apps Script gives us val.town's HTTP
+        # response body (which is itself a relay JSON), so parse twice.
+        _, _, apps_script_body = self._split_raw_response(raw)
+        result = self._parse_relay_response(apps_script_body)
+        log.debug("Exit node relay OK: %s", payload.get("u", "")[:80])
+        return result
+
     # ── Apps Script relay (apps_script mode) ──────────────────────
 
     async def relay(self, method: str, url: str,
@@ -1106,6 +1191,26 @@ class DomainFronter:
             await self._warm_pool()
 
         payload = self._build_payload(method, url, headers, body)
+
+        # Exit node short-circuit: route to non-Google IP before Apps Script
+        if self._exit_node_matches(url):
+            t0 = time.perf_counter()
+            errored = False
+            try:
+                return await asyncio.wait_for(
+                    self._relay_via_exit_node(payload),
+                    timeout=self._relay_timeout + self._tls_connect_timeout,
+                )
+            except Exception as exc:
+                errored = True
+                log.warning(
+                    "Exit node failed for %s (%s: %s), falling back to Apps Script",
+                    url[:60], type(exc).__name__, exc,
+                )
+            finally:
+                latency_ns = int((time.perf_counter() - t0) * 1e9)
+                self._record_site(url, 0, latency_ns, errored)
+            # fall through to normal Apps Script relay on failure
 
         t0 = time.perf_counter()
         errored = False

@@ -172,6 +172,49 @@ It'll prompt for your Deployment ID, generate a random `auth_key`, and write
    - `script_id` → Paste the Deployment ID from Step 2.
    - `auth_key` → The **same password** you set in `Code.gs`.
 
+### Step 3.5: Optional Exit Node for Full-Tunnel (ChatGPT/Turnstile Friendly)
+
+Some websites block Google datacenter IPs when traffic exits directly from Apps Script.
+To fix that, configure an exit node so traffic path becomes:
+
+```text
+Browser -> Local Proxy -> Apps Script -> val.town -> Target website
+```
+
+1. Open [`apps_script/valtown.ts`](apps_script/valtown.ts) and deploy it on [val.town](https://www.val.town/):
+   - Create a new val
+   - Paste file contents
+   - Add HTTP trigger
+   - Copy your generated URL (`https://<name>.web.val.run`)
+2. Set `PSK` inside the val code to a strong secret.
+3. Add this block to your `config.json`:
+
+```json
+"exit_node": {
+  "enabled": true,
+  "relay_url": "https://YOUR-NAME.web.val.run",
+  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
+  "mode": "full",
+  "hosts": [
+    "chatgpt.com",
+    "openai.com",
+    "claude.ai",
+    "anthropic.com"
+  ]
+}
+```
+
+Notes:
+- `mode: "full"` = everything goes through exit node (ignore `hosts`).
+- `mode: "selective"` = only domains in `hosts` go through exit node.
+- `psk` must be exactly the same as `PSK` in `valtown.ts`.
+
+Production recommendation:
+- Keep `verify_ssl: true`
+- Keep `listen_host: 127.0.0.1` unless LAN sharing is explicitly needed
+- Rotate both secrets periodically
+- Never publish your live val URL with valid PSK
+
 ### Step 4: Run
 
 ```bash
