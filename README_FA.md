@@ -147,7 +147,8 @@ cp config.example.json config.json
 3. Deno Deploy: [apps_script/deno_deploy.ts](apps_script/deno_deploy.ts)
 
 راهنمای کامل مرحله‌به‌مرحله برای هر provider:
-- [EXIT_NODE_DEPLOYMENT.md](EXIT_NODE_DEPLOYMENT.md)
+- [EXIT_NODE_DEPLOYMENT_FA.md](EXIT_NODE_DEPLOYMENT_FA.md) (فارسی)
+- [EXIT_NODE_DEPLOYMENT.md](EXIT_NODE_DEPLOYMENT.md) (انگلیسی)
 
 سپس همان secret را هم در کد نود خروجی (`PSK`) و هم در `config.json` یکسان بگذارید.
 

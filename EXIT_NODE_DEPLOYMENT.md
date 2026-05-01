@@ -53,13 +53,14 @@ Steps:
 6. Deploy.
 7. Copy URL, usually like https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev
 
-## 5) Deploy On Deno Deploy
+## 5) Deploy On Deno Deploy (It's not tested Yet)
 
 Source file: apps_script/deno_deploy.ts
 
 Steps:
 1. Sign in at https://dash.deno.com
-2. Create new project.
+2. Create new app.
+3. Select Basic HTML -> Clone Repository
 3. Upload or paste apps_script/deno_deploy.ts.
 4. Set PSK constant in code.
 5. Deploy.
@@ -67,45 +68,28 @@ Steps:
 
 ## 6) Configure MasterHttpRelayVPN
 
-Update config.json:
+Update `config.json`:
 
-{
-  "exit_node": {
-    "enabled": true,
-    "provider": "valtown",
-    "url": "https://YOUR-NAME.web.val.run",
-    "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
-    "mode": "full",
-    "hosts": [
-      "chatgpt.com",
-      "openai.com",
-      "claude.ai",
-      "anthropic.com"
-    ]
-  }
+```json
+"exit_node": {
+  "enabled": true,
+  "provider": "valtown",
+  "url": "https://YOUR-NAME.web.val.run",
+  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
+  "mode": "full",
+  "hosts": [
+    "chatgpt.com",
+    "openai.com",
+    "claude.ai",
+    "anthropic.com"
+  ]
 }
+```
 
 Provider values:
-- valtown
-- cloudflare
-- deno
+- `valtown`
+- `cloudflare`
+- `deno`
 
-If mode is selective, only hosts listed in hosts use the exit node.
-If mode is full, all relayed traffic uses the exit node.
-
-## 7) Quick Test
-
-1. Start app: python main.py
-2. Ensure proxy is set in browser.
-3. Open a site known to require non-Google egress.
-4. If it fails, check:
-   - provider and url are correct
-   - psk matches exactly between config and deployed code
-   - exit_node.enabled is true
-
-## Troubleshooting
-
-- unauthorized: PSK mismatch
-- method_not_allowed: endpoint got non-POST request directly (normal when opened in browser)
-- bad_url: malformed target URL from relay payload
-- timeout or 5xx: temporary provider issue, redeploy and retry
+If `mode` is `selective`, only hosts listed in `hosts` use the exit node.
+If `mode` is `full`, all relayed traffic uses the exit node.
