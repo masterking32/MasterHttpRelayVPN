@@ -244,10 +244,13 @@ class ProxyServer:
         # ── Per-host policy ────────────────────────────────────────
         # block_hosts  — refuse traffic entirely (close or 403)
         # bypass_hosts — route directly (no MITM, no relay)
-        # Both accept exact hostnames and leading-dot suffix patterns,
+        # allow_hosts  — whitelist; when non-empty, only listed hosts are
+        #                allowed through the relay (all others get 403).
+        # All three accept exact hostnames and leading-dot suffix patterns,
         # e.g. ".local" matches any *.local domain.
         self._block_hosts  = self._load_host_rules(config.get("block_hosts", []))
         self._bypass_hosts = self._load_host_rules(config.get("bypass_hosts", []))
+        self._allow_hosts  = self._load_host_rules(config.get("allow_hosts", []))
 
         # Route YouTube through the relay when requested; the Google frontend
         # IP can enforce SafeSearch on the SNI-rewrite path.
@@ -355,6 +358,13 @@ class ProxyServer:
 
     def _is_bypassed(self, host: str) -> bool:
         return self._host_matches_rules(host, self._bypass_hosts)
+
+    def _is_whitelisted(self, host: str) -> bool:
+        """Return True if allow_hosts is empty (disabled) or host matches it."""
+        exact, suffixes = self._allow_hosts
+        if not exact and not suffixes:
+            return True
+        return self._host_matches_rules(host, self._allow_hosts)
 
     @staticmethod
     def _header_value(headers: dict | None, name: str) -> str:
@@ -675,6 +685,15 @@ class ProxyServer:
         if self._is_bypassed(host):
             log.info("Bypass tunnel → %s:%d (matches bypass_hosts)", host, port)
             await self._do_direct_tunnel(host, port, reader, writer)
+            return
+
+        if not self._is_whitelisted(host):
+            log.warning("NOT ALLOWED → %s:%d (not in allow_hosts whitelist)", host, port)
+            try:
+                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+            except Exception:
+                pass
             return
 
         # ── IP-literal destinations ───────────────────────────────

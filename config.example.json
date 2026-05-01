@@ -54,6 +54,7 @@
 	"chunked_download_max_parallel": 8,
 	"chunked_download_max_chunks": 256,
 	"block_hosts": [],
+	"allow_hosts": [],
 	"bypass_hosts": [
 		"localhost",
 		".local",
