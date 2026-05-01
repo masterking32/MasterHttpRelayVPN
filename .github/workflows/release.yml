@@ -16,7 +16,7 @@ on:
         default: false
         type: boolean
       make_public:
-        description: "Make release public immediately (false = hidden draft)"
+        description: "Make release public immediately (false = hidden draft + prerelease)"
         required: false
         default: false
         type: boolean
@@ -93,5 +93,6 @@ jobs:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.event.inputs.release_tag }}
           files: final-assets/*
           generate_release_notes: true
-          prerelease: false
+          prerelease: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.make_public != 'true' }}
           draft: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.make_public != 'true' }}
+          make_latest: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.make_public == 'true') && 'true' || 'false' }}
