@@ -72,6 +72,24 @@ if not errorlevel 1 (
     exit /b %errorlevel%
 )
 
+REM -------- Check for adblock update flag --------
+echo %* | findstr /C:"--update-adblock" >nul
+if not errorlevel 1 (
+    echo.
+    echo [*] Force-refreshing adblock blocklists ...
+    echo.
+    "%VPY%" main.py --update-adblock
+    set "RC=%errorlevel%"
+    if "%RC%"=="0" (
+        echo.
+        echo [+] Adblock lists updated successfully.
+    ) else (
+        echo.
+        echo [!] Adblock update failed. Check the output above.
+    )
+    pause
+    exit /b %RC%
+)
 
 echo.
 echo [*] Starting MasterHttpRelayVPN ...
