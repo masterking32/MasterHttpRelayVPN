@@ -2405,10 +2405,137 @@ class DomainFronter:
         user_html = payload.get("userHtml")
         return user_html if isinstance(user_html, str) else None
 
+    # ── Apps Script error classifier ─────────────────────────────
+    # Patterns are matched against the lower-cased raw error string from
+    # Apps Script's `e` field.  Sources:
+    #   • https://developers.google.com/apps-script/guides/support/troubleshooting
+    #   • https://developers.google.com/apps-script/guides/services/quotas
+    #   • Google Issue Tracker (urlfetch / bandwidth quota issues)
+
+    # "Service invoked too many times for one day: urlfetch."
+    # "Bandwidth quota exceeded"
+    # "UrlFetch failed because too much upload bandwidth was used"
+    # "UrlFetch failed because too much traffic is being sent to the specified URL"
+    _QUOTA_PATTERNS = (
+        "service invoked too many times",
+        "invoked too many times",
+        "bandwidth quota exceeded",
+        "too much upload bandwidth",
+        "too much traffic",
+        "urlfetch",   # appears at end of the daily-quota message in all locales
+        "quota",
+        "exceeded",
+        "daily",
+        "rate limit",
+    )
+
+    # "Authorization is required to perform that action."
+    # "unauthorized"  (our own Code.gs response)
+    # "Access denied"
+    # "Permission denied"
+    _AUTH_PATTERNS = (
+        "authorization is required",
+        "unauthorized",
+        "not authorized",
+        "permission denied",
+        "access denied",
+    )
+
+    # "Error occurred due to a missing library version or a deployment version.
+    #  Error code Not_Found"
+    # "script id not found" / wrong Deployment ID
+    _DEPLOY_PATTERNS = (
+        "error code not_found",
+        "not_found",
+        "deployment",
+        "script id",
+        "scriptid",
+        "no script",
+    )
+
+    # "Server not available." / "Server error occurred, please try again."
+    _TRANSIENT_PATTERNS = (
+        "server not available",
+        "server error occurred",
+        "please try again",
+        "temporarily unavailable",
+    )
+
+    # "UrlFetch calls to <URL> are not permitted by your admin"
+    # "<Class> / Apiary.<Service> is disabled. Please contact your administrator"
+    _ADMIN_PATTERNS = (
+        "not permitted by your admin",
+        "contact your administrator",
+        "disabled. please contact",
+        "domain policy has disabled",
+        "administrator to enable",
+    )
+
+    @classmethod
+    def _classify_relay_error(cls, raw: str) -> str:
+        """Return a human-readable explanation for a known Apps Script error.
+
+        Covers every error category documented at:
+        developers.google.com/apps-script/guides/support/troubleshooting
+        """
+        lower = raw.lower()
+
+        if any(p in lower for p in cls._QUOTA_PATTERNS):
+            return (
+                "Apps Script quota exhausted. "
+                "Either the 20,000 URL-fetch calls/day limit or the 100 MB/day "
+                "bandwidth limit has been reached. "
+                "Wait up to 24 hours for the quota to reset, or create a second "
+                "Google account, deploy a fresh Apps Script there, and add its "
+                "script_id to config.json."
+            )
+
+        if any(p in lower for p in cls._AUTH_PATTERNS):
+            return (
+                "Apps Script rejected the request (auth/permission error). "
+                "Check: (1) AUTH_KEY in Code.gs matches 'auth_key' in config.json, "
+                "(2) the deployment is set to 'Execute as: Me / Anyone can access', "
+                "(3) you are using the Deployment ID (not the Script ID), "
+                "(4) the owning Google account has authorised the script by running "
+                "it manually at least once."
+            )
+
+        if any(p in lower for p in cls._DEPLOY_PATTERNS):
+            return (
+                "Apps Script deployment not found. "
+                "Verify 'script_id' in config.json is the Deployment ID "
+                "(not the Script ID), the deployment is active/not archived, "
+                "and you re-created the deployment after editing Code.gs."
+            )
+
+        if any(p in lower for p in cls._TRANSIENT_PATTERNS):
+            return (
+                "Google Apps Script server is temporarily unavailable. "
+                "This is a transient Google-side error — wait a moment and retry. "
+                f"(raw: {raw})"
+            )
+
+        if any(p in lower for p in cls._ADMIN_PATTERNS):
+            return (
+                "Apps Script is blocked by a Google Workspace admin policy. "
+                "Either the target URL is not on the admin's UrlFetch allowlist, "
+                "or a Google service used by the script has been disabled by the "
+                "domain administrator. Contact your Google Workspace admin. "
+                f"(raw: {raw})"
+            )
+
+        # Unknown — strip the leading 'Exception: ' / 'Error: ' prefix that
+        # Apps Script always prepends, so the message is shorter and cleaner.
+        cleaned = re.sub(r'^(Exception|Error):\s*', '', raw, flags=re.IGNORECASE).strip()
+        return f"Relay error from Apps Script: {cleaned or raw}"
+
     def _parse_relay_json(self, data: dict) -> bytes:
         """Convert a parsed relay JSON dict to raw HTTP response bytes."""
         if "e" in data:
-            return self._error_response(502, f"Relay error: {data['e']}")
+            raw_err = str(data["e"])
+            friendly = self._classify_relay_error(raw_err)
+            log.warning("Apps Script error — %s | raw: %s", friendly.split(".")[0], raw_err)
+            return self._error_response(502, friendly)
 
         status = data.get("s", 200)
         resp_headers = data.get("h", {})
