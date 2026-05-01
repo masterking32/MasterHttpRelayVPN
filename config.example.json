@@ -53,6 +53,8 @@
 	"chunked_download_chunk_size": 524288,
 	"chunked_download_max_parallel": 8,
 	"chunked_download_max_chunks": 256,
+	"yt_chunk_size": 4194304,
+	"yt_max_parallel": 4,
 	"block_hosts": [],
 	"bypass_hosts": [
 		"localhost",
