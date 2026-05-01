@@ -48,7 +48,57 @@ if [ ! -f "config.json" ]; then
     "$VPY" setup.py
 fi
 
+# -------- Check for adblock update flag --------
+for arg in "$@"; do
+    if [ "$arg" = "--update-adblock" ]; then
+        echo
+        echo "[*] Force-refreshing adblock blocklists ..."
+        echo
+        "$VPY" main.py --update-adblock
+        RC=$?
+        if [ $RC -eq 0 ]; then
+            echo
+            echo "[+] Adblock lists updated successfully."
+        else
+            echo
+            echo "[!] Adblock update failed. Check the output above."
+        fi
+        exit $RC
+    fi
+done
+
+# -------- Auto-update check (skip with --skip-update) --------
+_SKIP_UPDATE=0
+for arg in "$@"; do
+    if [ "$arg" = "--skip-update" ]; then
+        _SKIP_UPDATE=1
+        break
+    fi
+done
+
+if [ $_SKIP_UPDATE -eq 0 ]; then
+    echo "[*] Checking for updates ..."
+    set +e
+    "$VPY" main.py --update
+    UPDATE_RC=$?
+    set -e
+    if [ $UPDATE_RC -eq 2 ]; then
+        echo
+        echo "[*] Update applied — re-installing dependencies ..."
+        "$VPY" -m pip install --disable-pip-version-check -q -r requirements.txt
+        echo "[+] Ready. Restarting with updated version ..."
+        echo
+    elif [ $UPDATE_RC -eq 1 ]; then
+        echo "[!] Update failed — starting with current version."
+    fi
+fi
+
 echo
 echo "[*] Starting MasterHttpRelayVPN ..."
 echo
-exec "$VPY" main.py "$@"
+# Strip --skip-update from args before passing to main.py
+_ARGS=()
+for arg in "$@"; do
+    [ "$arg" != "--skip-update" ] && _ARGS+=("$arg")
+done
+exec "$VPY" main.py "${_ARGS[@]}"

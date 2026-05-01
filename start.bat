@@ -72,11 +72,53 @@ if not errorlevel 1 (
     exit /b %errorlevel%
 )
 
+REM -------- Check for adblock update flag --------
+echo %* | findstr /C:"--update-adblock" >nul
+if not errorlevel 1 (
+    echo.
+    echo [*] Force-refreshing adblock blocklists ...
+    echo.
+    "%VPY%" main.py --update-adblock
+    set "RC=%errorlevel%"
+    if "!RC!"=="0" (
+        echo.
+        echo [+] Adblock lists updated successfully.
+    ) else (
+        echo.
+        echo [!] Adblock update failed. Check the output above.
+    )
+    pause
+    exit /b !RC!
+)
+
+REM -------- Auto-update check (skip with --skip-update) --------
+set "_SKIP_UPDATE=0"
+echo %* | findstr /C:"--skip-update" >nul
+if not errorlevel 1 set "_SKIP_UPDATE=1"
+
+if "!_SKIP_UPDATE!"=="0" (
+    echo [*] Checking for updates ...
+    "%VPY%" main.py --update
+    set "UPDATE_RC=!errorlevel!"
+    if "!UPDATE_RC!"=="2" (
+        echo.
+        echo [*] Update applied -- re-installing dependencies ...
+        "%VPY%" -m pip install --disable-pip-version-check -q -r requirements.txt
+        echo [+] Ready. Starting with updated version ...
+        echo.
+    ) else if "!UPDATE_RC!"=="1" (
+        echo [!] Update failed -- starting with current version.
+    )
+)
+
+REM Strip --skip-update before passing args to main.py
+set "_FWDARGS=%*"
+set "_FWDARGS=!_FWDARGS:--skip-update=!"
 
 echo.
 echo [*] Starting MasterHttpRelayVPN ...
 echo.
-"%VPY%" main.py %*
-set "RC=%errorlevel%"
-if not "%RC%"=="0" pause
-exit /b %RC%
+"%VPY%" main.py !_FWDARGS!
+set "RC=!errorlevel!"
+if not "!RC!"=="0" pause
+exit /b !RC!
