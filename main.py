@@ -108,11 +108,71 @@ def parse_args():
         action="store_true",
         help="Force-refresh all adblock blocklists, update the cache, and exit.",
     )
+    parser.add_argument(
+        "--check-update",
+        action="store_true",
+        help="Check if a newer version is available and print the result, then exit.",
+    )
+    parser.add_argument(
+        "--update",
+        action="store_true",
+        help=(
+            "Check for a newer version; if found, download and apply it, then exit. "
+            "Exit code 2 means an update was applied (re-run pip install afterwards)."
+        ),
+    )
     return parser.parse_args()
+
+
+def _run_update_check(args, current_version: str, project_root: str) -> None:
+    """Handle --check-update and --update flags, then sys.exit."""
+    setup_logging("INFO")
+    _log = logging.getLogger("Updater")
+
+    from updater import check_update, apply_update
+    from pathlib import Path
+
+    _log.info("Checking for updates (current: v%s) …", current_version)
+    release = check_update(current_version)
+
+    if release is None:
+        _log.info("Already up to date (v%s).", current_version)
+        sys.exit(0)
+
+    _log.info(
+        "New version available: v%s  →  %s",
+        release["version"], release["html_url"],
+    )
+    if release["body"]:
+        print("\nRelease notes:\n" + release["body"] + "\n")
+
+    if args.check_update:
+        # Just report — don't apply.
+        sys.exit(0)
+
+    # --update: apply it
+    ok = apply_update(release, Path(project_root))
+    if not ok:
+        _log.error("Update failed. Check the output above.")
+        sys.exit(1)
+
+    _log.info(
+        "Update applied. Re-run pip install -r requirements.txt "
+        "to pick up any new dependencies."
+    )
+    sys.exit(2)   # exit 2 = update applied; start scripts re-run pip install
 
 
 def main():
     args = parse_args()
+
+    # ── Update / version check (no config needed) ─────────────────────────
+    if args.check_update or args.update:
+        _run_update_check(
+            args,
+            current_version=__import__("constants", fromlist=["__version__"]).__version__,
+            project_root=os.path.dirname(os.path.abspath(__file__)),
+        )
 
     # Handle cert-only commands before loading config so they can run standalone.
     if args.install_cert or args.uninstall_cert:
