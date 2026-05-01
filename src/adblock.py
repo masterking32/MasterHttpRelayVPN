@@ -140,8 +140,10 @@ class AdBlocker:
     def _load_source(self, name: str, url: str, force: bool = False) -> set[str]:
         cache_file = self._cache_path(name)
 
+        bak_file = cache_file.with_suffix(".json.bak")
         if force and cache_file.exists():
-            cache_file.unlink()
+            # Rename to .bak so we can still fall back if the download fails
+            cache_file.replace(bak_file)
             log.info("AdBlock [%s]: cache cleared (forced refresh)", name)
 
         # ── Try valid cache first ─────────────────────────────────────────────
@@ -173,13 +175,17 @@ class AdBlocker:
         except Exception as exc:
             log.warning("AdBlock [%s]: download failed: %s", name, exc)
 
-            # ── Stale cache fallback ──────────────────────────────────────────
-            if cache_file.exists():
-                try:
-                    data = json.loads(cache_file.read_text(encoding="utf-8"))
-                    log.warning("AdBlock [%s]: using stale cache as fallback", name)
-                    return set(data["hosts"])
-                except Exception:
-                    pass
+            # ── Stale cache fallback (original or .bak from force-refresh) ──────
+            for fallback in (cache_file, bak_file):
+                if fallback.exists():
+                    try:
+                        data = json.loads(fallback.read_text(encoding="utf-8"))
+                        log.warning(
+                            "AdBlock [%s]: using stale cache as fallback (%s)",
+                            name, fallback.name,
+                        )
+                        return set(data["hosts"])
+                    except Exception:
+                        pass
 
             return set()

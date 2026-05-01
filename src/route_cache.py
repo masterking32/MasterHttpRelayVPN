@@ -46,12 +46,24 @@ class RouteCache:
     # ── Public read/write API ─────────────────────────────────────────────────
 
     def get(self, host: str) -> RouteDecision:
-        """Return the cached decision for *host*, or ``'unknown'``."""
+        """Return the cached decision for *host*, or ``'unknown'``.
+
+        Expired *relay* entries intentionally return ``'relay'`` instead of
+        ``'unknown'``.  This lets _smart_tunnel detect expiry via
+        is_relay_expired() and fire a background probe without stalling the
+        live request.  Expired *direct* entries are removed immediately and
+        return ``'unknown'`` so the next request re-probes synchronously
+        (direct working again is the happy path — one stall is acceptable).
+        """
         h     = _norm(host)
         entry = self._cache.get(h)
         if not entry:
             return "unknown"
         if entry["until"] < time.time():
+            if entry["route"] == "relay":
+                # Keep in cache so is_relay_expired() can detect this and
+                # schedule a background probe rather than stalling the caller.
+                return "relay"
             del self._cache[h]
             self._dirty = True
             return "unknown"

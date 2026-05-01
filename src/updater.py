@@ -31,6 +31,8 @@ _PROTECTED = frozenset({
     "env",
     "ca",
     "adblock_cache",
+    "routing_cache.json",
+    "ideas.md",
     ".env",
     ".git",
     "__pycache__",
