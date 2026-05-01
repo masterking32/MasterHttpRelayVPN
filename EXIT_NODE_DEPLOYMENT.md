@@ -37,7 +37,7 @@ Steps:
 2. Create a new Val (TypeScript HTTP endpoint).
 3. Paste content from apps_script/valtown.ts.
 4. Set the PSK constant in the code.
-5. Save and deploy.
+5. Save and Add HTTP trigger.
 6. Copy your public URL, usually like https://YOUR-NAME.web.val.run
 
 ## 4) Deploy On Cloudflare Workers

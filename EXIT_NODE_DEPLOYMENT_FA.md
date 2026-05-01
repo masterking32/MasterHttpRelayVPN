@@ -41,7 +41,7 @@ const PSK = "CHANGE_ME_TO_A_STRONG_SECRET";
 2. یک Val جدید بسازید (TypeScript HTTP endpoint).
 3. محتوای `apps_script/valtown.ts` را paste کنید.
 4. مقدار ثابت PSK را در کد تنظیم کنید.
-5. ذخیره و deploy کنید.
+5. ذخیره و deploy کنید. (Add HTTP trigger را فراموش نکنید)
 6. URL عمومی خود را کپی کنید؛ معمولاً به شکل `https://YOUR-NAME.web.val.run`
 
 ## ۴) نصب روی Cloudflare Workers
