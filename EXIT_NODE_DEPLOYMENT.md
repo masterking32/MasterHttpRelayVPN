@@ -59,12 +59,11 @@ Source file: apps_script/deno_deploy.ts
 
 Steps:
 1. Sign in at https://dash.deno.com
-2. Create new app.
-3. Select Basic HTML -> Clone Repository
-3. Upload or paste apps_script/deno_deploy.ts.
+2. Select new playground.
+3. Paste apps_script/deno_deploy.ts.
 4. Set PSK constant in code.
 5. Deploy.
-6. Copy URL, usually like https://YOUR-PROJECT.deno.dev
+6. Copy URL, usually like https://YOUR-PROJECT.deno.net
 
 ## 6) Configure MasterHttpRelayVPN
 
