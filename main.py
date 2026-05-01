@@ -103,6 +103,11 @@ def parse_args():
         action="store_true",
         help="Scan Google IPs to find the fastest reachable one and exit.",
     )
+    parser.add_argument(
+        "--update-adblock",
+        action="store_true",
+        help="Force-refresh all adblock blocklists, update the cache, and exit.",
+    )
     return parser.parse_args()
 
 
@@ -216,6 +221,34 @@ def main():
         print("Missing 'script_id' in config.")
         print("Deploy the Apps Script from Code.gs and paste the Deployment ID.")
         sys.exit(1)
+
+    # ── Adblock force-refresh ─────────────────────────────────────────────
+    if args.update_adblock:
+        setup_logging(config.get("log_level", "INFO"))
+        _log = logging.getLogger("Main")
+        adblock_cfg = config.get("adblock", False)
+        if adblock_cfg is True:
+            adblock_cfg = {}
+        if isinstance(adblock_cfg, dict) and not adblock_cfg.get("enabled", True):
+            adblock_cfg = None
+        if not adblock_cfg:
+            _log.error(
+                "adblock is not enabled in config.json. "
+                "Set \"adblock\": {\"enabled\": true} to use this feature."
+            )
+            sys.exit(1)
+        sys.path.insert(0, _SRC_DIR)
+        from adblock import AdBlocker, DEFAULT_SOURCES, DEFAULT_UPDATE_HOURS
+        blocker = AdBlocker(
+            cache_dir=adblock_cfg.get("cache_dir", "adblock_cache"),
+            sources=adblock_cfg.get("sources", DEFAULT_SOURCES),
+            update_hours=adblock_cfg.get("update_interval_hours", DEFAULT_UPDATE_HOURS),
+        )
+        async def _do_update():
+            await blocker.load(force=True)
+        asyncio.run(_do_update())
+        _log.info("Adblock lists updated successfully.")
+        sys.exit(0)
 
     # ── Google IP Scanner ──────────────────────────────────────────────────
     if args.scan:

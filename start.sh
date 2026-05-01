@@ -48,6 +48,25 @@ if [ ! -f "config.json" ]; then
     "$VPY" setup.py
 fi
 
+# -------- Check for adblock update flag --------
+for arg in "$@"; do
+    if [ "$arg" = "--update-adblock" ]; then
+        echo
+        echo "[*] Force-refreshing adblock blocklists ..."
+        echo
+        "$VPY" main.py --update-adblock
+        RC=$?
+        if [ $RC -eq 0 ]; then
+            echo
+            echo "[+] Adblock lists updated successfully."
+        else
+            echo
+            echo "[!] Adblock update failed. Check the output above."
+        fi
+        exit $RC
+    fi
+done
+
 echo
 echo "[*] Starting MasterHttpRelayVPN ..."
 echo

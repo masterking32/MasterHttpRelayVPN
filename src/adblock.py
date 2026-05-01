@@ -113,15 +113,18 @@ class AdBlocker:
         if unknown:
             log.warning("AdBlock: unknown sources ignored: %s", unknown)
 
-    async def load(self) -> set[str]:
-        """Return merged set of blocked hostnames from all configured sources."""
+    async def load(self, force: bool = False) -> set[str]:
+        """Return merged set of blocked hostnames from all configured sources.
+
+        Pass force=True to bypass the cache and re-download every source.
+        """
         loop      = asyncio.get_running_loop()
         all_hosts: set[str] = set()
 
         for source in self._sources:
             url   = SOURCES[source]
             hosts = await loop.run_in_executor(
-                None, self._load_source, source, url
+                None, self._load_source, source, url, force
             )
             log.info("AdBlock [%-12s]: %d domains", source, len(hosts))
             all_hosts |= hosts
@@ -134,8 +137,12 @@ class AdBlocker:
     def _cache_path(self, name: str) -> Path:
         return self._cache_dir / f"{name}.json"
 
-    def _load_source(self, name: str, url: str) -> set[str]:
+    def _load_source(self, name: str, url: str, force: bool = False) -> set[str]:
         cache_file = self._cache_path(name)
+
+        if force and cache_file.exists():
+            cache_file.unlink()
+            log.info("AdBlock [%s]: cache cleared (forced refresh)", name)
 
         # ── Try valid cache first ─────────────────────────────────────────────
         if cache_file.exists():
