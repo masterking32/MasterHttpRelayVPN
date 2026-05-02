@@ -106,6 +106,11 @@ class DomainFronter:
         self.script_id = self._script_ids[0]  # backward compat / logging
         self._dev_available = False  # True if /dev endpoint works (no redirect, ~400ms faster)
 
+        # Simple execution monitor: log total consumed Apps Script executions.
+        self._execution_report_interval = 5.0
+        self._exec_total = 0
+        self._execution_task: asyncio.Task | None = None
+
         # Fan-out parallel relay: fire N Apps Script instances concurrently,
         # keep the first successful response, cancel the rest. Script IDs
         # that fail or time out get blacklisted for SCRIPT_BLACKLIST_TTL so
@@ -192,6 +197,10 @@ class DomainFronter:
         if self._parallel_relay > 1:
             log.info("Fan-out relay: %d parallel Apps Script instances per request",
                      self._parallel_relay)
+        log.info(
+            "Execution monitor enabled: reporting total every %.0fs",
+            self._execution_report_interval,
+        )
 
         # Exit node — optional second-hop relay with a non-Google exit IP.
         # Useful for sites that block GCP/Apps Script IPs (e.g. ChatGPT).
@@ -247,6 +256,24 @@ class DomainFronter:
         except (TypeError, ValueError):
             value = default
         return max(minimum, value)
+
+    def _record_execution(self, sid: str, count: int = 1) -> None:
+        """Record consumed Apps Script executions."""
+        if not sid or count <= 0:
+            return
+        self._exec_total += count
+
+    async def _execution_logger(self):
+        """Log execution usage every N seconds."""
+        interval = self._execution_report_interval
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                log.info("Apps Script executions used so far: %d", self._exec_total)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                log.debug("Execution logger error: %s", exc)
 
     def _ssl_ctx(self) -> ssl.SSLContext:
         ctx = ssl.create_default_context()
@@ -841,6 +868,8 @@ class DomainFronter:
         # Periodic per-host stats logger (opt-in via log level)
         if self._stats_task is None:
             self._stats_task = self._spawn(self._stats_logger())
+        if self._execution_task is None:
+            self._execution_task = self._spawn(self._execution_logger())
         # Start H2 connection (runs alongside H1 pool)
         if self._h2:
             self._spawn(self._h2_connect_and_warm())
@@ -868,6 +897,7 @@ class DomainFronter:
         self._warm_task = None
         self._maintenance_task = None
         self._stats_task = None
+        self._execution_task = None
         self._keepalive_task = None
 
         await self._flush_pool()
@@ -914,6 +944,7 @@ class DomainFronter:
         try:
             dev_path = f"/macros/s/{sid}/dev"
             t0 = time.perf_counter()
+            self._record_execution(sid)
             status, _, body = await asyncio.wait_for(
                 self._h2.request(
                     method="POST", path=dev_path, host=self.http_host,
@@ -934,6 +965,7 @@ class DomainFronter:
         try:
             exec_path = f"/macros/s/{sid}/exec"
             t0 = time.perf_counter()
+            self._record_execution(sid)
             await asyncio.wait_for(
                 self._h2.request(
                     method="POST", path=exec_path, host=self.http_host,
@@ -965,8 +997,10 @@ class DomainFronter:
 
                 # Apps Script keepalive — warm the container
                 payload = {"m": "GET", "u": "http://example.com/", "k": self.auth_key}
-                path = self._exec_path("example.com")
+                sid = self._script_id_for_key(self._host_key("example.com"))
+                path = self._exec_path_for_sid(sid)
                 t0 = time.perf_counter()
+                self._record_execution(sid)
                 await asyncio.wait_for(
                     self._h2.request(
                         method="POST", path=path, host=self.http_host,
@@ -2012,7 +2046,9 @@ class DomainFronter:
         full_payload["k"] = self.auth_key
         json_body = json.dumps(full_payload).encode()
 
-        path = self._exec_path(payload.get("u"))
+        sid = self._script_id_for_key(self._host_key(payload.get("u")))
+        path = self._exec_path_for_sid(sid)
+        self._record_execution(sid)
 
         status, headers, body = await self._h2.request(
             method="POST", path=path, host=self.http_host,
@@ -2034,6 +2070,7 @@ class DomainFronter:
         json_body = json.dumps(full_payload).encode()
 
         path = self._exec_path_for_sid(sid)
+        self._record_execution(sid)
 
         status, headers, body = await self._h2.request(
             method="POST", path=path, host=self.http_host,
@@ -2050,7 +2087,8 @@ class DomainFronter:
         full_payload["k"] = self.auth_key
         json_body = json.dumps(full_payload).encode()
 
-        path = self._exec_path(payload.get("u"))
+        sid = self._script_id_for_key(self._host_key(payload.get("u")))
+        path = self._exec_path_for_sid(sid)
         reader, writer, created = await self._acquire()
 
         try:
@@ -2065,6 +2103,7 @@ class DomainFronter:
             )
             writer.write(request.encode() + json_body)
             await writer.drain()
+            self._record_execution(sid)
 
             status, resp_headers, resp_body = await read_http_response(reader, max_bytes=self._max_response_body_bytes)
 
@@ -2114,11 +2153,15 @@ class DomainFronter:
             "q": payloads,
         }
         json_body = json.dumps(batch_payload).encode()
-        path = self._exec_path(payloads[0].get("u") if payloads else None)
+        sid = self._script_id_for_key(
+            self._host_key(payloads[0].get("u") if payloads else None)
+        )
+        path = self._exec_path_for_sid(sid)
 
         # Try HTTP/2 first
         if self._h2_available():
             try:
+                self._record_execution(sid)
                 status, headers, body = await asyncio.wait_for(
                     self._h2.request(
                         method="POST", path=path, host=self.http_host,
@@ -2148,6 +2191,7 @@ class DomainFronter:
                 )
                 writer.write(request.encode() + json_body)
                 await writer.drain()
+                self._record_execution(sid)
 
                 status, resp_headers, resp_body = await read_http_response(reader, max_bytes=self._max_response_body_bytes)
 

@@ -61,6 +61,9 @@ LEVEL_LABEL = {
     "CRITICAL": "CRIT ",
 }
 
+# Special spotlight line for execution usage updates.
+EXEC_USAGE_PREFIX = "Apps Script executions used so far:"
+
 # Stable per-component color (keeps log scanning easy).
 COMPONENT_COLORS = {
     "Main":         FG_CYAN,
@@ -148,14 +151,29 @@ class PrettyFormatter(logging.Formatter):
         except Exception:
             message = record.msg
 
-        time_part  = self._fmt_time(record)
-        level_part = self._fmt_level(record.levelname)
-        comp_part  = self._fmt_component(record.name)
+        highlight_exec_usage = (
+            record.name == "Fronter"
+            and isinstance(message, str)
+            and message.startswith(EXEC_USAGE_PREFIX)
+        )
 
-        if self.use_color:
-            time_part = f"{DIM}{FG_GRAY}{time_part}{RESET}"
+        if highlight_exec_usage:
+            # Force a single vivid color for the entire line so this metric pops.
+            plain_time = self._fmt_time(record)
+            plain_level = f"{LEVEL_GLYPH.get(record.levelname, '·')} {LEVEL_LABEL.get(record.levelname, record.levelname[:5].ljust(5))}"
+            plain_comp = f"[{record.name[: self.COMPONENT_WIDTH].ljust(self.COMPONENT_WIDTH)}]"
+            line = f"{plain_time}  {plain_level}  {plain_comp}  {message}"
+            if self.use_color:
+                line = f"{BOLD}{FG_CYAN}{line}{RESET}"
+        else:
+            time_part = self._fmt_time(record)
+            level_part = self._fmt_level(record.levelname)
+            comp_part = self._fmt_component(record.name)
 
-        line = f"{time_part}  {level_part}  {comp_part}  {message}"
+            if self.use_color:
+                time_part = f"{DIM}{FG_GRAY}{time_part}{RESET}"
+
+            line = f"{time_part}  {level_part}  {comp_part}  {message}"
 
         # Exception tracebacks: render dimmed below the main line.
         if record.exc_info:
