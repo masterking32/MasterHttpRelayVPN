@@ -264,12 +264,15 @@ class DomainFronter:
         self._exec_total += count
 
     async def _execution_logger(self):
-        """Log execution usage every N seconds."""
+        """Log execution usage every N seconds, only when the count changed."""
         interval = self._execution_report_interval
+        last_reported = -1
         while True:
             try:
                 await asyncio.sleep(interval)
-                log.info("Apps Script executions used so far: %d", self._exec_total)
+                if self._exec_total != last_reported:
+                    last_reported = self._exec_total
+                    log.info("Apps Script executions used so far: %d", self._exec_total)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
