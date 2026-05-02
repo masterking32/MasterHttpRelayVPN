@@ -46,8 +46,28 @@ function sanitizeHeaders(h) {
 export default {
   async fetch(req) {
     try {
+      // Cloudflare dashboard and browsers commonly test a Worker with GET.
+      // Return a friendly health response so users don't misread it as failure.
+      if (req.method === "GET") {
+        return Response.json(
+          {
+            ok: true,
+            status: "healthy",
+            message: "Everything is OK. Worker is deployed and reachable.",
+            usage: "Send POST with relay payload for actual proxy requests.",
+          },
+          { status: 200 }
+        );
+      }
+
       if (req.method !== "POST") {
-        return Response.json({ e: "method_not_allowed" }, { status: 405 });
+        return Response.json(
+          {
+            e: "method_not_allowed",
+            message: "Use POST for relay requests. GET is only a health check.",
+          },
+          { status: 405 }
+        );
       }
 
       const body = await req.json();
