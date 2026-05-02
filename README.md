@@ -459,52 +459,6 @@ After scanning, update your `config.json` with the recommended IP and restart th
 
 ---
 
-## CI/CD Releases (Hidden First Release)
-
-This repository includes a release workflow at `.github/workflows/release.yml`.
-
-Default behavior is **hidden for users**:
-- Tag push (`v*`) creates a GitHub Release as **draft** + **prerelease**
-- It is not marked as **Latest**
-
-That means you can run the first release via CI/CD, verify assets, and publish later.
-
-### Create first hidden release from GitHub Actions
-
-1. Push a tag:
-  ```bash
-  git tag v1.1.0
-  git push origin v1.1.0
-  ```
-2. Wait for the **Release** workflow to finish.
-3. Open GitHub Releases and review the draft release artifacts.
-
-### Make it public later
-
-Run **Actions → Release → Run workflow** with:
-- `publish = true`
-- `release_tag = v1.1.0`
-- `make_public = true`
-
-This will publish a non-draft, non-prerelease release and mark it as latest.
-
-### Extra targets (optional, non-blocking)
-
-`macos-13` runners can be heavily queued, which may leave `macos-x64` waiting for a long time.
-To keep normal releases fast and reliable, default tag releases now build:
-- `windows-x64`
-- `linux-x64`
-- `macos-arm64`
-
-If you want extra targets, run **Actions -> Release -> Run workflow** and enable one or more:
-- `build_macos_x64 = true` (intel macOS)
-- `build_linux_arm64 = true` (native ARM64 Linux runner)
-- `build_termux_bundle = true` (Termux source package for arm64/armv7/x86_64 on-device install)
-
-These extra jobs are optional and non-blocking, so even if one is delayed or unavailable, your main release still completes.
-
----
-
 ## Architecture
 
 ```
