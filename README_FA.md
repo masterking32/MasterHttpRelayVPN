@@ -61,6 +61,16 @@
 
 ---
 
+## ساختار پروژه
+
+- `src/core/` ماژول‌های مشترک (ثابت‌ها، لاگ، نصب گواهی، LAN، اسکنر)
+- `src/proxy/` هسته پراکسی محلی (HTTP/SOCKS، MITM، ابزارهای پراکسی)
+- `src/relay/` هسته رله Apps Script (موتور رله، پارس پاسخ، H2، ابزارها)
+- `apps_script/` اسکریپت‌های deploy روی سرویس‌های edge
+- `docs/exit-node/` راهنماهای deployment نود خروجی
+
+---
+
 ## راه‌اندازی مرحله‌به‌مرحله
 
 ### مرحله 1: دریافت پروژه
@@ -147,8 +157,8 @@ cp config.example.json config.json
 3. Deno Deploy: [apps_script/deno_deploy.ts](apps_script/deno_deploy.ts)
 
 راهنمای کامل مرحله‌به‌مرحله برای هر provider:
-- [EXIT_NODE_DEPLOYMENT_FA.md](EXIT_NODE_DEPLOYMENT_FA.md) (فارسی)
-- [EXIT_NODE_DEPLOYMENT.md](EXIT_NODE_DEPLOYMENT.md) (انگلیسی)
+- [docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md](docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md) (فارسی)
+- [docs/exit-node/EXIT_NODE_DEPLOYMENT.md](docs/exit-node/EXIT_NODE_DEPLOYMENT.md) (انگلیسی)
 
 سپس همان secret را هم در کد نود خروجی (`PSK`) و هم در `config.json` یکسان بگذارید.
 

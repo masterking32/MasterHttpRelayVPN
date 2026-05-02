@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
-from constants import CANDIDATE_IPS, GOOGLE_SCANNER_TIMEOUT, GOOGLE_SCANNER_CONCURRENCY
+from .constants import CANDIDATE_IPS, GOOGLE_SCANNER_TIMEOUT, GOOGLE_SCANNER_CONCURRENCY
 
 log = logging.getLogger("Scanner")
 

@@ -30,6 +30,9 @@ except ImportError:  # pragma: no cover
     _ZSTD_DCTX = None
 
 
+__all__ = ["supported_encodings", "has_brotli", "has_zstd", "decode"]
+
+
 def supported_encodings() -> str:
     """Value for Accept-Encoding that this relay can actually decode."""
     codecs = ["gzip", "deflate"]

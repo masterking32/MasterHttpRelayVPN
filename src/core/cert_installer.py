@@ -5,7 +5,7 @@ Supports: Windows, macOS, Linux (Debian/Ubuntu, RHEL/Fedora/CentOS, Arch).
 Also attempts to install into Firefox's NSS certificate store when found.
 
 Usage:
-    from cert_installer import install_ca, is_ca_trusted
+    from core.cert_installer import install_ca, is_ca_trusted
     install_ca("/path/to/ca.crt", cert_name="MasterHttpRelayVPN")
 """
 

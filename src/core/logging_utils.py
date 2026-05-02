@@ -227,44 +227,43 @@ def _install_asyncio_noise_filter() -> None:
 
 
 def print_banner(version: str, *, stream=None) -> None:
-    """Print a polished startup banner with color fallbacks."""
+    """Print an ASCII startup banner with color fallbacks."""
     stream = stream or sys.stderr
     color = _supports_color(stream)
 
     def c(code: str) -> str:
         return code if color else ""
 
-    title = "MasterHttpRelayVPN"
-    subtitle = "Domain-Fronted Apps Script Relay"
-    version_tag = f"v{version}"
-
-    left = f" {title} "
-    center = f" {subtitle} "
-    right = f" {version_tag} "
-    inner_width = max(68, len(left) + len(center) + len(right) + 2)
-
-    gap = inner_width - (len(left) + len(center) + len(right))
-    left_gap = gap // 2
-    right_gap = gap - left_gap
-
-    top = "╭" + ("─" * inner_width) + "╮"
-    mid = "│" + left + (" " * left_gap) + center + (" " * right_gap) + right + "│"
-    bot = "╰" + ("─" * inner_width) + "╯"
+    art = [
+        " __  __    _    ____ _____ _____ ____  ",
+        "|  \\/  |  / \\  / ___|_   _| ____|  _ \\ ",
+        "| |\\/| | / _ \\ \\___ \\ | | |  _| | |_) |",
+        "| |  | |/ ___ \\ ___) || | | |___|  _ < ",
+        "|_|  |_/_/   \\_\\____/ |_| |_____|_| \\_\\",
+        "      _   _ _____ _____ ____     ____  _____ _        _ __   __",
+        "     | | | |_   _|_   _|  _ \\   |  _ \\| ____| |      / \\\\ \\ / /",
+        "     | |_| | | |   | | | |_) |  | |_) |  _| | |     / _ \\\\ V / ",
+        "     |  _  | | |   | | |  __/   |  _ <| |___| |___ / ___ \\| |  ",
+        "     |_| |_| |_|   |_| |_|      |_| \\_\\_____|_____/_/   \\_\\_|  ",
+    ]
+    version_line = f"Version {version}"
+    link = "https://github.com/masterking32/MasterHttpRelayVPN"
+    width = max(max(len(line) for line in art), len(version_line), len(link))
+    rule = "=" * width
 
     if color:
-        top = f"{DIM}{FG_GRAY}{top}{RESET}"
-        bot = f"{DIM}{FG_GRAY}{bot}{RESET}"
-        mid = (
-            f"{DIM}{FG_GRAY}│{RESET}"
-            f"{BOLD}{FG_CYAN}{left}{RESET}"
-            f"{' ' * left_gap}"
-            f"{FG_GRAY}{center}{RESET}"
-            f"{' ' * right_gap}"
-            f"{BOLD}{FG_TEAL}{right}{RESET}"
-            f"{DIM}{FG_GRAY}│{RESET}"
-        )
+        print(f"{DIM}{FG_GRAY}{rule}{RESET}", file=stream)
+        for line in art:
+            print(f"{BOLD}{FG_CYAN}{line.center(width)}{RESET}", file=stream)
+        print(f"{FG_GRAY}{version_line.center(width)}{RESET}", file=stream)
+        print(f"{FG_TEAL}{link.center(width)}{RESET}", file=stream)
+        print(f"{DIM}{FG_GRAY}{rule}{RESET}", file=stream)
+    else:
+        print(rule, file=stream)
+        for line in art:
+            print(line.center(width), file=stream)
+        print(version_line.center(width), file=stream)
+        print(link.center(width), file=stream)
+        print(rule, file=stream)
 
-    print(top, file=stream)
-    print(mid, file=stream)
-    print(bot, file=stream)
     stream.flush()

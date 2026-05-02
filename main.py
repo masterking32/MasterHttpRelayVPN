@@ -14,23 +14,19 @@ import logging
 import os
 import sys
 
-# Project modules live under ./src — put that folder on sys.path so the
-# historical flat imports ("from proxy_server import …") keep working.
+# Project modules live under ./src — add it to sys.path so package imports
+# like "from proxy.proxy_server import ProxyServer" work from project root.
 _SRC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from cert_installer import install_ca, uninstall_ca, is_ca_trusted
-from constants import __version__
-from lan_utils import log_lan_access
-from google_ip_scanner import scan_sync
-from logging_utils import configure as configure_logging, print_banner
-from mitm import CA_CERT_FILE
-from proxy_server import ProxyServer
-
-
-def setup_logging(level_name: str):
-    configure_logging(level_name)
+from core.cert_installer import install_ca, uninstall_ca, is_ca_trusted
+from core.constants import __version__
+from core.lan_utils import log_lan_access
+from core.google_ip_scanner import scan_sync
+from core.logging_utils import configure as configure_logging, print_banner
+from proxy.mitm import CA_CERT_FILE
+from proxy.proxy_server import ProxyServer
 
 
 _PLACEHOLDER_AUTH_KEYS = {
@@ -111,13 +107,13 @@ def main():
 
     # Handle cert-only commands before loading config so they can run standalone.
     if args.install_cert or args.uninstall_cert:
-        setup_logging("INFO")
+        configure_logging("INFO")
         _log = logging.getLogger("Main")
 
         if args.install_cert:
             _log.info("Installing CA certificate…")
             if not os.path.exists(CA_CERT_FILE):
-                from mitm import MITMCertManager
+                from proxy.mitm import MITMCertManager
                 MITMCertManager()  # side-effect: creates ca/ca.crt + ca/ca.key
             ok = install_ca(CA_CERT_FILE)
             sys.exit(0 if ok else 1)
@@ -219,14 +215,14 @@ def main():
 
     # ── Google IP Scanner ──────────────────────────────────────────────────
     if args.scan:
-        setup_logging("INFO")
+        configure_logging("INFO")
         front_domain = config.get("front_domain", "www.google.com")
         _log = logging.getLogger("Main")
         _log.info(f"Scanning Google IPs (fronting domain: {front_domain})")
         ok = scan_sync(front_domain)
         sys.exit(0 if ok else 1)
 
-    setup_logging(config.get("log_level", "INFO"))
+    configure_logging(config.get("log_level", "INFO"))
     log = logging.getLogger("Main")
 
     print_banner(__version__)
@@ -245,7 +241,7 @@ def main():
     # Ensure CA file exists before checking / installing it.
     # MITMCertManager generates ca/ca.crt on first instantiation.
     if not os.path.exists(CA_CERT_FILE):
-        from mitm import MITMCertManager
+        from proxy.mitm import MITMCertManager
         MITMCertManager()  # side-effect: creates ca/ca.crt + ca/ca.key
 
     # Auto-install MITM CA if not already trusted

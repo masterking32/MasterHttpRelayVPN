@@ -92,6 +92,14 @@ and generates a strong random password for you. Follow the Apps Script deploymen
 instructions in **Step 2** below before running the wizard so you have a
 Deployment ID ready.
 
+## Project Structure
+
+- `src/core/` shared modules (config constants, logging, cert install, LAN, scanner)
+- `src/proxy/` local proxy runtime (HTTP/SOCKS, MITM, proxy helpers)
+- `src/relay/` Apps Script relay runtime (relay engine, parsing, H2, helpers)
+- `apps_script/` deployable edge/runtime scripts
+- `docs/exit-node/` exit-node deployment guides
+
 After it's running, jump to **Step 5** (browser proxy) and **Step 6** (CA
 certificate).
 
@@ -188,7 +196,7 @@ You can deploy any one of these free exit-node templates:
 3. Deno Deploy: [`apps_script/deno_deploy.ts`](apps_script/deno_deploy.ts)
 
 Full step-by-step deployment guide (all providers):
-- [EXIT_NODE_DEPLOYMENT.md](EXIT_NODE_DEPLOYMENT.md)
+- [docs/exit-node/EXIT_NODE_DEPLOYMENT.md](docs/exit-node/EXIT_NODE_DEPLOYMENT.md)
 
 Set the same PSK secret inside the exit-node code (`PSK` constant) and in `config.json`.
 

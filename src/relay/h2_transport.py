@@ -25,7 +25,7 @@ try:
 except Exception:  # optional dependency fallback
     certifi = None
 
-import codec
+from core import codec
 
 log = logging.getLogger("H2")
 
