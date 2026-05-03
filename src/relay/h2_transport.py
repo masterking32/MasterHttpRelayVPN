@@ -200,8 +200,17 @@ class H2Transport:
     _RECONNECT_MIN_INTERVAL = 1.0
 
     async def reconnect(self):
-        """Close current connection and re-establish, with backoff."""
+        """Close current connection and re-establish, with backoff.
+
+        Multiple concurrent callers all queue on _connect_lock.  The first
+        one does the actual work; subsequent callers see _connected=True and
+        return immediately — otherwise each would tear down the connection
+        the previous caller just established, causing a reconnect storm.
+        """
         async with self._connect_lock:
+            # Another waiter may have already reconnected while we held back.
+            if self._connected:
+                return
             loop = asyncio.get_running_loop()
             elapsed = loop.time() - self._last_reconnect_at
             if elapsed < self._RECONNECT_MIN_INTERVAL:

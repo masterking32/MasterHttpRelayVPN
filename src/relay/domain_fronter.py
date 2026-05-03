@@ -308,15 +308,22 @@ class DomainFronter:
 
     def _record_h2_failure(self, exc: Exception) -> None:
         self._h2_failure_streak += 1
-        if self._h2_failure_streak >= self._H2_FAILURE_THRESHOLD:
-            self._h2_disabled_until = time.time() + self._H2_FAILURE_COOLDOWN
+        # Extend the cooldown window on every failure so a burst of concurrent
+        # failures doesn't shorten the effective cooldown.
+        self._h2_disabled_until = max(
+            self._h2_disabled_until,
+            time.time() + self._H2_FAILURE_COOLDOWN,
+        )
+        # Log exactly once when the threshold is first crossed.  Using ==
+        # (not >=) avoids re-logging on every subsequent failure from
+        # concurrent in-flight requests that all fail at the same moment.
+        if self._h2_failure_streak == self._H2_FAILURE_THRESHOLD:
             log.warning(
                 "H2 temporarily disabled for %.0fs after %d consecutive failures (%s)",
                 self._H2_FAILURE_COOLDOWN,
                 self._h2_failure_streak,
                 type(exc).__name__,
             )
-            self._h2_failure_streak = 0
 
     def _stream_download_allowed(self, url: str) -> bool:
         host = self._host_key(url)
@@ -1827,8 +1834,11 @@ class DomainFronter:
         # Static assets are safe to batch in parallel as independent requests.
         is_static = cls._is_static_asset_url(url)
 
-        if headers:
-            # Hard stateful markers: preserve strict ordering / isolation.
+        if headers and not is_static:
+            # Static assets (.css, .js, .woff2, .png, …) are served the same
+            # regardless of cookies — browsers always attach cookies but the
+            # server doesn't vary static responses on them.  Only apply
+            # header-based stateful checks to non-static URLs.
             for name in ("cookie", "authorization", "proxy-authorization"):
                 if cls._header_value(headers, name):
                     return True
@@ -1846,7 +1856,7 @@ class DomainFronter:
                 return True
 
             # Non-static JSON/API calls are treated as stateful by default.
-            if (not is_static) and "application/json" in accept:
+            if "application/json" in accept:
                 return True
 
         return not is_static
