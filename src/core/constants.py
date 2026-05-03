@@ -73,9 +73,9 @@ WARM_POOL_COUNT         = 30
 
 
 # ── Batch windows ─────────────────────────────────────────────────────────
-BATCH_WINDOW_MICRO      = 0.005   # 5 ms
-BATCH_WINDOW_MACRO      = 0.050   # 50 ms
-BATCH_MAX               = 50
+BATCH_WINDOW_MICRO      = 0.015   # 15 ms: captures short asset bursts
+BATCH_WINDOW_MACRO      = 0.120   # 120 ms: balances batching and latency
+BATCH_MAX               = 64      # enough headroom for browser fan-out waves
 
 
 # ── Fan-out relay (parallel Apps Script instances) ────────────────────────
@@ -201,7 +201,7 @@ TRACE_HOST_SUFFIXES: tuple[str, ...] = (
 STATIC_EXTS: tuple[str, ...] = (
     ".css", ".js", ".mjs", ".woff", ".woff2", ".ttf", ".eot",
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
-    ".mp3", ".mp4", ".webm", ".wasm", ".avif",
+    ".mp3", ".mp4", ".webm", ".wasm", ".avif", ".json", ".map",
 )
 LARGE_FILE_EXTS = frozenset({
     ".bin",

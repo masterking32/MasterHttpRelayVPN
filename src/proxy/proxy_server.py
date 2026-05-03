@@ -105,6 +105,8 @@ class ProxyServer:
         self._download_max_chunks = self._cfg_int(
             config, "chunked_download_max_chunks", 256, minimum=1,
         )
+        self._warmup_before_listen = True
+        self._warmup_timeout = 20.0
         self._download_extensions, self._download_any_extension = (
             self._normalize_download_extensions(
                 config.get(
@@ -228,6 +230,20 @@ class ProxyServer:
         return self.fronter._is_static_asset_url(url)
 
     async def start(self):
+        if self._warmup_before_listen:
+            log.info(
+                "Relay warmup in progress... waiting up to %.0fs before opening listeners",
+                self._warmup_timeout,
+            )
+            ready = await self.fronter.wait_until_warm(timeout=self._warmup_timeout)
+            if ready:
+                log.info("Relay warmup complete — enabling HTTP/SOCKS listeners")
+            else:
+                log.warning(
+                    "Relay warmup timed out after %.0fs — starting listeners anyway",
+                    self._warmup_timeout,
+                )
+
         http_srv = await asyncio.start_server(self._on_client, self.host, self.port)
         socks_srv = None
 
