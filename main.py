@@ -310,6 +310,12 @@ async def _run(config):
         await server.start()
     finally:
         await server.stop()
+        # Cancel any tasks that leaked through (e.g. fire-and-forget pool tasks).
+        stray = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for t in stray:
+            t.cancel()
+        if stray:
+            await asyncio.gather(*stray, return_exceptions=True)
 
 
 if __name__ == "__main__":
