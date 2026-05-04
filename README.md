@@ -92,18 +92,6 @@ and generates a strong random password for you. Follow the Apps Script deploymen
 instructions in **Step 2** below before running the wizard so you have a
 Deployment ID ready.
 
-## Project Structure
-
-- `src/core/` shared modules (config constants, logging, cert install, LAN, scanner)
-- `src/proxy/` local proxy runtime (HTTP/SOCKS, MITM, proxy helpers)
-- `src/relay/` Apps Script relay runtime (relay engine, parsing, H2, helpers)
-- `apps_script/` deployable edge/runtime scripts
-- `docs/exit-node/` exit-node deployment guides
-
-After it's running, jump to **Step 5** (browser proxy) and **Step 6** (CA
-certificate).
-
----
 
 ## Step-by-Step Setup Guide (Manual)
 
@@ -194,6 +182,7 @@ You can deploy any one of these free exit-node templates:
 1. Val Town: [`apps_script/valtown.ts`](apps_script/valtown.ts)
 2. Cloudflare Workers: [`apps_script/cloudflare_worker.js`](apps_script/cloudflare_worker.js)
 3. Deno Deploy: [`apps_script/deno_deploy.ts`](apps_script/deno_deploy.ts)
+4. Your own VPS server
 
 Full step-by-step deployment guide (all providers):
 - [docs/exit-node/EXIT_NODE_DEPLOYMENT.md](docs/exit-node/EXIT_NODE_DEPLOYMENT.md)
@@ -219,7 +208,7 @@ Then configure provider switching like this:
 ```
 
 Notes:
-- For noob setup, only fill `provider`, `url`, and `psk`.
+- For simple setup, only fill `provider`, `url`, and `psk`.
 - Switch provider by changing `exit_node.provider` and `exit_node.url`.
 - `mode: "full"` = everything goes through exit node (ignore `hosts`).
 - `mode: "selective"` = only domains in `hosts` go through exit node.

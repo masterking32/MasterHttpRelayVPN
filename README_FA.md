@@ -61,16 +61,6 @@
 
 ---
 
-## ساختار پروژه
-
-- `src/core/` ماژول‌های مشترک (ثابت‌ها، لاگ، نصب گواهی، LAN، اسکنر)
-- `src/proxy/` هسته پراکسی محلی (HTTP/SOCKS، MITM، ابزارهای پراکسی)
-- `src/relay/` هسته رله Apps Script (موتور رله، پارس پاسخ، H2، ابزارها)
-- `apps_script/` اسکریپت‌های deploy روی سرویس‌های edge
-- `docs/exit-node/` راهنماهای deployment نود خروجی
-
----
-
 ## راه‌اندازی مرحله‌به‌مرحله
 
 ### مرحله 1: دریافت پروژه
@@ -155,6 +145,7 @@ cp config.example.json config.json
 1. Val Town: [apps_script/valtown.ts](apps_script/valtown.ts)
 2. Cloudflare Workers: [apps_script/cloudflare_worker.js](apps_script/cloudflare_worker.js)
 3. Deno Deploy: [apps_script/deno_deploy.ts](apps_script/deno_deploy.ts)
+4. سرور VPS شخصی
 
 راهنمای کامل مرحله‌به‌مرحله برای هر provider:
 - [docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md](docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md) (فارسی)
