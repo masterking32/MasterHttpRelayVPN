@@ -13,7 +13,7 @@
 #
 # What this script does:
 #   1. Verifies the OS is Linux (aborts otherwise)
-#   2. Fetches vps_exit_node.py from GitHub if not present locally
+#   2. Downloads vps_exit_node.py from GitHub
 #   3. Installs Python 3 if not present
 #   4. Creates /opt/exit-node/ and copies vps_exit_node.py there
 #   5. Prompts for a PSK (or generates one automatically)
@@ -54,25 +54,18 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-# ── Locate or download vps_exit_node.py ──────────────────────────────────────
-# When piped from curl/wget, BASH_SOURCE[0] is /dev/stdin or empty,
-# so we always check a fixed temp path first, then fall back to GitHub.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/dev/stdin}")" 2>/dev/null && pwd || echo "/tmp")"
-PYTHON_SCRIPT="$SCRIPT_DIR/vps_exit_node.py"
-
-if [[ ! -f "$PYTHON_SCRIPT" ]]; then
-  info "vps_exit_node.py not found locally — fetching from GitHub..."
-  PYTHON_SCRIPT="/tmp/vps_exit_node.py"
-  if command -v curl &>/dev/null; then
-    curl -fsSL "$GITHUB_RAW/vps_exit_node.py" -o "$PYTHON_SCRIPT"
-  elif command -v wget &>/dev/null; then
-    wget -qO "$PYTHON_SCRIPT" "$GITHUB_RAW/vps_exit_node.py"
-  else
-    error "Neither curl nor wget is available. Install one and retry."
-    exit 1
-  fi
-  info "Downloaded vps_exit_node.py to $PYTHON_SCRIPT"
+# ── Download vps_exit_node.py from GitHub ────────────────────────────────────
+PYTHON_SCRIPT="/tmp/vps_exit_node.py"
+info "Fetching vps_exit_node.py from GitHub..."
+if command -v curl &>/dev/null; then
+  curl -fsSL "$GITHUB_RAW/vps_exit_node.py" -o "$PYTHON_SCRIPT"
+elif command -v wget &>/dev/null; then
+  wget -qO "$PYTHON_SCRIPT" "$GITHUB_RAW/vps_exit_node.py"
+else
+  error "Neither curl nor wget is available. Install one and retry."
+  exit 1
 fi
+info "Downloaded vps_exit_node.py to $PYTHON_SCRIPT"
 
 # ─────────────────────────────────────────────────────────────────────────────
 header "Step 1/7 — Checking Python 3"
@@ -84,7 +77,7 @@ for candidate in python3 python3.12 python3.11 python3.10; do
     VER=$("$candidate" -c 'import sys; print("%d%d" % sys.version_info[:2])')
     if [[ "$VER" -ge 310 ]]; then
       PYTHON_BIN=$(command -v "$candidate")
-      info "Found $PYTHON_BIN ($(\"$PYTHON_BIN\" --version 2>&1))"
+      info "Found $PYTHON_BIN ($($PYTHON_BIN --version 2>&1))"
       break
     fi
   fi
@@ -114,7 +107,8 @@ header "Step 2/7 — Collecting configuration"
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Port
-read -rp $'\n'"Listen port [default: 8181]: " INPUT_PORT
+echo ""
+read -rp "Listen port [default: 8181]: " INPUT_PORT </dev/tty || INPUT_PORT=""
 PORT="${INPUT_PORT:-8181}"
 if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
   error "Invalid port: $PORT"
@@ -124,7 +118,7 @@ info "Port: $PORT"
 
 # PSK
 echo ""
-read -rp "Pre-shared key (leave empty to auto-generate): " INPUT_PSK
+read -rp "Pre-shared key (leave empty to auto-generate): " INPUT_PSK </dev/tty || INPUT_PSK=""
 if [[ -z "$INPUT_PSK" ]]; then
   PSK=$("$PYTHON_BIN" -c "import secrets; print(secrets.token_hex(32))")
   info "Auto-generated PSK: ${BOLD}${PSK}${NC}"
