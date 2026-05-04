@@ -35,8 +35,16 @@ from core.constants import (
     TCP_CONNECT_TIMEOUT,
     TRACE_HOST_SUFFIXES,
     UNCACHEABLE_HEADER_NAMES,
+    WS_TCP_RELAY_READ_CHUNK,
 )
 from relay.domain_fronter import DomainFronter
+
+try:
+    from relay.ws_tcp_tunnel import WSTcpTunnel
+    _WS_TCP_TUNNEL_AVAILABLE = True
+except ImportError:
+    WSTcpTunnel = None  # type: ignore[assignment,misc]
+    _WS_TCP_TUNNEL_AVAILABLE = False
 from .socks5 import negotiate_socks5
 from .proxy_support import (
     ResponseCache,
@@ -87,6 +95,33 @@ class ProxyServer:
         self.fronter = DomainFronter(config)
         self.mitm = None
         self._cache = ResponseCache(max_mb=CACHE_MAX_MB)
+
+        # ── WebSocket TCP relay (non-HTTP port tunneling) ───────────────────
+        _ws_cfg = config.get("tcp_ws_relay") or {}
+        self._ws_relay_enabled: bool = (
+            bool(_ws_cfg.get("enabled", False)) and _WS_TCP_TUNNEL_AVAILABLE
+        )
+        self._ws_relay_url: str           = str(_ws_cfg.get("ws_url") or "")
+        self._ws_relay_auth_key: str      = str(
+            _ws_cfg.get("auth_key") or config.get("auth_key", "")
+        )
+        self._ws_relay_front_domain: str | None = _ws_cfg.get("front_domain") or None
+        self._ws_relay_front_ip: str | None     = _ws_cfg.get("front_ip") or None
+        self._ws_relay_connect_timeout: float   = float(
+            _ws_cfg.get("connect_timeout", 15.0)
+        )
+        self._ws_relay_ping_interval: float     = float(
+            _ws_cfg.get("ping_interval", 20.0)
+        )
+        if self._ws_relay_enabled and not self._ws_relay_url:
+            log.warning("tcp_ws_relay.enabled=true but ws_url not set — disabling")
+            self._ws_relay_enabled = False
+        if self._ws_relay_enabled:
+            log.info(
+                "WS TCP relay enabled → %s (front=%s)",
+                self._ws_relay_url,
+                self._ws_relay_front_domain or "none",
+            )
         self._direct_fail_until: dict[str, float] = {}
         self._servers: list[asyncio.base_events.Server] = []
         self._client_tasks: set[asyncio.Task] = set()
@@ -454,7 +489,12 @@ class ProxyServer:
                     return
                 self._remember_direct_failure(host, ttl=300)
                 if port not in (80, 443):
-                    log.warning("Direct tunnel failed for %s:%d", host, port)
+                    if self._ws_relay_enabled:
+                        log.info("WS TCP relay → %s:%d (IP literal, direct failed)",
+                                 host, port)
+                        await self._do_ws_tcp_tunnel(host, port, reader, writer)
+                    else:
+                        log.warning("Direct tunnel failed for %s:%d", host, port)
                     return
                 log.warning(
                     "Direct tunnel fallback → %s:%d (switching to relay)",
@@ -465,6 +505,14 @@ class ProxyServer:
                     "Relay fallback → %s:%d (direct temporarily disabled)",
                     host, port,
                 )
+                if port not in (80, 443):
+                    if self._ws_relay_enabled:
+                        log.info("WS TCP relay → %s:%d (IP literal, direct disabled)",
+                                 host, port)
+                        await self._do_ws_tcp_tunnel(host, port, reader, writer)
+                    else:
+                        log.warning("Direct tunnel disabled for %s:%d", host, port)
+                    return
             if port == 443:
                 await self._do_mitm_connect(host, port, reader, writer)
             elif port == 80:
@@ -505,12 +553,24 @@ class ProxyServer:
         elif port == 80:
             await self._do_plain_http_tunnel(host, port, reader, writer)
         else:
-            # Non-HTTP port (e.g. mtalk:5228 XMPP, IMAP, SMTP, SSH) —
-            # payload isn't HTTP, so we can't relay or MITM. Tunnel bytes.
-            log.info("Direct tunnel → %s:%d (non-HTTP port)", host, port)
-            ok = await self._do_direct_tunnel(host, port, reader, writer)
-            if not ok:
-                log.warning("Direct tunnel failed for %s:%d", host, port)
+            # Non-HTTP port (e.g. XMPP, IMAP, SMTP, SSH) — payload isn't HTTP.
+            # Use the WebSocket TCP relay when configured; fall back to direct.
+            if self._ws_relay_enabled:
+                log.info("WS TCP relay → %s:%d (non-HTTP port)", host, port)
+                ok = await self._do_ws_tcp_tunnel(host, port, reader, writer)
+                if not ok:
+                    log.warning(
+                        "WS TCP relay failed for %s:%d — falling back to direct",
+                        host, port,
+                    )
+                    direct_ok = await self._do_direct_tunnel(host, port, reader, writer)
+                    if not direct_ok:
+                        log.warning("Direct tunnel also failed for %s:%d", host, port)
+            else:
+                log.info("Direct tunnel → %s:%d (non-HTTP port)", host, port)
+                ok = await self._do_direct_tunnel(host, port, reader, writer)
+                if not ok:
+                    log.warning("Direct tunnel failed for %s:%d", host, port)
 
     # ── Hosts override (fake DNS) ─────────────────────────────────
 
@@ -746,6 +806,73 @@ class ProxyServer:
             pipe(reader, w_remote, f"client→{host}"),
             pipe(r_remote, writer, f"{host}→client"),
         )
+        return True
+
+    # ── WebSocket TCP relay tunnel ────────────────────────────────
+
+    async def _do_ws_tcp_tunnel(self, host: str, port: int,
+                                reader: asyncio.StreamReader,
+                                writer: asyncio.StreamWriter) -> bool:
+        """Pipe raw TCP through a WebSocket relay to bypass censorship.
+
+        Returns True when the tunnel completes normally, or False if the
+        WebSocket connection could not be established (caller may fall back
+        to a direct tunnel attempt).
+        """
+        tunnel = WSTcpTunnel(
+            ws_url=self._ws_relay_url,
+            auth_key=self._ws_relay_auth_key,
+            target_host=host,
+            target_port=port,
+            front_ip=self._ws_relay_front_ip,
+            front_domain=self._ws_relay_front_domain,
+            verify_ssl=self.fronter.verify_ssl,
+            connect_timeout=self._ws_relay_connect_timeout,
+            ping_interval=self._ws_relay_ping_interval,
+        )
+        try:
+            await asyncio.wait_for(
+                tunnel.connect(),
+                timeout=self._ws_relay_connect_timeout,
+            )
+        except Exception as e:
+            log.error("WS TCP relay connect failed (%s:%d): %s", host, port, e)
+            return False
+
+        async def client_to_relay():
+            try:
+                while True:
+                    data = await reader.read(WS_TCP_RELAY_READ_CHUNK)
+                    if not data:
+                        break
+                    await tunnel.send(data)
+            except (ConnectionError, asyncio.CancelledError):
+                pass
+            except Exception as e:
+                log.debug("WS pipe client→relay ended (%s:%d): %s", host, port, e)
+            finally:
+                await tunnel.close()
+
+        async def relay_to_client():
+            try:
+                while True:
+                    data = await tunnel.recv()
+                    if not data:
+                        break
+                    writer.write(data)
+                    await writer.drain()
+            except (ConnectionError, asyncio.CancelledError):
+                pass
+            except Exception as e:
+                log.debug("WS pipe relay→client ended (%s:%d): %s", host, port, e)
+            finally:
+                try:
+                    if not writer.is_closing():
+                        writer.close()
+                except Exception:
+                    pass
+
+        await asyncio.gather(client_to_relay(), relay_to_client())
         return True
 
     # ── SNI-rewrite tunnel ────────────────────────────────────────

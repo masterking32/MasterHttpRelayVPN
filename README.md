@@ -8,7 +8,6 @@ A free tool that lets you access the internet freely by hiding your traffic behi
 
 > **How it works in simple terms:** Your browser talks to this tool on your computer. This tool disguises your traffic to look like normal Google traffic. The firewall/filter sees "google.com" and lets it pass. Behind the scenes, a free Google Apps Script relay fetches the real website for you.
 
-
 ---
 
 ## Announcement and Support Channel 📢
@@ -74,6 +73,7 @@ One command sets up a virtualenv, installs dependencies, launches an interactive
 config wizard, and starts the proxy.
 
 **Windows:**
+
 ```cmd
 git clone https://github.com/masterking32/MasterHttpRelayVPN.git
 cd MasterHttpRelayVPN
@@ -81,6 +81,7 @@ start.bat
 ```
 
 **Linux / macOS:**
+
 ```bash
 git clone https://github.com/masterking32/MasterHttpRelayVPN.git
 cd MasterHttpRelayVPN
@@ -93,7 +94,6 @@ and generates a strong random password for you. Follow the Apps Script deploymen
 instructions in **Step 2** below before running the wizard so you have a
 Deployment ID ready.
 
-
 ## Step-by-Step Setup Guide (Manual)
 
 ### Step 1: Download This Project
@@ -105,6 +105,7 @@ pip install -r requirements.txt
 ```
 
 > **Can't reach PyPI directly?** Use this mirror instead:
+>
 > ```bash
 > pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
 > ```
@@ -138,21 +139,25 @@ This is the "relay" that sits on Google's servers and fetches websites for you. 
 ### Step 3: Configure
 
 **Option A — interactive wizard (recommended):**
+
 ```bash
 python setup.py
 ```
+
 It'll prompt for your Deployment ID, generate a random `auth_key`, and write
 `config.json` for you.
 
 **Option B — manual:**
 
 1. Copy the example config file:
+
    ```bash
    cp config.example.json config.json
    ```
-   On Windows, you can also just copy & rename the file manually.
 
+   On Windows, you can also just copy & rename the file manually.
 2. Open `config.json` in any text editor and fill in your values:
+
    ```json
    {
      "mode": "apps_script",
@@ -168,6 +173,7 @@ It'll prompt for your Deployment ID, generate a random `auth_key`, and write
      "verify_ssl": true
    }
    ```
+
    - `script_id` → Paste the Deployment ID from Step 2.
    - `auth_key` → The **same password** you set in `Code.gs`.
 
@@ -187,6 +193,7 @@ You can deploy any one of these exit-node backends:
 3. Your own VPS server
 
 Full step-by-step deployment guide (all providers):
+
 - [docs/exit-node/EXIT_NODE_DEPLOYMENT.md](docs/exit-node/EXIT_NODE_DEPLOYMENT.md)
 
 Set the same PSK secret inside the exit-node code (`PSK` constant) and in `config.json`.
@@ -210,6 +217,7 @@ Then configure provider switching like this:
 ```
 
 Notes:
+
 - For simple setup, only fill `provider`, `url`, and `psk`.
 - Switch provider by changing `exit_node.provider` and `exit_node.url`.
 - `mode: "full"` = everything goes through exit node (ignore `hosts`).
@@ -217,6 +225,7 @@ Notes:
 - `psk` must exactly match your deployed exit node secret.
 
 Production recommendation:
+
 - Keep `verify_ssl: true`
 - Keep `listen_host: 127.0.0.1` unless LAN sharing is explicitly needed
 - Rotate both secrets periodically
@@ -240,6 +249,7 @@ Set your browser to use the proxy:
 - **Optional SOCKS5 Port:** `1080`
 
 **How to set proxy in common browsers:**
+
 - **Firefox:** Settings → General → Network Settings → Manual proxy → enter `127.0.0.1` port `8085` for HTTP Proxy → check "Also use this proxy for HTTPS"
 - **Chrome/Edge:** Uses system proxy. Go to Windows Settings → Network → Proxy → Manual setup → enter `127.0.0.1:8085`
 - **Or** use extensions like [FoxyProxy](https://addons.mozilla.org/en-US/firefox/addon/foxyproxy-standard/) or [SwitchyOmega](https://chrome.google.com/webstore/detail/proxy-switchyomega/) for easier switching.
@@ -251,6 +261,7 @@ When using `apps_script` mode, the tool needs to decrypt and re-encrypt HTTPS tr
 The certificate file is created at `ca/ca.crt` inside the project folder after the first run.
 
 #### Windows
+
 1. Double-click `ca/ca.crt`.
 2. Click **Install Certificate**.
 3. Choose **Current User** (or Local Machine for all users).
@@ -259,6 +270,7 @@ The certificate file is created at `ca/ca.crt` inside the project folder after t
 6. Restart your browser.
 
 #### macOS
+
 1. Double-click `ca/ca.crt` — it opens in Keychain Access.
 2. It goes into the **login** keychain.
 3. Find the certificate, double-click it.
@@ -267,14 +279,18 @@ The certificate file is created at `ca/ca.crt` inside the project folder after t
 6. Close and enter your password. Restart your browser.
 
 #### Linux (Ubuntu/Debian)
+
 ```bash
 sudo cp ca/ca.crt /usr/local/share/ca-certificates/masterhttp-relay.crt
 sudo update-ca-certificates
 ```
+
 Restart your browser.
 
 #### Firefox (All Platforms)
+
 Firefox uses its own certificate store, so even after OS-level install you need to do this:
+
 1. Go to **Settings** → **Privacy & Security** → **Certificates** → **View Certificates**.
 2. Go to the **Authorities** tab → click **Import**.
 3. Select `ca/ca.crt` from the project folder.
@@ -297,6 +313,7 @@ By default, the proxy only listens on `127.0.0.1` (localhost), meaning only your
 3. The startup log will show your LAN IP addresses that other devices can connect to
 
 **Example LAN configuration:**
+
 ```json
 {
   "lan_sharing": true,
@@ -308,6 +325,31 @@ By default, the proxy only listens on `127.0.0.1` (localhost), meaning only your
 **Security Warning:** When LAN sharing is enabled, anyone on your local network can use your proxy. Ensure your network is trusted and consider additional security measures.
 
 **On other devices:** Configure them to use your computer's LAN IP (shown in the startup log) and port 8085 as the HTTP proxy.
+
+
+
+## TCP Relay
+
+To use many protocols such as ssh and tor, http relay is not suitable, Because http is an application layer protocol. So your going to need tcp to use protocols which are built upon it.
+
+Using below config you could relay your traffic on tcp using websocket.
+
+```
+	"tcp_ws_relay": {
+		"enabled": false,
+		"ws_url": "wss://your-tcp-relay.deno.dev/tcp",
+		"auth_key": "CHANGE_ME_TO_A_STRONG_SECRET",
+		"front_domain": null,
+		"front_ip": null,
+		"connect_timeout": 15,
+		"ping_interval": 20
+	}
+
+```
+
+The app_script for cloudflare relay is the same (cloudflare_worker.js). There is also a deno tcp relay code available (deno_tcp_relay.ts). To deploy, check the deployment part of this document.
+
+After setting this up, using the socks5 proxy all tour traffic routes through tcp relay. If the tcp relay fails, It falls back to http relay.
 
 ---
 
@@ -321,51 +363,53 @@ This project is centered on the **Apps Script** relay (free, no VPS needed). For
 
 ### Main Settings
 
-| Setting | What It Does |
-|---------|-------------|
-| `auth_key` | Password shared between your computer and the relay |
-| `script_id` | Your Google Apps Script Deployment ID |
-| `listen_host` | Where to listen (`127.0.0.1` = only this computer, `0.0.0.0` = all interfaces for LAN sharing) |
-| `listen_port` | Which port to listen on (default: `8085`) |
+
+| Setting       | What It Does                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| `auth_key`    | Password shared between your computer and the relay                                             |
+| `script_id`   | Your Google Apps Script Deployment ID                                                           |
+| `listen_host` | Where to listen (`127.0.0.1` = only this computer, `0.0.0.0` = all interfaces for LAN sharing)  |
+| `listen_port` | Which port to listen on (default:`8085`)                                                        |
 | `lan_sharing` | Enable LAN sharing to allow other devices on your network to use the proxy (`false` by default) |
-| `log_level` | How much detail to show: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `log_level`   | How much detail to show:`DEBUG`, `INFO`, `WARNING`, `ERROR`                                     |
 
 ### Advanced Settings
 
-| Setting | Default | What It Does |
-|---------|---------|-------------|
-| `google_ip` | `216.239.38.120` | Google IP address to connect through |
-| `front_domain` | `www.google.com` | Domain shown to the firewall/filter |
-| `verify_ssl` | `true` | Verify the TLS certificate on the local fronted connection to Google/CDN |
-| `relay_timeout` | `25` | Total timeout for one relayed request before it fails |
-| `tls_connect_timeout` | `15` | Timeout for the proxy's TLS connection to the fronted Google/CDN endpoint |
-| `tcp_connect_timeout` | `10` | Timeout for direct TCP tunnels and outbound SNI-rewrite connects |
-| `max_response_body_bytes` | `209715200` | Hard cap for a single relay response body after buffering/decoding |
-| `script_ids` | — | Multiple Script IDs for load balancing (array) |
-| `chunked_download_extensions` | see [config.example.json](config.example.json) | File extensions that should use parallel range downloading. Supports `".*"` to probe all GET downloads. |
-| `chunked_download_min_size` | `5242880` | Minimum total file size (5 MB) before range-parallel download stays enabled |
-| `chunked_download_chunk_size` | `524288` | Per-range chunk size used by parallel downloads |
-| `chunked_download_max_parallel` | `8` | Maximum simultaneous range requests for one download |
-| `chunked_download_max_chunks` | `256` | Soft upper bound for total chunk requests; chunk size is raised automatically for very large files |
-| `block_hosts` | `[]` | Hosts that must never be tunneled (return HTTP 403). Supports exact names (`ads.example.com`) or leading-dot suffixes (`.doubleclick.net`). |
-| `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | Hosts that go direct (no MITM, no relay). Useful for LAN resources or sites that break under MITM. |
-| `direct_google_exclude` | see [config.example.json](config.example.json) | Google apps that must use the MITM relay path instead of the fast direct tunnel. |
-| `hosts` | `{}` | Manual DNS override: map a hostname to a specific IP. |
-| `youtube_via_relay` | `false` | Route YouTube (`youtube.com`, `youtu.be`, `youtube-nocookie.com`) through the Apps Script relay instead of the SNI-rewrite path. The SNI-rewrite path uses Google's frontend IP which enforces SafeSearch and can cause **"Video Unavailable"** errors. Setting this to `true` fixes playback at the cost of using more Apps Script executions and slightly higher latency. |
-| `exit_node.provider` | `cloudflare` | Selected exit-node backend: `cloudflare`, `deno`, `vps`, or `custom`. |
-| `exit_node.url` | `""` | Beginner-friendly single URL for the selected provider. |
+
+| Setting                         | Default                                         | What It Does                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `google_ip`                     | `216.239.38.120`                                | Google IP address to connect through                                                                                                                                                                                                                                                                                                                                        |
+| `front_domain`                  | `www.google.com`                                | Domain shown to the firewall/filter                                                                                                                                                                                                                                                                                                                                         |
+| `verify_ssl`                    | `true`                                          | Verify the TLS certificate on the local fronted connection to Google/CDN                                                                                                                                                                                                                                                                                                    |
+| `relay_timeout`                 | `25`                                            | Total timeout for one relayed request before it fails                                                                                                                                                                                                                                                                                                                       |
+| `tls_connect_timeout`           | `15`                                            | Timeout for the proxy's TLS connection to the fronted Google/CDN endpoint                                                                                                                                                                                                                                                                                                   |
+| `tcp_connect_timeout`           | `10`                                            | Timeout for direct TCP tunnels and outbound SNI-rewrite connects                                                                                                                                                                                                                                                                                                            |
+| `max_response_body_bytes`       | `209715200`                                     | Hard cap for a single relay response body after buffering/decoding                                                                                                                                                                                                                                                                                                          |
+| `script_ids`                    | —                                              | Multiple Script IDs for load balancing (array)                                                                                                                                                                                                                                                                                                                              |
+| `chunked_download_extensions`   | see[config.example.json](config.example.json)   | File extensions that should use parallel range downloading. Supports`".*"` to probe all GET downloads.                                                                                                                                                                                                                                                                      |
+| `chunked_download_min_size`     | `5242880`                                       | Minimum total file size (5 MB) before range-parallel download stays enabled                                                                                                                                                                                                                                                                                                 |
+| `chunked_download_chunk_size`   | `524288`                                        | Per-range chunk size used by parallel downloads                                                                                                                                                                                                                                                                                                                             |
+| `chunked_download_max_parallel` | `8`                                             | Maximum simultaneous range requests for one download                                                                                                                                                                                                                                                                                                                        |
+| `chunked_download_max_chunks`   | `256`                                           | Soft upper bound for total chunk requests; chunk size is raised automatically for very large files                                                                                                                                                                                                                                                                          |
+| `block_hosts`                   | `[]`                                            | Hosts that must never be tunneled (return HTTP 403). Supports exact names (`ads.example.com`) or leading-dot suffixes (`.doubleclick.net`).                                                                                                                                                                                                                                 |
+| `bypass_hosts`                  | `["localhost", ".local", ".lan", ".home.arpa"]` | Hosts that go direct (no MITM, no relay). Useful for LAN resources or sites that break under MITM.                                                                                                                                                                                                                                                                          |
+| `direct_google_exclude`         | see[config.example.json](config.example.json)   | Google apps that must use the MITM relay path instead of the fast direct tunnel.                                                                                                                                                                                                                                                                                            |
+| `hosts`                         | `{}`                                            | Manual DNS override: map a hostname to a specific IP.                                                                                                                                                                                                                                                                                                                       |
+| `youtube_via_relay`             | `false`                                         | Route YouTube (`youtube.com`, `youtu.be`, `youtube-nocookie.com`) through the Apps Script relay instead of the SNI-rewrite path. The SNI-rewrite path uses Google's frontend IP which enforces SafeSearch and can cause **"Video Unavailable"** errors. Setting this to `true` fixes playback at the cost of using more Apps Script executions and slightly higher latency. |
+| `exit_node.provider`            | `cloudflare`                                    | Selected exit-node backend:`cloudflare`, `deno`, `vps`, or `custom`.                                                                                                                                                                                                                                                                                                        |
+| `exit_node.url`                 | `""`                                            | Beginner-friendly single URL for the selected provider.                                                                                                                                                                                                                                                                                                                     |
 
 ### Optional Dependencies
 
 Install everything from [`requirements.txt`](requirements.txt). All listed packages are optional — the proxy runs with no third-party dependencies in basic modes, but without them you lose features:
 
-| Package | Provides |
-|---------|----------|
-| `cryptography` | MITM TLS interception (required for `apps_script` mode with HTTPS sites) |
-| `h2` | HTTP/2 multiplexing to the Apps Script relay (significantly faster) |
-| `brotli` | Decompression of `Content-Encoding: br` responses |
-| `zstandard` | Decompression of `Content-Encoding: zstd` responses |
 
+| Package        | Provides                                                                |
+| -------------- | ----------------------------------------------------------------------- |
+| `cryptography` | MITM TLS interception (required for`apps_script` mode with HTTPS sites) |
+| `h2`           | HTTP/2 multiplexing to the Apps Script relay (significantly faster)     |
+| `brotli`       | Decompression of`Content-Encoding: br` responses                        |
+| `zstandard`    | Decompression of`Content-Encoding: zstd` responses                      |
 
 ### Load Balancing
 
@@ -380,7 +424,9 @@ To increase speed, deploy `Code.gs` multiple times to different Apps Script proj
   ]
 }
 ```
+
 > ⚠️ **Note:** If you are using multiple deployments, the auth-keys must be identical. (All deployments must use the same auth-key.)
+
 ---
 
 ## Updating the Google Relay
@@ -415,6 +461,7 @@ python3 main.py --scan
 ```
 
 This will:
+
 1. Probe 27 candidate Google IPs in parallel
 2. Measure latency from your network
 3. Display results in a table
@@ -422,6 +469,7 @@ This will:
 5. Exit with exit code 0 if at least one IP is reachable, 1 otherwise
 
 **Example output:**
+
 ```
 Scanning 27 Google frontend IPs
   SNI: www.google.com
@@ -495,18 +543,19 @@ MasterHttpRelayVPN/
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| "Config not found" | Copy `config.example.json` to `config.json` and fill in your values |
-| Browser shows certificate errors | Install the CA certificate (see Step 6 above) |
-| Telegram works but browser doesn't load sites | Almost certainly the CA certificate is not installed. Follow Step 6 to install `ca/ca.crt`, then **fully close and reopen your browser** (for Chrome/Edge, make sure no Chrome process is running in the background before reopening). |
-| Installed the cert but browser still errors | Chrome and Edge cache certificates — you must **completely close** the browser (check Task Manager / system tray) and reopen it for the new cert to take effect. Firefox requires a separate import (see Step 6 Firefox section). |
-| "unauthorized" error | Make sure `auth_key` in `config.json` matches `AUTH_KEY` in `Code.gs` exactly |
-| Connection timeout | Try a different `google_ip` or check your internet connection |
-| Slow browsing | Deploy multiple `Code.gs` copies and use `script_ids` array for load balancing |
-| `502 Bad JSON` error | Google returned an unexpected response (HTML instead of JSON). Causes: wrong `script_id`, Apps Script daily quota exhausted, or the deployment wasn't re-created after editing `Code.gs`. Check your `script_id` and create a **new deployment** if you recently changed `Code.gs`. |
-| Telegram works on HTTP proxy but not on SOCKS5 | **Expected.** SOCKS5 clients resolve hostnames locally and connect to raw IPs, so Telegram's MTProto-obfuscated bytes reach a blocked IP that we can neither direct-tunnel nor intercept. Configure Telegram as an **HTTP proxy** (`127.0.0.1:8085`) instead — it sends hostnames, which the proxy handles via SNI-rewrite through Google. |
-| Google and YouTube open but YouTube videos don't play and other sites don't load | The connection to `script.google.com` was not successfully established. This is likely caused by an issue with the deployment of `Code.gs` on Google Apps Script, or the daily execution quota has been exhausted. Re-deploy `Code.gs` with a new deployment and verify your `script_id`, or wait until the quota resets (midnight Pacific Time / 10:30 AM Iran Time). |
+
+| Problem                                                                          | Solution                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Config not found"                                                               | Copy`config.example.json` to `config.json` and fill in your values                                                                                                                                                                                                                                                                                                    |
+| Browser shows certificate errors                                                 | Install the CA certificate (see Step 6 above)                                                                                                                                                                                                                                                                                                                         |
+| Telegram works but browser doesn't load sites                                    | Almost certainly the CA certificate is not installed. Follow Step 6 to install`ca/ca.crt`, then **fully close and reopen your browser** (for Chrome/Edge, make sure no Chrome process is running in the background before reopening).                                                                                                                                 |
+| Installed the cert but browser still errors                                      | Chrome and Edge cache certificates — you must**completely close** the browser (check Task Manager / system tray) and reopen it for the new cert to take effect. Firefox requires a separate import (see Step 6 Firefox section).                                                                                                                                     |
+| "unauthorized" error                                                             | Make sure`auth_key` in `config.json` matches `AUTH_KEY` in `Code.gs` exactly                                                                                                                                                                                                                                                                                          |
+| Connection timeout                                                               | Try a different`google_ip` or check your internet connection                                                                                                                                                                                                                                                                                                          |
+| Slow browsing                                                                    | Deploy multiple`Code.gs` copies and use `script_ids` array for load balancing                                                                                                                                                                                                                                                                                         |
+| `502 Bad JSON` error                                                             | Google returned an unexpected response (HTML instead of JSON). Causes: wrong`script_id`, Apps Script daily quota exhausted, or the deployment wasn't re-created after editing `Code.gs`. Check your `script_id` and create a **new deployment** if you recently changed `Code.gs`.                                                                                    |
+| Telegram works on HTTP proxy but not on SOCKS5                                   | **Expected.** SOCKS5 clients resolve hostnames locally and connect to raw IPs, so Telegram's MTProto-obfuscated bytes reach a blocked IP that we can neither direct-tunnel nor intercept. Configure Telegram as an **HTTP proxy** (`127.0.0.1:8085`) instead — it sends hostnames, which the proxy handles via SNI-rewrite through Google.                           |
+| Google and YouTube open but YouTube videos don't play and other sites don't load | The connection to`script.google.com` was not successfully established. This is likely caused by an issue with the deployment of `Code.gs` on Google Apps Script, or the daily execution quota has been exhausted. Re-deploy `Code.gs` with a new deployment and verify your `script_id`, or wait until the quota resets (midnight Pacific Time / 10:30 AM Iran Time). |
 
 ---
 
@@ -517,6 +566,7 @@ MasterHttpRelayVPN/
 - **Don't share the `ca/` folder** — it contains your private certificate key.
 - Keep `listen_host` as `127.0.0.1` so only your computer can use the proxy.
 - Every google scripts deployment has limit of 20,000 requests in 24 hours
+
 ---
 
 ## Special Thanks

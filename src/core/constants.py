@@ -225,3 +225,11 @@ UNCACHEABLE_HEADER_NAMES: tuple[str, ...] = (
     "cookie", "authorization", "proxy-authorization", "range",
     "if-none-match", "if-modified-since", "cache-control", "pragma",
 )
+
+
+# ── WebSocket TCP relay ───────────────────────────────────────────────────
+# Used for non-HTTP port tunneling (SSH, IMAP, SMTP, etc.) through a
+# WebSocket-capable edge relay (Deno Deploy or Cloudflare Workers).
+WS_TCP_RELAY_CONNECT_TIMEOUT = 15.0   # seconds to establish WS connection
+WS_TCP_RELAY_PING_INTERVAL   = 20.0   # seconds between WS keepalive pings
+WS_TCP_RELAY_READ_CHUNK      = 65536  # bytes per asyncio read call

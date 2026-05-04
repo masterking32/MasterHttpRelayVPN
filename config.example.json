@@ -95,5 +95,14 @@
 			"example.com",
 			"example.org"
 		]
+	},
+	"tcp_ws_relay": {
+		"enabled": false,
+		"ws_url": "wss://your-tcp-relay.deno.dev/tcp",
+		"auth_key": "CHANGE_ME_TO_A_STRONG_SECRET",
+		"front_domain": null,
+		"front_ip": null,
+		"connect_timeout": 15,
+		"ping_interval": 20
 	}
 }
