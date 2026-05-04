@@ -1,6 +1,6 @@
-# Exit Node Deployment Guide (Val Town / Cloudflare / Deno)
+# Exit Node Deployment Guide (Val Town / Cloudflare / Deno / VPS)
 
-This guide explains how to deploy an exit node for MasterHttpRelayVPN on free platforms.
+This guide explains how to deploy an exit node for MasterHttpRelayVPN on free platforms or your own VPS server.
 
 Traffic path:
 
@@ -10,9 +10,10 @@ Use this when destinations block Google datacenter egress.
 
 ## 1) Choose One Provider
 
-- Val Town
-- Cloudflare Workers
-- Deno Deploy
+- Val Town (free, no server required)
+- Cloudflare Workers (free tier available)
+- Deno Deploy (free, not fully tested)
+- **Your Own VPS** (full control, Linux server — automated installer included)
 
 You only need one provider.
 
@@ -65,10 +66,89 @@ Steps:
 5. Deploy.
 6. Copy URL, usually like https://YOUR-PROJECT.deno.net
 
-## 6) Configure MasterHttpRelayVPN
+## 6) Deploy On Your Own VPS  (Linux only)
+
+Source files:
+- `apps_script/vps_exit_node.py`  — the relay server
+- `apps_script/setup_vps_exit_node.sh`  — automated installer (recommended)
+
+Requirements:
+- A **Linux** VPS (Ubuntu / Debian / CentOS / Fedora / Arch — any systemd distro).
+- Python 3.10 or later (the installer will install it automatically if absent).
+- A public IP address or domain name.
+- Root / sudo access.
+
+### Option A — One command (fetches everything from GitHub)
+
+SSH into your VPS and run **one** of these:
+
+```bash
+# with curl:
+curl -fsSL https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
+
+# with wget:
+wget -qO- https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
+```
+
+The script automatically downloads `vps_exit_node.py` from GitHub if not present locally, so no `git clone` is needed first.
+
+### Option B — Manual setup
+
+1. Copy `apps_script/vps_exit_node.py` to your VPS.
+
+2. Generate a strong random PSK:
+   ```bash
+   python3 -c "import secrets; print(secrets.token_hex(32))"
+   ```
+
+3. Start the server:
+   ```bash
+   export EXIT_NODE_PSK=YOUR_STRONG_SECRET
+   python3 vps_exit_node.py --port 8181
+   ```
+
+4. (Recommended) Install as a systemd service:
+
+   Create `/etc/systemd/system/exit-node.service`:
+   ```ini
+   [Unit]
+   Description=MasterHttpRelayVPN Exit Node
+   After=network-online.target
+
+   [Service]
+   EnvironmentFile=/etc/exit-node.env
+   ExecStart=/usr/bin/python3 /opt/exit-node/vps_exit_node.py --port 8181
+   Restart=always
+   RestartSec=5
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   Then:
+   ```bash
+   systemctl daemon-reload
+   systemctl enable --now exit-node
+   ```
+
+5. (Recommended) Put nginx or Caddy in front for HTTPS.
+
+6. Verify the service is healthy:
+   ```bash
+   curl http://127.0.0.1:8181/
+   # Expected: {"ok": true, "status": "healthy", ...}
+   ```
+
+Notes:
+- The server refuses to start on non-Linux platforms.
+- Requests to loopback (`127.x.x.x`) and private LAN addresses are blocked to prevent SSRF.
+- To rotate the PSK, edit `/etc/exit-node.env` and restart: `systemctl restart exit-node`.
+
+## 7) Configure MasterHttpRelayVPN
 
 Update `config.json`:
 
+For Val Town / Cloudflare / Deno:
 ```json
 "exit_node": {
   "enabled": true,
@@ -85,10 +165,28 @@ Update `config.json`:
 }
 ```
 
+For your own VPS:
+```json
+"exit_node": {
+  "enabled": true,
+  "provider": "vps",
+  "url": "https://YOUR-VPS-DOMAIN-OR-IP:8181",
+  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
+  "mode": "full",
+  "hosts": [
+    "chatgpt.com",
+    "openai.com",
+    "claude.ai",
+    "anthropic.com"
+  ]
+}
+```
+
 Provider values:
 - `valtown`
 - `cloudflare`
 - `deno`
+- `vps` (also accepted: `self_hosted`, `self-hosted`, `server`)
 
 If `mode` is `selective`, only hosts listed in `hosts` use the exit node.
 If `mode` is `full`, all relayed traffic uses the exit node.

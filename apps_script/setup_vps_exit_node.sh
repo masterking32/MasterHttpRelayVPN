@@ -6,10 +6,10 @@
 # service on a fresh Linux VPS.
 #
 # One-command install (fetches everything from GitHub automatically):
-#   curl -fsSL https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/master/apps_script/setup_vps_exit_node.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
 #
 #   or with wget:
-#   wget -qO- https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/master/apps_script/setup_vps_exit_node.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
 #
 # What this script does:
 #   1. Verifies the OS is Linux (aborts otherwise)
@@ -30,7 +30,7 @@
 
 set -euo pipefail
 
-GITHUB_RAW="https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/master/apps_script"
+GITHUB_RAW="https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script"
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
