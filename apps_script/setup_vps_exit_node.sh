@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# =============================================================================
+# MasterHttpRelayVPN — VPS Exit Node Installer  (Linux only)
+# =============================================================================
+# Installs and configures the vps_exit_node.py relay server as a systemd
+# service on a fresh Linux VPS.
+#
+# What this script does:
+#   1. Verifies the OS is Linux (aborts otherwise)
+#   2. Installs Python 3 if not present
+#   3. Creates /opt/exit-node/ and copies vps_exit_node.py there
+#   4. Prompts for a PSK (or generates one automatically)
+#   5. Prompts for the listen port (default: 8181)
+#   6. Writes /etc/exit-node.env  (holds EXIT_NODE_PSK — readable by root only)
+#   7. Installs a systemd service that auto-starts on boot
+#   8. Opens the chosen port in ufw / firewalld if either tool is present
+#   9. Prints the final config snippet to paste into config.json
+#
+# Usage (run as root or with sudo):
+#   bash setup_vps_exit_node.sh
+#
+# =============================================================================
+
+set -euo pipefail
+
+# ── Colours ──────────────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+
+info()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+header()  { echo -e "\n${BOLD}${CYAN}$*${NC}"; }
+
+# ── Platform check ────────────────────────────────────────────────────────────
+if [[ "$(uname -s)" != "Linux" ]]; then
+  error "This installer only supports Linux. Detected: $(uname -s)"
+  exit 1
+fi
+
+# ── Root / sudo check ─────────────────────────────────────────────────────────
+if [[ $EUID -ne 0 ]]; then
+  error "Please run as root or with sudo:"
+  echo "  sudo bash $0"
+  exit 1
+fi
+
+# ── Detect script directory so we can find vps_exit_node.py ──────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_SCRIPT="$SCRIPT_DIR/vps_exit_node.py"
+
+if [[ ! -f "$PYTHON_SCRIPT" ]]; then
+  error "vps_exit_node.py not found at: $PYTHON_SCRIPT"
+  error "Run this script from the apps_script/ directory of MasterHttpRelayVPN."
+  exit 1
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+header "Step 1/7 — Checking Python 3"
+# ─────────────────────────────────────────────────────────────────────────────
+
+PYTHON_BIN=""
+for candidate in python3 python3.12 python3.11 python3.10; do
+  if command -v "$candidate" &>/dev/null; then
+    VER=$("$candidate" -c 'import sys; print("%d%d" % sys.version_info[:2])')
+    if [[ "$VER" -ge 310 ]]; then
+      PYTHON_BIN=$(command -v "$candidate")
+      info "Found $PYTHON_BIN ($(\"$PYTHON_BIN\" --version 2>&1))"
+      break
+    fi
+  fi
+done
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  info "Python 3.10+ not found — attempting install..."
+  if command -v apt-get &>/dev/null; then
+    apt-get update -qq
+    apt-get install -y python3 python3-minimal
+  elif command -v dnf &>/dev/null; then
+    dnf install -y python3
+  elif command -v yum &>/dev/null; then
+    yum install -y python3
+  elif command -v pacman &>/dev/null; then
+    pacman -Sy --noconfirm python
+  else
+    error "Cannot determine package manager. Please install Python 3.10+ manually."
+    exit 1
+  fi
+  PYTHON_BIN=$(command -v python3)
+  info "Installed: $PYTHON_BIN"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+header "Step 2/7 — Collecting configuration"
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Port
+read -rp $'\n'"Listen port [default: 8181]: " INPUT_PORT
+PORT="${INPUT_PORT:-8181}"
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
+  error "Invalid port: $PORT"
+  exit 1
+fi
+info "Port: $PORT"
+
+# PSK
+echo ""
+read -rp "Pre-shared key (leave empty to auto-generate): " INPUT_PSK
+if [[ -z "$INPUT_PSK" ]]; then
+  PSK=$("$PYTHON_BIN" -c "import secrets; print(secrets.token_hex(32))")
+  info "Auto-generated PSK: ${BOLD}${PSK}${NC}"
+  warn "Save this PSK — you will need it in config.json on your client."
+else
+  PSK="$INPUT_PSK"
+  info "Using provided PSK."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+header "Step 3/7 — Installing server files"
+# ─────────────────────────────────────────────────────────────────────────────
+
+INSTALL_DIR="/opt/exit-node"
+mkdir -p "$INSTALL_DIR"
+cp "$PYTHON_SCRIPT" "$INSTALL_DIR/vps_exit_node.py"
+chmod 700 "$INSTALL_DIR/vps_exit_node.py"
+info "Installed to $INSTALL_DIR/vps_exit_node.py"
+
+# ─────────────────────────────────────────────────────────────────────────────
+header "Step 4/7 — Writing environment file"
+# ─────────────────────────────────────────────────────────────────────────────
+
+ENV_FILE="/etc/exit-node.env"
+cat > "$ENV_FILE" <<EOF
+# MasterHttpRelayVPN VPS exit node — environment configuration
+# Generated by setup_vps_exit_node.sh
+EXIT_NODE_PSK=${PSK}
+EOF
+chmod 600 "$ENV_FILE"
+info "Environment file written to $ENV_FILE  (mode 600)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+header "Step 5/7 — Installing systemd service"
+# ─────────────────────────────────────────────────────────────────────────────
+
+SERVICE_FILE="/etc/systemd/system/exit-node.service"
+cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=MasterHttpRelayVPN Exit Node
+Documentation=https://github.com/masterking32/MasterHttpRelayVPN
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/exit-node.env
+ExecStart=${PYTHON_BIN} ${INSTALL_DIR}/vps_exit_node.py --port ${PORT}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable exit-node
+systemctl restart exit-node
+info "Service installed and started."
+
+# Give it a moment to confirm it really started.
+sleep 2
+if systemctl is-active --quiet exit-node; then
+  info "Service is ${GREEN}running${NC}."
+else
+  warn "Service may not have started. Check: journalctl -u exit-node -n 30"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+header "Step 6/7 — Firewall"
+# ─────────────────────────────────────────────────────────────────────────────
+
+if command -v ufw &>/dev/null; then
+  ufw allow "$PORT"/tcp comment "exit-node" || true
+  info "ufw rule added for port $PORT/tcp"
+elif command -v firewall-cmd &>/dev/null; then
+  firewall-cmd --permanent --add-port="$PORT"/tcp || true
+  firewall-cmd --reload || true
+  info "firewalld rule added for port $PORT/tcp"
+else
+  warn "No ufw or firewalld found. Make sure port $PORT/tcp is open in your VPS firewall panel."
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+header "Step 7/7 — Health check"
+# ─────────────────────────────────────────────────────────────────────────────
+
+HEALTH_URL="http://127.0.0.1:${PORT}/"
+if command -v curl &>/dev/null; then
+  HEALTH=$(curl -sf --max-time 5 "$HEALTH_URL" 2>/dev/null || echo "")
+  if echo "$HEALTH" | grep -q '"ok"'; then
+    info "Health check OK: $HEALTH"
+  else
+    warn "Health check returned unexpected response. Check: journalctl -u exit-node -n 30"
+  fi
+else
+  warn "curl not found — skipping health check. You can test manually:"
+  echo "  curl http://127.0.0.1:${PORT}/"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+PUBLIC_IP=$(curl -sf --max-time 5 https://ifconfig.me 2>/dev/null || echo "YOUR-VPS-IP")
+
+echo ""
+echo -e "${BOLD}${GREEN}============================================================${NC}"
+echo -e "${BOLD} Installation complete!${NC}"
+echo -e "${BOLD}${GREEN}============================================================${NC}"
+echo ""
+echo -e "  Service status : ${CYAN}systemctl status exit-node${NC}"
+echo -e "  Live logs      : ${CYAN}journalctl -fu exit-node${NC}"
+echo -e "  Uninstall      : ${CYAN}systemctl disable --now exit-node && rm $SERVICE_FILE $ENV_FILE${NC}"
+echo ""
+echo -e "${BOLD}Add this to config.json on your client machine:${NC}"
+echo ""
+echo -e "${CYAN}"
+cat <<JSON
+"exit_node": {
+  "enabled": true,
+  "provider": "vps",
+  "url": "http://${PUBLIC_IP}:${PORT}",
+  "psk": "${PSK}",
+  "mode": "full",
+  "hosts": []
+}
+JSON
+echo -e "${NC}"
+warn "For production: put nginx/Caddy in front and use HTTPS."
+warn "Replace the IP with your domain name if you have one."

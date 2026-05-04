@@ -1122,6 +1122,10 @@ class DomainFronter:
             "worker": "cloudflare",
             "cf": "cloudflare",
             "deno_deploy": "deno",
+            "self_hosted": "vps",
+            "self-hosted": "vps",
+            "selfhosted": "vps",
+            "server": "vps",
         }
         return aliases.get(provider, provider or "custom")
 
@@ -1159,6 +1163,12 @@ class DomainFronter:
         elif provider == "deno":
             selected = _pick_from(en_cfg, "deno_url") or _pick_from(
                 providers, "deno", "deno_deploy",
+            )
+        elif provider == "vps":
+            selected = _pick_from(
+                en_cfg, "vps_url", "server_url", "self_hosted_url",
+            ) or _pick_from(
+                providers, "vps", "self_hosted", "server",
             )
         else:
             selected = ""
