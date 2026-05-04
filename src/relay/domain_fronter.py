@@ -1231,8 +1231,10 @@ class DomainFronter:
             payload.get("u", "")[:60],
         )
 
-        # Send through the normal Apps Script relay path (H2 or H1 + retry)
-        raw = await self._relay_with_retry(outer)
+        # Send through the batch collector so exit-node requests are coalesced
+        # into fetchAll() alongside other concurrent requests, reducing Apps
+        # Script quota usage.  _relay_with_retry bypasses batching entirely.
+        raw = await self._batch_submit(outer)
 
         # raw is now the response from the exit node (inner relay JSON)
         # _parse_relay_response will decode it into the final HTTP response.
