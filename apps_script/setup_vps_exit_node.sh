@@ -1,31 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# MasterHttpRelayVPN — VPS Exit Node Installer  (Linux only)
-# =============================================================================
-# Installs and configures the vps_exit_node.py relay server as a systemd
-# service on a fresh Linux VPS.
-#
-# One-command install (fetches everything from GitHub automatically):
-#   curl -fsSL https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
-#
-#   or with wget:
-#   wget -qO- https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
-#
-# What this script does:
-#   1. Verifies the OS is Linux (aborts otherwise)
-#   2. Downloads vps_exit_node.py from GitHub
-#   3. Installs Python 3 if not present
-#   4. Creates /opt/exit-node/ and copies vps_exit_node.py there
-#   5. Prompts for a PSK (or generates one automatically)
-#   6. Prompts for the listen port (default: 8181)
-#   7. Writes /etc/exit-node.env  (holds EXIT_NODE_PSK — readable by root only)
-#   8. Installs a systemd service that auto-starts on boot
-#   9. Opens the chosen port in ufw / firewalld if either tool is present
-#  10. Prints the final config snippet to paste into config.json
-#
-# Usage (run as root or with sudo):
-#   bash setup_vps_exit_node.sh
-#
+# MasterHttpRelayVPN — VPS Exit Node Installer
 # =============================================================================
 
 set -euo pipefail
@@ -252,5 +227,3 @@ cat <<JSON
 }
 JSON
 echo -e "${NC}"
-warn "For production: put nginx/Caddy in front and use HTTPS."
-warn "Replace the IP with your domain name if you have one."

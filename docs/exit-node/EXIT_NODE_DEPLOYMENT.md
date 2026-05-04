@@ -75,7 +75,6 @@ Source files:
 Requirements:
 - A **Linux** VPS (Ubuntu / Debian / CentOS / Fedora / Arch — any systemd distro).
 - Python 3.10 or later (the installer will install it automatically if absent).
-- A public IP address or domain name.
 - Root / sudo access.
 
 ### One-command install (fetches everything from GitHub)
@@ -92,9 +91,7 @@ wget -qO- https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/pyth
 
 The script automatically downloads `vps_exit_node.py` from GitHub, so no `git clone` is needed first. It will ask for a port (default: 8181) and a PSK (auto-generates one if left blank), then install everything and print the `config.json` snippet at the end.
 
-Notes:
-- The server refuses to start on non-Linux platforms.
-- Requests to loopback (`127.x.x.x`) and private LAN addresses are blocked to prevent SSRF.
+Note:
 - To rotate the PSK, edit `/etc/exit-node.env` and restart: `systemctl restart exit-node`.
 
 ## 7) Configure MasterHttpRelayVPN
@@ -127,7 +124,7 @@ For your own VPS:
   "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
   "mode": "full",
   "hosts": [
-    "chatgpt.com",
+    "example.com",
     "openai.com",
     "claude.ai",
     "anthropic.com"
@@ -139,7 +136,7 @@ Provider values:
 - `valtown`
 - `cloudflare`
 - `deno`
-- `vps` (also accepted: `self_hosted`, `self-hosted`, `server`)
+- `vps`
 
 If `mode` is `selective`, only hosts listed in `hosts` use the exit node.
 If `mode` is `full`, all relayed traffic uses the exit node.
