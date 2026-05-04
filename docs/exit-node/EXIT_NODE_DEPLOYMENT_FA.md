@@ -1,4 +1,4 @@
-# راهنمای نصب نود خروجی (Val Town / Cloudflare / Deno)
+# راهنمای نصب نود خروجی (Cloudflare / Deno / VPS)
 
 این راهنما توضیح می‌دهد چطور یک نود خروجی رایگان برای MasterHttpRelayVPN راه‌اندازی کنید.
 
@@ -12,9 +12,9 @@
 
 ## ۱) یک Provider انتخاب کنید
 
-- Val Town
 - Cloudflare Workers
 - Deno Deploy
+- VPS شخصی
 
 فقط به یکی از این‌ها نیاز دارید.
 
@@ -32,19 +32,7 @@ const PSK = "CHANGE_ME_TO_A_STRONG_SECRET";
 - همین PSK را در `config.json` زیر `exit_node.psk` وارد کنید.
 - URL عمومی را هرگز همراه با PSK معتبر به اشتراک نگذارید.
 
-## ۳) نصب روی Val Town
-
-فایل: `apps_script/valtown.ts`
-
-مراحل:
-1. در [https://www.val.town](https://www.val.town) ثبت‌نام کنید.
-2. یک Val جدید بسازید (TypeScript HTTP endpoint).
-3. محتوای `apps_script/valtown.ts` را paste کنید.
-4. مقدار ثابت PSK را در کد تنظیم کنید.
-5. ذخیره و deploy کنید. (Add HTTP trigger را فراموش نکنید)
-6. URL عمومی خود را کپی کنید؛ معمولاً به شکل `https://YOUR-NAME.web.val.run`
-
-## ۴) نصب روی Cloudflare Workers
+## ۳) نصب روی Cloudflare Workers
 
 فایل: `apps_script/cloudflare_worker.js`
 
@@ -57,7 +45,7 @@ const PSK = "CHANGE_ME_TO_A_STRONG_SECRET";
 6. Deploy کنید.
 7. URL را کپی کنید؛ معمولاً به شکل `https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev`
 
-## ۵) نصب روی Deno Deploy (هنوز تست نشده)
+## ۴) نصب روی Deno Deploy (هنوز تست نشده)
 
 فایل: `apps_script/deno_deploy.ts`
 
@@ -70,6 +58,28 @@ const PSK = "CHANGE_ME_TO_A_STRONG_SECRET";
 6. Deploy کنید.
 7. URL را کپی کنید؛ معمولاً به شکل `https://YOUR-PROJECT.deno.dev`
 
+## ۵) نصب روی VPS شخصی (فقط Linux)
+
+فایل‌ها:
+- `apps_script/vps_exit_node.py` (سرور نود خروجی)
+- `apps_script/setup_vps_exit_node.sh` (نصب خودکار - پیشنهادی)
+
+نیازمندی‌ها:
+- یک VPS لینوکسی با دسترسی root/sudo
+- Python 3.10+
+
+دستور نصب سریع:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
+```
+
+یا:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
+```
+
 ## ۶) تنظیم MasterHttpRelayVPN
 
 فایل `config.json` را ویرایش کنید:
@@ -77,8 +87,8 @@ const PSK = "CHANGE_ME_TO_A_STRONG_SECRET";
 ```json
 "exit_node": {
   "enabled": true,
-  "provider": "valtown",
-  "url": "https://YOUR-NAME.web.val.run",
+  "provider": "cloudflare",
+  "url": "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev",
   "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
   "mode": "full",
   "hosts": [
@@ -91,9 +101,9 @@ const PSK = "CHANGE_ME_TO_A_STRONG_SECRET";
 ```
 
 مقادیر provider:
-- `valtown`
 - `cloudflare`
 - `deno`
+- `vps`
 
 اگر `mode` برابر `selective` باشد، فقط دامنه‌های داخل `hosts` از نود خروجی عبور می‌کنند.
 اگر `mode` برابر `full` باشد، تمام ترافیک relay‌شده از نود خروجی عبور می‌کند.

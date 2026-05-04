@@ -1,4 +1,4 @@
-# Exit Node Deployment Guide (Val Town / Cloudflare / Deno / VPS)
+# Exit Node Deployment Guide (Cloudflare / Deno / VPS)
 
 This guide explains how to deploy an exit node for MasterHttpRelayVPN on free platforms or your own VPS server.
 
@@ -10,7 +10,6 @@ Use this when destinations block Google datacenter egress.
 
 ## 1) Choose One Provider
 
-- Val Town (free, no server required)
 - Cloudflare Workers (free tier available)
 - Deno Deploy (free, not fully tested)
 - **Your Own VPS** (full control, Linux server — automated installer included)
@@ -29,19 +28,7 @@ Important:
 - Use the same PSK in your local config under exit_node.psk.
 - Never share your deployed URL together with a valid PSK.
 
-## 3) Deploy On Val Town
-
-Source file: apps_script/valtown.ts
-
-Steps:
-1. Sign in at https://www.val.town
-2. Create a new Val (TypeScript HTTP endpoint).
-3. Paste content from apps_script/valtown.ts.
-4. Set the PSK constant in the code.
-5. Save and Add HTTP trigger.
-6. Copy your public URL, usually like https://YOUR-NAME.web.val.run
-
-## 4) Deploy On Cloudflare Workers
+## 3) Deploy On Cloudflare Workers
 
 Source file: apps_script/cloudflare_worker.js
 
@@ -54,7 +41,7 @@ Steps:
 6. Deploy.
 7. Copy URL, usually like https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev
 
-## 5) Deploy On Deno Deploy (It's not tested Yet)
+## 4) Deploy On Deno Deploy (It's not tested Yet)
 
 Source file: apps_script/deno_deploy.ts
 
@@ -66,7 +53,7 @@ Steps:
 5. Deploy.
 6. Copy URL, usually like https://YOUR-PROJECT.deno.net
 
-## 6) Deploy On Your Own VPS  (Linux only)
+## 5) Deploy On Your Own VPS  (Linux only)
 
 Source files:
 - `apps_script/vps_exit_node.py`  — the relay server
@@ -94,16 +81,16 @@ The script automatically downloads `vps_exit_node.py` from GitHub, so no `git cl
 Note:
 - To rotate the PSK, edit `/etc/exit-node.env` and restart: `systemctl restart exit-node`.
 
-## 7) Configure MasterHttpRelayVPN
+## 6) Configure MasterHttpRelayVPN
 
 Update `config.json`:
 
-For Val Town / Cloudflare / Deno:
+For Cloudflare / Deno:
 ```json
 "exit_node": {
   "enabled": true,
-  "provider": "valtown",
-  "url": "https://YOUR-NAME.web.val.run",
+  "provider": "cloudflare",
+  "url": "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev",
   "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
   "mode": "full",
   "hosts": [
@@ -133,7 +120,6 @@ For your own VPS:
 ```
 
 Provider values:
-- `valtown`
 - `cloudflare`
 - `deno`
 - `vps`

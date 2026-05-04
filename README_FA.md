@@ -137,15 +137,14 @@ cp config.example.json config.json
 برای حل این مورد، نود خروجی (exit node) را فعال کنید تا مسیر این‌گونه شود:
 
 ```text
-مرورگر -> پراکسی محلی -> Apps Script -> Exit Node (Val Town / Cloudflare / Deno) -> سایت مقصد
+مرورگر -> پراکسی محلی -> Apps Script -> Exit Node (Cloudflare / Deno / VPS) -> سایت مقصد
 ```
 
-می‌توانید یکی از این template های رایگان را deploy کنید:
+می‌توانید یکی از این backend های نود خروجی را deploy کنید:
 
-1. Val Town: [apps_script/valtown.ts](apps_script/valtown.ts)
-2. Cloudflare Workers: [apps_script/cloudflare_worker.js](apps_script/cloudflare_worker.js)
-3. Deno Deploy: [apps_script/deno_deploy.ts](apps_script/deno_deploy.ts)
-4. سرور VPS شخصی
+1. Cloudflare Workers: [apps_script/cloudflare_worker.js](apps_script/cloudflare_worker.js)
+2. Deno Deploy: [apps_script/deno_deploy.ts](apps_script/deno_deploy.ts)
+3. سرور VPS شخصی
 
 راهنمای کامل مرحله‌به‌مرحله برای هر provider:
 - [docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md](docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md) (فارسی)
@@ -158,8 +157,8 @@ cp config.example.json config.json
 ```json
 "exit_node": {
   "enabled": true,
-  "provider": "valtown",
-  "url": "https://YOUR-NAME.web.val.run",
+  "provider": "cloudflare",
+  "url": "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev",
   "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
   "mode": "full",
   "hosts": [
@@ -294,7 +293,7 @@ json
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | هاست‌هایی که مستقیم می‌روند (بدون MITM و بدون رله). برای منابع داخلی شبکه یا سایت‌هایی که با MITM مشکل دارند. |
 | `direct_google_exclude` | مراجعه به [config.example.json](config.example.json) | اپ‌های Google که باید از مسیر MITM برای رله استفاده کنند به‌جای tunnel مستقیم. |
 | `youtube_via_relay` | `false` | مسیردهی YouTube (`youtube.com`، `youtu.be`، `youtube-nocookie.com`) از طریق رله Apps Script به‌جای مسیر SNI-rewrite. مسیر SNI-rewrite از IP فرانت‌اند Google عبور می‌کند که SafeSearch را اجباری می‌کند و می‌تواند باعث خطای **«ویدیو در دسترس نیست»** شود. با فعال کردن این گزینه، پخش ویدیو درست می‌شود اما تعداد اجراهای Apps Script بیشتر و تأخیر اندکی بالاتر می‌رود. |
-| `exit_node.provider` | `valtown` | backend انتخاب‌شده برای exit node: `valtown`، `cloudflare`، `deno` یا `custom`. |
+| `exit_node.provider` | `cloudflare` | backend انتخاب‌شده برای exit node: `cloudflare`، `deno`، `vps` یا `custom`. |
 | `exit_node.url` | `""` | آدرس ساده و اصلی برای provider انتخاب‌شده. |
 
 ### وابستگی‌های اختیاری
@@ -411,7 +410,6 @@ MasterHttpRelayVPN/
 ├── requirements.txt           # وابستگی‌های اختیاری پایتون
 ├── apps_script/
 │   ├── Code.gs                # اسکریپت رله روی Google Apps Script
-│   ├── valtown.ts             # template نود خروجی برای val.town
 │   ├── cloudflare_worker.js   # template نود خروجی برای Cloudflare Workers
 │   └── deno_deploy.ts         # template نود خروجی برای Deno Deploy
 ├── ca/                        # گواهی MITM (هرگز به اشتراک نگذارید)

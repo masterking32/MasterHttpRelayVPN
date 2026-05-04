@@ -174,15 +174,14 @@ Some websites block Google datacenter IPs when traffic exits directly from Apps 
 To fix that, configure an exit node so traffic path becomes:
 
 ```text
-Browser -> Local Proxy -> Apps Script -> Exit Node (Val Town / Cloudflare / Deno) -> Target website
+Browser -> Local Proxy -> Apps Script -> Exit Node (Cloudflare / Deno / VPS) -> Target website
 ```
 
-You can deploy any one of these free exit-node templates:
+You can deploy any one of these exit-node backends:
 
-1. Val Town: [`apps_script/valtown.ts`](apps_script/valtown.ts)
-2. Cloudflare Workers: [`apps_script/cloudflare_worker.js`](apps_script/cloudflare_worker.js)
-3. Deno Deploy: [`apps_script/deno_deploy.ts`](apps_script/deno_deploy.ts)
-4. Your own VPS server
+1. Cloudflare Workers: [`apps_script/cloudflare_worker.js`](apps_script/cloudflare_worker.js)
+2. Deno Deploy: [`apps_script/deno_deploy.ts`](apps_script/deno_deploy.ts)
+3. Your own VPS server
 
 Full step-by-step deployment guide (all providers):
 - [docs/exit-node/EXIT_NODE_DEPLOYMENT.md](docs/exit-node/EXIT_NODE_DEPLOYMENT.md)
@@ -194,8 +193,8 @@ Then configure provider switching like this:
 ```json
 "exit_node": {
   "enabled": true,
-  "provider": "valtown",
-  "url": "https://YOUR-NAME.web.val.run",
+  "provider": "cloudflare",
+  "url": "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev",
   "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
   "mode": "full",
   "hosts": [
@@ -218,7 +217,7 @@ Production recommendation:
 - Keep `verify_ssl: true`
 - Keep `listen_host: 127.0.0.1` unless LAN sharing is explicitly needed
 - Rotate both secrets periodically
-- Never publish your live val URL with valid PSK
+- Never publish your live exit-node URL with valid PSK
 
 ### Step 4: Run
 
@@ -311,7 +310,7 @@ By default, the proxy only listens on `127.0.0.1` (localhost), meaning only your
 
 ## Modes Overview
 
-This project is centered on the **Apps Script** relay (free, no VPS needed). For destinations that block Google egress, you can optionally chain a free edge exit node (Val Town, Cloudflare Workers, or Deno Deploy).
+This project is centered on the **Apps Script** relay (free, no VPS needed). For destinations that block Google egress, you can optionally chain an edge exit node (Cloudflare Workers, Deno Deploy, or your own VPS).
 
 ---
 
@@ -350,7 +349,7 @@ This project is centered on the **Apps Script** relay (free, no VPS needed). For
 | `direct_google_exclude` | see [config.example.json](config.example.json) | Google apps that must use the MITM relay path instead of the fast direct tunnel. |
 | `hosts` | `{}` | Manual DNS override: map a hostname to a specific IP. |
 | `youtube_via_relay` | `false` | Route YouTube (`youtube.com`, `youtu.be`, `youtube-nocookie.com`) through the Apps Script relay instead of the SNI-rewrite path. The SNI-rewrite path uses Google's frontend IP which enforces SafeSearch and can cause **"Video Unavailable"** errors. Setting this to `true` fixes playback at the cost of using more Apps Script executions and slightly higher latency. |
-| `exit_node.provider` | `valtown` | Selected exit-node backend: `valtown`, `cloudflare`, `deno`, or `custom`. |
+| `exit_node.provider` | `cloudflare` | Selected exit-node backend: `cloudflare`, `deno`, `vps`, or `custom`. |
 | `exit_node.url` | `""` | Beginner-friendly single URL for the selected provider. |
 
 ### Optional Dependencies
@@ -472,7 +471,6 @@ MasterHttpRelayVPN/
 ├── requirements.txt           # Python dependencies
 ├── apps_script/
 │   ├── Code.gs                # The relay script you deploy to Google Apps Script
-│   ├── valtown.ts             # Exit node template for val.town
 │   ├── cloudflare_worker.js   # Exit node template for Cloudflare Workers
 │   └── deno_deploy.ts         # Exit node template for Deno Deploy
 ├── ca/                        # Generated MITM CA (do NOT share)

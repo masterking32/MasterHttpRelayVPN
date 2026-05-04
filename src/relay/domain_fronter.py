@@ -1116,8 +1116,6 @@ class DomainFronter:
     def _normalize_exit_node_provider(raw: object) -> str:
         provider = str(raw or "custom").strip().lower()
         aliases = {
-            "val": "valtown",
-            "val-town": "valtown",
             "cloudflare_worker": "cloudflare",
             "worker": "cloudflare",
             "cf": "cloudflare",
@@ -1150,11 +1148,7 @@ class DomainFronter:
         if direct:
             return direct
 
-        if provider == "valtown":
-            selected = _pick_from(en_cfg, "valtown_url", "val_url") or _pick_from(
-                providers, "valtown", "val_town", "val",
-            )
-        elif provider == "cloudflare":
+        if provider == "cloudflare":
             selected = _pick_from(
                 en_cfg, "cloudflare_url", "worker_url", "cf_url",
             ) or _pick_from(
