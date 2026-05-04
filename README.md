@@ -223,7 +223,7 @@ Production recommendation:
 ### Step 4: Run
 
 ```bash
-python3 main.py
+.venv/bin/python3 main.py
 ```
 
 You should see a message saying the HTTP proxy is running on `127.0.0.1:8085` and SOCKS5 on `127.0.0.1:1080`.
