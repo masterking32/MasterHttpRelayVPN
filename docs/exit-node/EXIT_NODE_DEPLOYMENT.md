@@ -78,7 +78,7 @@ Requirements:
 - A public IP address or domain name.
 - Root / sudo access.
 
-### Option A — One command (fetches everything from GitHub)
+### One-command install (fetches everything from GitHub)
 
 SSH into your VPS and run **one** of these:
 
@@ -90,54 +90,7 @@ curl -fsSL https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/pyt
 wget -qO- https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/python_testing/apps_script/setup_vps_exit_node.sh | sudo bash
 ```
 
-The script automatically downloads `vps_exit_node.py` from GitHub if not present locally, so no `git clone` is needed first.
-
-### Option B — Manual setup
-
-1. Copy `apps_script/vps_exit_node.py` to your VPS.
-
-2. Generate a strong random PSK:
-   ```bash
-   python3 -c "import secrets; print(secrets.token_hex(32))"
-   ```
-
-3. Start the server:
-   ```bash
-   export EXIT_NODE_PSK=YOUR_STRONG_SECRET
-   python3 vps_exit_node.py --port 8181
-   ```
-
-4. (Recommended) Install as a systemd service:
-
-   Create `/etc/systemd/system/exit-node.service`:
-   ```ini
-   [Unit]
-   Description=MasterHttpRelayVPN Exit Node
-   After=network-online.target
-
-   [Service]
-   EnvironmentFile=/etc/exit-node.env
-   ExecStart=/usr/bin/python3 /opt/exit-node/vps_exit_node.py --port 8181
-   Restart=always
-   RestartSec=5
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-   Then:
-   ```bash
-   systemctl daemon-reload
-   systemctl enable --now exit-node
-   ```
-
-5. (Recommended) Put nginx or Caddy in front for HTTPS.
-
-6. Verify the service is healthy:
-   ```bash
-   curl http://127.0.0.1:8181/
-   # Expected: {"ok": true, "status": "healthy", ...}
-   ```
+The script automatically downloads `vps_exit_node.py` from GitHub, so no `git clone` is needed first. It will ask for a port (default: 8181) and a PSK (auto-generates one if left blank), then install everything and print the `config.json` snippet at the end.
 
 Notes:
 - The server refuses to start on non-Linux platforms.
