@@ -1,5 +1,10 @@
 // MasterHttpRelay exit node for Cloudflare Workers.
 // Deploy as HTTP endpoint and set PSK to a strong secret.
+//
+// For TCP relay (SSH etc.) the cloudflare:sockets API is used.
+// No special wrangler.toml flags needed for deployed workers.
+
+import { connect as cfConnect } from "cloudflare:sockets";
 
 const PSK = "CHANGE_ME_TO_A_STRONG_SECRET";
 
@@ -44,8 +49,15 @@ function sanitizeHeaders(h) {
 }
 
 export default {
-  async fetch(req) {
+  async fetch(req, _env, ctx) {
     try {
+      // ── WebSocket TCP relay ──────────────────────────────────────────────
+      // Upgrade requests bypass the normal HTTP relay path entirely.
+      // Endpoint: GET /tcp?k=<psk>&host=<host>&port=<port> + Upgrade: websocket
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        return handleWsTcpRelay(req, ctx);
+      }
+
       // Cloudflare dashboard and browsers commonly test a Worker with GET.
       // Return a friendly health response so users don't misread it as failure.
       if (req.method === "GET") {
@@ -116,3 +128,81 @@ export default {
     }
   },
 };
+
+// ── WebSocket TCP relay ────────────────────────────────────────────────────
+// Accepts a WebSocket upgrade, opens a raw TCP socket to the target host/port
+// using the cloudflare:sockets API, and pipes bytes bidirectionally.
+//
+// WS → TCP uses a TransformStream as a queue so that a single pipeTo() call
+// owns the tcpSocket.writable lock — no per-message getWriter/releaseLock
+// races, and backpressure is handled automatically.
+// TCP → WS uses a second pipeTo() into a WritableStream that calls serverWs.send().
+// ctx.waitUntil(Promise.all([...])) keeps the worker alive for both directions.
+
+async function handleWsTcpRelay(req, ctx) {
+  const url = new URL(req.url);
+
+  const k = url.searchParams.get("k") ?? "";
+  if (!PSK || k !== PSK) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  const host = url.searchParams.get("host") ?? "";
+  const port = parseInt(url.searchParams.get("port") ?? "", 10);
+
+  if (!host || !port || port < 1 || port > 65535) {
+    return new Response("Bad host/port", { status: 400 });
+  }
+
+  const { 0: clientWs, 1: serverWs } = new WebSocketPair();
+  serverWs.accept();
+
+  const tcpSocket = cfConnect({ hostname: host, port });
+
+  // WS → TCP: use a TransformStream as an ordered queue so that
+  // pipeTo() owns the tcpSocket.writable lock and handles backpressure.
+  // Per-message getWriter/releaseLock races are avoided entirely.
+  const { readable: toTcp, writable: toTcpSink } = new TransformStream();
+  const toTcpWriter = toTcpSink.getWriter();
+
+  serverWs.addEventListener("message", ({ data }) => {
+    const bytes =
+      data instanceof ArrayBuffer
+        ? new Uint8Array(data)
+        : new TextEncoder().encode(String(data));
+    toTcpWriter.write(bytes).catch(() => {});
+  });
+
+  serverWs.addEventListener("close", () => {
+    toTcpWriter.close().catch(() => {});
+    tcpSocket.close().catch(() => {});
+  });
+
+  serverWs.addEventListener("error", () => {
+    toTcpWriter.abort("ws error").catch(() => {});
+    tcpSocket.close().catch(() => {});
+  });
+
+  // Drain the queue into the TCP socket.
+  const wsTcpDone = toTcp.pipeTo(tcpSocket.writable).catch(() => {});
+
+  // TCP → WS: pipe TCP readable into WebSocket sends.
+  const tcpWsDone = tcpSocket.readable.pipeTo(
+    new WritableStream({
+      write(chunk) {
+        if (serverWs.readyState === 1 /* OPEN */) serverWs.send(chunk);
+      },
+      close() {
+        if (serverWs.readyState === 1) serverWs.close(1000, "TCP closed");
+      },
+      abort() {
+        if (serverWs.readyState === 1) serverWs.close(1011, "TCP error");
+      },
+    })
+  ).catch(() => {});
+
+  // Keep the worker alive for both pump directions.
+  ctx.waitUntil(Promise.all([wsTcpDone, tcpWsDone]));
+
+  return new Response(null, { status: 101, webSocket: clientWs });
+}
