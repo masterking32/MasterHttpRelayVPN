@@ -96,6 +96,8 @@ pip install -r requirements.txt
    - **Execute as:** Me
    - **Who has access:** Anyone
 9. روی **Deploy** بزنید.
+   - اگر پنجره‌ای باز شد، روی **Authorize access** کلیک کنید.
+   - اگر Google پیغام **Google hasn't verified this app** نشان داد، روی **Advanced** کلیک کنید و سپس **Go to <نام پروژه> (unsafe)** را بزنید تا ادامه دهید.
 10. مقدار **Deployment ID** را کپی کنید. در مرحله بعد به آن نیاز دارید.
 
 نکته: مقداری که برای `AUTH_KEY` می‌گذارید باید دقیقا با `auth_key` در فایل `config.json` یکی باشد.

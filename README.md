@@ -128,6 +128,8 @@ This is the "relay" that sits on Google's servers and fetches websites for you. 
    - **Execute as:** Me
    - **Who has access:** Anyone
 9. Click **Deploy**.
+   - If prompted, click **Authorize access**.
+   - You may see **Google hasn't verified this app**. Click **Advanced** then **Go to <your project name> (unsafe)** to continue.
 10. **Copy the Deployment ID** (it looks like a long random string). You'll need it in the next step.
 
 > ⚠️ Remember the password you set in step 5. You'll use the same password in the config file below.
