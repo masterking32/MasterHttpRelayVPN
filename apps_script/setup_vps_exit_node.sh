@@ -5,16 +5,23 @@
 # Installs and configures the vps_exit_node.py relay server as a systemd
 # service on a fresh Linux VPS.
 #
+# One-command install (fetches everything from GitHub automatically):
+#   curl -fsSL https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/master/apps_script/setup_vps_exit_node.sh | sudo bash
+#
+#   or with wget:
+#   wget -qO- https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/master/apps_script/setup_vps_exit_node.sh | sudo bash
+#
 # What this script does:
 #   1. Verifies the OS is Linux (aborts otherwise)
-#   2. Installs Python 3 if not present
-#   3. Creates /opt/exit-node/ and copies vps_exit_node.py there
-#   4. Prompts for a PSK (or generates one automatically)
-#   5. Prompts for the listen port (default: 8181)
-#   6. Writes /etc/exit-node.env  (holds EXIT_NODE_PSK — readable by root only)
-#   7. Installs a systemd service that auto-starts on boot
-#   8. Opens the chosen port in ufw / firewalld if either tool is present
-#   9. Prints the final config snippet to paste into config.json
+#   2. Fetches vps_exit_node.py from GitHub if not present locally
+#   3. Installs Python 3 if not present
+#   4. Creates /opt/exit-node/ and copies vps_exit_node.py there
+#   5. Prompts for a PSK (or generates one automatically)
+#   6. Prompts for the listen port (default: 8181)
+#   7. Writes /etc/exit-node.env  (holds EXIT_NODE_PSK — readable by root only)
+#   8. Installs a systemd service that auto-starts on boot
+#   9. Opens the chosen port in ufw / firewalld if either tool is present
+#  10. Prints the final config snippet to paste into config.json
 #
 # Usage (run as root or with sudo):
 #   bash setup_vps_exit_node.sh
@@ -22,6 +29,8 @@
 # =============================================================================
 
 set -euo pipefail
+
+GITHUB_RAW="https://raw.githubusercontent.com/masterking32/MasterHttpRelayVPN/master/apps_script"
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -45,14 +54,24 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-# ── Detect script directory so we can find vps_exit_node.py ──────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ── Locate or download vps_exit_node.py ──────────────────────────────────────
+# When piped from curl/wget, BASH_SOURCE[0] is /dev/stdin or empty,
+# so we always check a fixed temp path first, then fall back to GitHub.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/dev/stdin}")" 2>/dev/null && pwd || echo "/tmp")"
 PYTHON_SCRIPT="$SCRIPT_DIR/vps_exit_node.py"
 
 if [[ ! -f "$PYTHON_SCRIPT" ]]; then
-  error "vps_exit_node.py not found at: $PYTHON_SCRIPT"
-  error "Run this script from the apps_script/ directory of MasterHttpRelayVPN."
-  exit 1
+  info "vps_exit_node.py not found locally — fetching from GitHub..."
+  PYTHON_SCRIPT="/tmp/vps_exit_node.py"
+  if command -v curl &>/dev/null; then
+    curl -fsSL "$GITHUB_RAW/vps_exit_node.py" -o "$PYTHON_SCRIPT"
+  elif command -v wget &>/dev/null; then
+    wget -qO "$PYTHON_SCRIPT" "$GITHUB_RAW/vps_exit_node.py"
+  else
+    error "Neither curl nor wget is available. Install one and retry."
+    exit 1
+  fi
+  info "Downloaded vps_exit_node.py to $PYTHON_SCRIPT"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
