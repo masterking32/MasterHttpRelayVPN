@@ -16,3 +16,4 @@ venv/
 .gitignore
 .vscode/
 *.log
+adblock_cache/

@@ -36,5 +36,11 @@
 			".openai.com"
 		]
 	},
-	"log_level": "INFO"
+	"log_level": "INFO",
+	"adblock_lists": [
+		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerAds-Hosts.txt",
+		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerTrackers-Hosts.txt",
+		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerAnnoyances-Domains.txt",
+		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerHosts.txt"
+	]
 }

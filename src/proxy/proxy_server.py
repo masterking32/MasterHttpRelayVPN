@@ -145,6 +145,29 @@ class ProxyServer:
         # Both accept exact hostnames and leading-dot suffix patterns,
         # e.g. ".local" matches any *.local domain.
         self._block_hosts  = load_host_rules(config.get("block_hosts", []))
+
+        # ── Adblock host lists ─────────────────────────────────────
+        # adblock_lists: list of URLs to hosts-format blocklists.
+        # Lists are loaded from disk cache at startup (fast), then
+        # re-downloaded in background when the cache is stale.
+        self._adblock_urls: list[str] = [
+            str(u).strip() for u in config.get("adblock_lists", []) if u
+        ]
+        if self._adblock_urls:
+            try:
+                from core.adblock import load_all
+                _ab_domains = load_all(self._adblock_urls)
+                self._adblock_hosts = load_host_rules(_ab_domains)
+                log.info(
+                    "Adblock: %d domains active (%d lists)",
+                    len(_ab_domains), len(self._adblock_urls),
+                )
+            except Exception as exc:
+                log.warning("Adblock: failed to load lists at startup: %s", exc)
+                self._adblock_hosts = (set(), ())
+        else:
+            self._adblock_hosts = (set(), ())
+
         direct_hosts = config.get("direct_hosts", [])
         bypass_hosts = config.get("bypass_hosts")
         if bypass_hosts is None:
@@ -224,7 +247,27 @@ class ProxyServer:
             self._client_tasks.discard(task)
 
     def _is_blocked(self, host: str) -> bool:
-        return host_matches_rules(host, self._block_hosts)
+        return (
+            host_matches_rules(host, self._block_hosts)
+            or host_matches_rules(host, self._adblock_hosts)
+        )
+
+    async def _refresh_adblock_lists(self) -> None:
+        """Background task: re-download stale adblock lists and hot-swap rules."""
+        if not self._adblock_urls:
+            return
+        try:
+            from core.adblock import refresh_all
+
+            def _update(domains: list[str]) -> None:
+                self._adblock_hosts = load_host_rules(domains)
+                log.info(
+                    "Adblock: rules updated — %d domains active", len(domains)
+                )
+
+            await refresh_all(self._adblock_urls, callback=_update)
+        except Exception as exc:
+            log.warning("Adblock: background refresh failed: %s", exc)
 
     def _is_bypassed(self, host: str) -> bool:
         return host_matches_rules(host, self._bypass_hosts)
@@ -276,6 +319,10 @@ class ProxyServer:
                 "SOCKS5 proxy listening on %s:%d",
                 self.socks_host, self.socks_port,
             )
+
+        # Kick off adblock refresh in the background — won't block startup.
+        if self._adblock_urls:
+            asyncio.create_task(self._refresh_adblock_lists())
 
         try:
             async with http_srv:
