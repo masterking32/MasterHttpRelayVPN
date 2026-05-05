@@ -51,3 +51,6 @@ jobs:
         run: |
           python main.py --help
           python main.py --version
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests
