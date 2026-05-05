@@ -26,6 +26,10 @@ const SKIP_HEADERS = {
   "x-forwarded-port": 1, "x-real-ip": 1, "forwarded": 1, "via": 1,
   // Internal relay hop-count header — must not be forwarded to target sites.
   "x-mhr-hop": 1,
+  // UrlFetchApp does not decompress gzip/br/deflate responses — stripping
+  // accept-encoding forces targets to reply with plain (uncompressed) bodies
+  // so the relay never has to handle compressed content it cannot decode.
+  "accept-encoding": 1,
 };
 
 // Pattern that matches any Google Apps Script execution endpoint.

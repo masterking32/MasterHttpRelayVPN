@@ -22,9 +22,11 @@ classify_relay_error(raw) -> str
 
 import base64
 import codecs
+import gzip
 import json
 import logging
 import re
+import zlib
 
 log = logging.getLogger("Fronter")
 
@@ -230,6 +232,39 @@ def parse_relay_json(data: dict, max_body_bytes: int) -> bytes:
     status = data.get("s", 200)
     resp_headers = data.get("h", {})
     resp_body = base64.b64decode(data.get("b", ""))
+
+    # ── Decompress if the target sent a compressed body ─────────────────────────
+    # UrlFetchApp does NOT auto-decompress gzip/deflate responses, so if the
+    # client's Accept-Encoding header was forwarded and the server compressed
+    # its reply, we receive raw compressed bytes.  We decompress here so the
+    # browser always gets plain content (and we can safely drop the header).
+    _ce = ""
+    for _k, _v in resp_headers.items():
+        if _k.lower() == "content-encoding":
+            _ce = str(_v).lower().strip()
+            break
+    if _ce == "gzip":
+        try:
+            resp_body = gzip.decompress(resp_body)
+        except Exception as _exc:
+            log.debug("gzip decompress skipped (%s) — body may already be plain", _exc)
+    elif _ce in ("deflate", "zlib"):
+        try:
+            # Try zlib wrapper first, then raw deflate
+            resp_body = zlib.decompress(resp_body)
+        except Exception:
+            try:
+                resp_body = zlib.decompress(resp_body, -15)
+            except Exception as _exc:
+                log.debug("deflate decompress skipped (%s)", _exc)
+    elif _ce == "br":
+        # Brotli is uncommon in this relay path but log if seen so it is visible
+        log.debug("brotli-encoded response from target — install 'brotli' package for support")
+        try:
+            import brotli  # type: ignore
+            resp_body = brotli.decompress(resp_body)
+        except Exception:
+            pass  # leave body as-is; browser will likely fail gracefully
     if len(resp_body) > max_body_bytes:
         return error_response(
             502,

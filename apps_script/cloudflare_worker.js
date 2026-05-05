@@ -19,6 +19,9 @@ const STRIP_HEADERS = new Set([
   "via",
   // Internal relay hop header — must not propagate to the final target.
   "x-mhr-hop",
+  // Workers cannot decompress gzip/br/deflate — stripping accept-encoding
+  // forces targets to reply with plain bodies the Worker can forward as-is.
+  "accept-encoding",
 ]);
 
 function decodeBase64ToBytes(input) {

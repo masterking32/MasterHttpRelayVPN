@@ -1202,9 +1202,18 @@ class DomainFronter:
         body of the outer Apps Script relay call, so Apps Script POSTs it to
         the exit node URL on our behalf.
         """
-        # Build inner payload: what the exit node will execute
+        # Build inner payload: what the exit node will execute.
+        # Strip accept-encoding from the inner headers so the target site
+        # returns an uncompressed body.  Exit nodes (CF Worker, VPS) make
+        # plain Python/JS fetch() calls that don't auto-decompress, so a
+        # compressed response body would be forwarded as garbled bytes.
         inner = dict(payload)
         inner["k"] = self._exit_node_psk
+        if isinstance(inner.get("h"), dict):
+            inner["h"] = {
+                k: v for k, v in inner["h"].items()
+                if k.lower() != "accept-encoding"
+            }
         inner_json = json.dumps(inner).encode()
 
         # Build outer payload: what Apps Script will fetch

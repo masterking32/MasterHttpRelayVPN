@@ -77,6 +77,9 @@ _STRIP_HEADERS = frozenset(
         "x-real-ip",
         "forwarded",
         "via",
+        # urllib.request cannot decompress gzip/br/deflate — stripping this
+        # forces targets to reply with plain bodies the server can forward.
+        "accept-encoding",
     ]
 )
 
