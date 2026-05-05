@@ -22,6 +22,7 @@ except Exception:  # optional dependency fallback
 from core.constants import (
     CACHE_MAX_MB,
     CLIENT_IDLE_TIMEOUT,
+    DEFAULT_BYPASS_HOSTS,
     GOOGLE_DIRECT_ALLOW_EXACT,
     GOOGLE_DIRECT_ALLOW_SUFFIXES,
     GOOGLE_DIRECT_EXACT_EXCLUDE,
@@ -73,14 +74,15 @@ class ProxyServer:
 
     def __init__(self, config: dict):
         self.host = config.get("listen_host", "127.0.0.1")
-        self.port = config.get("listen_port", 8080)
-        self.socks_enabled = config.get("socks5_enabled", True)
+        # Prefer the new key (http_port) but keep listen_port for old configs.
+        self.port = config.get("http_port", config.get("listen_port", 8080))
+        self.socks_enabled = True
         self.socks_host = config.get("socks5_host", self.host)
         self.socks_port = config.get("socks5_port", 1080)
         if self.socks_enabled and self.socks_host == self.host \
                 and int(self.socks_port) == int(self.port):
             raise ValueError(
-                f"listen_port and socks5_port must differ on the same host "
+                f"http_port and socks5_port must differ on the same host "
                 f"(both set to {self.port} on {self.host}). "
                 f"Change one of them in config.json."
             )
@@ -137,12 +139,19 @@ class ProxyServer:
         }
 
         # ── Per-host policy ────────────────────────────────────────
-        # block_hosts  — refuse traffic entirely (close or 403)
-        # bypass_hosts — route directly (no MITM, no relay)
+        # block_hosts   — refuse traffic entirely (close or 403)
+        # direct_hosts  — route directly (no MITM, no relay)
+        # bypass_hosts  — legacy alias kept for backward compatibility
         # Both accept exact hostnames and leading-dot suffix patterns,
         # e.g. ".local" matches any *.local domain.
         self._block_hosts  = load_host_rules(config.get("block_hosts", []))
-        self._bypass_hosts = load_host_rules(config.get("bypass_hosts", []))
+        direct_hosts = config.get("direct_hosts", [])
+        bypass_hosts = config.get("bypass_hosts")
+        if bypass_hosts is None:
+            bypass_hosts = list(DEFAULT_BYPASS_HOSTS)
+        self._bypass_hosts = load_host_rules(
+            list(bypass_hosts) + list(direct_hosts)
+        )
 
         # Route YouTube through the relay when requested; the Google frontend
         # IP can enforce SafeSearch on the SNI-rewrite path.
@@ -428,7 +437,7 @@ class ProxyServer:
             return
 
         if self._is_bypassed(host):
-            log.info("Bypass tunnel → %s:%d (matches bypass_hosts)", host, port)
+            log.info("Direct tunnel → %s:%d (matches direct_hosts/bypass_hosts)", host, port)
             await self._do_direct_tunnel(host, port, reader, writer)
             return
 

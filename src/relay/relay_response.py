@@ -224,7 +224,7 @@ def parse_relay_json(data: dict, max_body_bytes: int) -> bytes:
         return error_response(
             502,
             f"Relay response exceeds cap ({max_body_bytes} bytes). "
-            "Increase max_response_body_bytes if your system has enough RAM.",
+            "Increase MAX_RESPONSE_BODY_BYTES in src/core/constants.py if your system has enough RAM.",
         )
 
     status_text = {

@@ -155,14 +155,12 @@ It'll prompt for your Deployment ID, generate a random `auth_key`, and write
 2. Open `config.json` in any text editor and fill in your values:
    ```json
    {
-     "mode": "apps_script",
      "google_ip": "216.239.38.120",
      "front_domain": "www.google.com",
      "script_id": "PASTE_YOUR_DEPLOYMENT_ID_HERE",
      "auth_key": "your-secret-password-here",
      "listen_host": "127.0.0.1",
-     "listen_port": 8085,
-     "socks5_enabled": true,
+    "http_port": 8085,
      "socks5_port": 1080,
      "log_level": "INFO",
      "verify_ssl": true
@@ -301,7 +299,7 @@ By default, the proxy only listens on `127.0.0.1` (localhost), meaning only your
 {
   "lan_sharing": true,
   "listen_host": "0.0.0.0",
-  "listen_port": 8085
+  "http_port": 8085
 }
 ```
 
@@ -326,7 +324,7 @@ This project is centered on the **Apps Script** relay (free, no VPS needed). For
 | `auth_key` | Password shared between your computer and the relay |
 | `script_id` | Your Google Apps Script Deployment ID |
 | `listen_host` | Where to listen (`127.0.0.1` = only this computer, `0.0.0.0` = all interfaces for LAN sharing) |
-| `listen_port` | Which port to listen on (default: `8085`) |
+| `http_port` | Which HTTP proxy port to listen on (default: `8085`) |
 | `lan_sharing` | Enable LAN sharing to allow other devices on your network to use the proxy (`false` by default) |
 | `log_level` | How much detail to show: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
@@ -340,20 +338,45 @@ This project is centered on the **Apps Script** relay (free, no VPS needed). For
 | `relay_timeout` | `25` | Total timeout for one relayed request before it fails |
 | `tls_connect_timeout` | `15` | Timeout for the proxy's TLS connection to the fronted Google/CDN endpoint |
 | `tcp_connect_timeout` | `10` | Timeout for direct TCP tunnels and outbound SNI-rewrite connects |
-| `max_response_body_bytes` | `209715200` | Hard cap for a single relay response body after buffering/decoding |
 | `script_ids` | — | Multiple Script IDs for load balancing (array) |
 | `chunked_download_extensions` | see [config.example.json](config.example.json) | File extensions that should use parallel range downloading. Supports `".*"` to probe all GET downloads. |
 | `chunked_download_min_size` | `5242880` | Minimum total file size (5 MB) before range-parallel download stays enabled |
 | `chunked_download_chunk_size` | `524288` | Per-range chunk size used by parallel downloads |
 | `chunked_download_max_parallel` | `8` | Maximum simultaneous range requests for one download |
 | `chunked_download_max_chunks` | `256` | Soft upper bound for total chunk requests; chunk size is raised automatically for very large files |
+| `hosts` | `{}` | Manual DNS override map (`hostname` or `.suffix` -> IP). Example: `{ "example.org": "93.184.216.34", ".internal.lan": "192.168.1.10" }`. |
 | `block_hosts` | `[]` | Hosts that must never be tunneled (return HTTP 403). Supports exact names (`ads.example.com`) or leading-dot suffixes (`.doubleclick.net`). |
+| `direct_hosts` | `[]` | Hosts that must always go direct (no MITM and no relay/domain-fronting). Supports exact names and leading-dot suffixes. |
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | Hosts that go direct (no MITM, no relay). Useful for LAN resources or sites that break under MITM. |
 | `direct_google_exclude` | see [config.example.json](config.example.json) | Google apps that must use the MITM relay path instead of the fast direct tunnel. |
-| `hosts` | `{}` | Manual DNS override: map a hostname to a specific IP. |
 | `youtube_via_relay` | `false` | Route YouTube (`youtube.com`, `youtu.be`, `youtube-nocookie.com`) through the Apps Script relay instead of the SNI-rewrite path. The SNI-rewrite path uses Google's frontend IP which enforces SafeSearch and can cause **"Video Unavailable"** errors. Setting this to `true` fixes playback at the cost of using more Apps Script executions and slightly higher latency. |
 | `exit_node.provider` | `cloudflare` | Selected exit-node backend: `cloudflare`, `deno`, `vps`, or `custom`. |
 | `exit_node.url` | `""` | Beginner-friendly single URL for the selected provider. |
+
+Practical host-policy example:
+
+```json
+{
+  "block_hosts": [
+    "ads.example.com",
+    ".doubleclick.net"
+  ],
+  "direct_hosts": [
+    "chat.openai.com",
+    ".openai.com"
+  ],
+  "hosts": {
+    "example.org": "93.184.216.34",
+    ".internal.lan": "192.168.1.10"
+  }
+}
+```
+
+- `block_hosts`: deny requests entirely (`403`) for exact names or full suffix trees.
+- `direct_hosts`: force plain direct tunnel only (no MITM, no relay fronting).
+- `hosts`: force DNS mapping before any real lookup (useful for testing/split-DNS workarounds).
+
+Note: the relay response body cap is now a code constant (`MAX_RESPONSE_BODY_BYTES`) in [src/core/constants.py](src/core/constants.py), not a user config key.
 
 ### Optional Dependencies
 
@@ -395,7 +418,6 @@ If you change `Code.gs`, you must **create a new deployment** in Google Apps Scr
 python3 main.py                          # Normal start
 python3 main.py -p 9090                  # Use HTTP port 9090 instead
 python3 main.py --socks5-port 1081       # Use SOCKS5 port 1081
-python3 main.py --disable-socks5         # Disable SOCKS5 listener
 python3 main.py --log-level DEBUG        # Show detailed logs
 python3 main.py -c /path/to/config.json  # Use a different config file
 python3 main.py --install-cert           # Install MITM CA certificate and exit

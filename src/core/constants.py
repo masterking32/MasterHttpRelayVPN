@@ -107,6 +107,17 @@ FRONT_SNI_POOL_GOOGLE: tuple[str, ...] = (
 )
 
 
+# ── Bypass hosts (direct, no MITM/relay) ────────────────────────────────
+# Applied when bypass_hosts is omitted from config.json.
+# Advanced users can override this list in config.json under "bypass_hosts".
+DEFAULT_BYPASS_HOSTS: tuple[str, ...] = (
+    "localhost",
+    ".local",
+    ".lan",
+    ".home.arpa",
+)
+
+
 # ── Per-host stats ────────────────────────────────────────────────────────
 STATS_LOG_INTERVAL      = 300.0   # seconds — how often to log per-host totals
 STATS_LOG_TOP_N         = 10      # how many hosts to include in the log

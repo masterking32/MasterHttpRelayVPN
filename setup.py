@@ -77,12 +77,10 @@ def load_base_config() -> dict:
         except Exception:
             pass
     return {
-        "mode": "apps_script",
         "google_ip": "216.239.38.120",
         "front_domain": "www.google.com",
         "listen_host": "127.0.0.1",
-        "listen_port": 8085,
-        "socks5_enabled": True,
+        "http_port": 8085,
         "socks5_port": 1080,
         "log_level": "INFO",
         "verify_ssl": True,
@@ -90,11 +88,7 @@ def load_base_config() -> dict:
         "relay_timeout": 25,
         "tls_connect_timeout": 15,
         "tcp_connect_timeout": 10,
-        "max_response_body_bytes": 200 * 1024 * 1024,
-        "chunked_download_min_size": 5 * 1024 * 1024,
-        "chunked_download_chunk_size": 512 * 1024,
-        "chunked_download_max_parallel": 8,
-        "chunked_download_max_chunks": 256,
+        "direct_hosts": [],
         "hosts": {},
     }
 
@@ -137,20 +131,21 @@ def configure_network(cfg: dict) -> dict:
         default_host = "0.0.0.0"
     cfg["listen_host"] = prompt("Listen host", default=default_host)
 
-    port = prompt("HTTP proxy port", default=str(cfg.get("listen_port", 8085)))
+    port = prompt(
+        "HTTP proxy port",
+        default=str(cfg.get("http_port", cfg.get("listen_port", 8085))),
+    )
     try:
-        cfg["listen_port"] = int(port)
+        cfg["http_port"] = int(port)
     except ValueError:
-        cfg["listen_port"] = 8085
+        cfg["http_port"] = 8085
 
-    socks5 = prompt_yes_no("Enable SOCKS5 proxy?", default=bool(cfg.get("socks5_enabled", True)))
-    cfg["socks5_enabled"] = socks5
-    if socks5:
-        sport = prompt("SOCKS5 port", default=str(cfg.get("socks5_port", 1080)))
-        try:
-            cfg["socks5_port"] = int(sport)
-        except ValueError:
-            cfg["socks5_port"] = 1080
+    # SOCKS5 is always enabled at runtime; only port is configurable.
+    sport = prompt("SOCKS5 port", default=str(cfg.get("socks5_port", 1080)))
+    try:
+        cfg["socks5_port"] = int(sport)
+    except ValueError:
+        cfg["socks5_port"] = 1080
     return cfg
 
 
@@ -175,7 +170,6 @@ def main() -> int:
             return 0
 
     cfg = load_base_config()
-    cfg["mode"] = "apps_script"
 
     suggested_key = random_auth_key()
     print()

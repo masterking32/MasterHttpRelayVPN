@@ -50,7 +50,7 @@ def parse_args():
         "-p", "--port",
         type=int,
         default=None,
-        help="Override listen port (env: DFT_PORT)",
+        help="Override HTTP proxy port (env: DFT_HTTP_PORT, legacy: DFT_PORT)",
     )
     parser.add_argument(
         "--host",
@@ -66,7 +66,7 @@ def parse_args():
     parser.add_argument(
         "--disable-socks5",
         action="store_true",
-        help="Disable the built-in SOCKS5 listener.",
+        help="Deprecated: SOCKS5 listener is always enabled.",
     )
     parser.add_argument(
         "--log-level",
@@ -170,9 +170,15 @@ def main():
 
     # CLI argument overrides
     if args.port is not None:
-        config["listen_port"] = args.port
+        config["http_port"] = args.port
+    elif os.environ.get("DFT_HTTP_PORT"):
+        config["http_port"] = int(os.environ["DFT_HTTP_PORT"])
     elif os.environ.get("DFT_PORT"):
-        config["listen_port"] = int(os.environ["DFT_PORT"])
+        config["http_port"] = int(os.environ["DFT_PORT"])
+
+    # Backward compatibility for older config files.
+    if "http_port" not in config:
+        config["http_port"] = int(config.get("listen_port", 8080))
 
     if args.host is not None:
         config["listen_host"] = args.host
@@ -185,7 +191,12 @@ def main():
         config["socks5_port"] = int(os.environ["DFT_SOCKS5_PORT"])
 
     if args.disable_socks5:
-        config["socks5_enabled"] = False
+        logging.getLogger("Main").warning(
+            "--disable-socks5 is deprecated and ignored: SOCKS5 is always enabled."
+        )
+
+    # Keep runtime behavior fixed regardless of user config values.
+    config["socks5_enabled"] = True
 
     if args.log_level is not None:
         config["log_level"] = args.log_level
@@ -273,8 +284,8 @@ def main():
     # print concrete IPv4 addresses users can use on other devices.
     lan_mode = lan_sharing or listen_host in ("0.0.0.0", "::")
     if lan_mode:
-        socks_port = config.get("socks5_port", 1080) if config.get("socks5_enabled", True) else None
-        log_lan_access(config.get("listen_port", 8080), socks_port)
+        socks_port = config.get("socks5_port", 1080)
+        log_lan_access(config.get("http_port", config.get("listen_port", 8080)), socks_port)
 
     try:
         asyncio.run(_run(config))

@@ -116,14 +116,12 @@ cp config.example.json config.json
 
 ```json
 {
-  "mode": "apps_script",
   "google_ip": "216.239.38.120",
   "front_domain": "www.google.com",
   "script_id": "PASTE_YOUR_DEPLOYMENT_ID_HERE",
   "auth_key": "your-secret-password-here",
   "listen_host": "127.0.0.1",
-  "listen_port": 8085,
-  "socks5_enabled": true,
+  "http_port": 8085,
   "socks5_port": 1080,
   "log_level": "INFO",
   "verify_ssl": true
@@ -254,7 +252,7 @@ json
 {
   "lan_sharing": true,
   "listen_host": "0.0.0.0",
-  "listen_port": 8085
+  "http_port": 8085
 }
 
 **هشدار امنیتی:** وقتی اشتراک‌گذاری در شبکه محلی فعال باشد، هر کسی در شبکه محلی شما می‌تواند از پروکسی شما استفاده کند. اطمینان حاصل کنید که شبکه شما مورد اعتماد است و اقدامات امنیتی بیشتری را در نظر بگیرید.
@@ -270,7 +268,7 @@ json
 | `auth_key` | رمز مشترک بین کامپیوتر شما و رله |
 | `script_id` | شناسه Deployment مربوط به Google Apps Script شما |
 | `listen_host` | محل گوش دادن (`127.0.0.1` = فقط همین کامپیوتر، `0.0.0.0` = همه اینترفیس‌ها برای اشتراک‌گذاری LAN) |
-| `listen_port` | پورتی که پروکسی روی آن اجرا می‌شود (پیش‌فرض: `8085`) |
+| `http_port` | پورت HTTP پروکسی (پیش‌فرض: `8085`) |
 | `lan_sharing` | فعال‌سازی اشتراک‌گذاری LAN تا دستگاه‌های دیگر در شبکه شما بتوانند از پروکسی استفاده کنند (به‌صورت پیش‌فرض `false`) |
 | `log_level` | میزان جزئیات لاگ: `DEBUG`، `INFO`، `WARNING`، `ERROR` |
 
@@ -284,19 +282,45 @@ json
 | `relay_timeout` | `25` | مهلت کل برای هر درخواست relay قبل از fail شدن |
 | `tls_connect_timeout` | `15` | مهلت اتصال TLS پروکسی به endpoint fronted روی Google/CDN |
 | `tcp_connect_timeout` | `10` | مهلت اتصال برای tunnel مستقیم و SNI-rewrite |
-| `max_response_body_bytes` | `209715200` | سقف نهایی برای اندازه body هر پاسخ relay بعد از buffer/decode |
 | `script_ids` | - | چند Deployment ID برای load balancing |
 | `chunked_download_extensions` | مطابق [config.example.json](config.example.json) | پسوند فایل‌هایی که باید از دانلود range-parallel استفاده کنند. از `".*"` هم برای probe همه دانلودهای GET پشتیبانی می‌شود. |
 | `chunked_download_min_size` | `5242880` | حداقل اندازه کل فایل (۵ مگابایت) برای فعال ماندن دانلود موازی |
 | `chunked_download_chunk_size` | `524288` | اندازه هر chunk در دانلود موازی |
 | `chunked_download_max_parallel` | `8` | حداکثر تعداد range request همزمان برای یک دانلود |
 | `chunked_download_max_chunks` | `256` | سقف نرم برای تعداد کل chunk request ها؛ برای فایل‌های خیلی بزرگ اندازه chunk به‌صورت خودکار بیشتر می‌شود |
+| `hosts` | `{}` | نگاشت دستی DNS (`hostname` یا `.suffix` به IP). مثال: `{ "example.org": "93.184.216.34", ".internal.lan": "192.168.1.10" }`. |
 | `block_hosts` | `[]` | هاست‌هایی که هرگز نباید tunnel شوند (پاسخ 403). نام دقیق (`ads.example.com`) یا پسوند با نقطه‌ی ابتدایی (`.doubleclick.net`). |
+| `direct_hosts` | `[]` | دامنه‌هایی که همیشه باید مستقیم بروند (بدون MITM و بدون relay/domain-fronting). از نام دقیق یا پسوند نقطه‌دار پشتیبانی می‌کند. |
 | `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | هاست‌هایی که مستقیم می‌روند (بدون MITM و بدون رله). برای منابع داخلی شبکه یا سایت‌هایی که با MITM مشکل دارند. |
 | `direct_google_exclude` | مراجعه به [config.example.json](config.example.json) | اپ‌های Google که باید از مسیر MITM برای رله استفاده کنند به‌جای tunnel مستقیم. |
 | `youtube_via_relay` | `false` | مسیردهی YouTube (`youtube.com`، `youtu.be`، `youtube-nocookie.com`) از طریق رله Apps Script به‌جای مسیر SNI-rewrite. مسیر SNI-rewrite از IP فرانت‌اند Google عبور می‌کند که SafeSearch را اجباری می‌کند و می‌تواند باعث خطای **«ویدیو در دسترس نیست»** شود. با فعال کردن این گزینه، پخش ویدیو درست می‌شود اما تعداد اجراهای Apps Script بیشتر و تأخیر اندکی بالاتر می‌رود. |
 | `exit_node.provider` | `cloudflare` | backend انتخاب‌شده برای exit node: `cloudflare`، `deno`، `vps` یا `custom`. |
 | `exit_node.url` | `""` | آدرس ساده و اصلی برای provider انتخاب‌شده. |
+
+نمونه کاربردی برای policy ها:
+
+```json
+{
+  "block_hosts": [
+    "ads.example.com",
+    ".doubleclick.net"
+  ],
+  "direct_hosts": [
+    "chat.openai.com",
+    ".openai.com"
+  ],
+  "hosts": {
+    "example.org": "93.184.216.34",
+    ".internal.lan": "192.168.1.10"
+  }
+}
+```
+
+- `block_hosts`: این دامنه‌ها کامل مسدود می‌شوند (پاسخ `403`).
+- `direct_hosts`: این دامنه‌ها همیشه مستقیم می‌روند (بدون MITM و بدون relay fronting).
+- `hosts`: قبل از DNS واقعی، نگاشت دستی اعمال می‌شود (برای تست یا split-DNS workaround).
+
+نکته: سقف اندازه پاسخ relay حالا یک مقدار ثابت کدی (`MAX_RESPONSE_BODY_BYTES`) در [src/core/constants.py](src/core/constants.py) است و دیگر گزینه‌ی کاربری config نیست.
 
 ### وابستگی‌های اختیاری
 
@@ -337,7 +361,6 @@ json
 python3 main.py
 python3 main.py -p 9090
 python3 main.py --socks5-port 1081
-python3 main.py --disable-socks5
 python3 main.py --log-level DEBUG
 python3 main.py -c /path/to/config.json
 python3 main.py --install-cert        # نصب گواهی CA و خروج

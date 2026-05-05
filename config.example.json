@@ -1,90 +1,30 @@
 {
-	"mode": "apps_script",
 	"google_ip": "216.239.38.120",
 	"front_domain": "www.google.com",
 	"script_id": "YOUR_APPS_SCRIPT_DEPLOYMENT_ID",
 	"auth_key": "CHANGE_ME_TO_A_STRONG_SECRET",
 	"listen_host": "127.0.0.1",
-	"socks5_enabled": true,
-	"listen_port": 8085,
+	"http_port": 8085,
 	"socks5_port": 1080,
-	"log_level": "INFO",
 	"verify_ssl": true,
-	"lan_sharing": true,
+	"lan_sharing": false,
 	"relay_timeout": 25,
 	"tls_connect_timeout": 15,
 	"tcp_connect_timeout": 10,
-	"max_response_body_bytes": 209715200,
 	"parallel_relay": 1,
-	"chunked_download_extensions": [
-		".bin",
-		".zip",
-		".tar",
-		".gz",
-		".bz2",
-		".xz",
-		".7z",
-		".rar",
-		".exe",
-		".msi",
-		".dmg",
-		".deb",
-		".rpm",
-		".apk",
-		".iso",
-		".img",
-		".mp4",
-		".mkv",
-		".avi",
-		".mov",
-		".webm",
-		".mp3",
-		".flac",
-		".wav",
-		".aac",
-		".pdf",
-		".doc",
-		".docx",
-		".ppt",
-		".pptx",
-		".wasm"
+	"block_hosts": [
+		"ads.example.com",
+		".doubleclick.net"
 	],
-	"chunked_download_min_size": 5242880,
-	"chunked_download_chunk_size": 524288,
-	"chunked_download_max_parallel": 8,
-	"chunked_download_max_chunks": 256,
-	"block_hosts": [],
-	"bypass_hosts": [
-		"localhost",
-		".local",
-		".lan",
-		".home.arpa"
-	],
-	"direct_google_exclude": [
-		"gemini.google.com",
-		"aistudio.google.com",
-		"notebooklm.google.com",
-		"labs.google.com",
-		"meet.google.com",
-		"accounts.google.com",
-		"ogs.google.com",
-		"mail.google.com",
-		"calendar.google.com",
-		"drive.google.com",
-		"docs.google.com",
-		"chat.google.com",
-		"maps.google.com",
-		"play.google.com",
-		"translate.google.com",
-		"assistant.google.com",
-		"lens.google.com"
-	],
-	"direct_google_allow": [
-		"www.google.com",
-		"safebrowsing.google.com"
+	"direct_hosts": [
+		"rubika.ir",
+		"soft98.ir"
 	],
 	"youtube_via_relay": false,
-	"hosts": {},
+	"hosts": {
+		"example.org": "93.184.216.34",
+		".internal.lan": "192.168.1.10"
+	},
 	"exit_node": {
 		"enabled": false,
 		"provider": "cloudflare",
@@ -92,8 +32,9 @@
 		"psk": "",
 		"mode": "full",
 		"hosts": [
-			"example.com",
-			"example.org"
+			".chatgpt.com",
+			".openai.com"
 		]
-	}
+	},
+	"log_level": "INFO"
 }

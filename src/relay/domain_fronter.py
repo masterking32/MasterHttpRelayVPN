@@ -137,10 +137,9 @@ class DomainFronter:
             config, "tls_connect_timeout", TLS_CONNECT_TIMEOUT, minimum=1.0,
         )
         self._sni_probe_timeout = min(self._tls_connect_timeout, 4.0)
-        self._max_response_body_bytes = self._cfg_int(
-            config, "max_response_body_bytes", MAX_RESPONSE_BODY_BYTES,
-            minimum=1024,
-        )
+        # Keep response cap as a code-level constant to avoid exposing an
+        # advanced memory-safety knob in end-user config.
+        self._max_response_body_bytes = MAX_RESPONSE_BODY_BYTES
 
         # Connection pool — TTL-based, pre-warmed, with concurrency control
         self._pool: list[tuple[asyncio.StreamReader, asyncio.StreamWriter, float]] = []
@@ -1418,7 +1417,7 @@ class DomainFronter:
                 502,
                 "Relay response exceeds cap "
                 f"({self._max_response_body_bytes} bytes). "
-                "Increase max_response_body_bytes if your system has enough RAM.",
+                "Increase MAX_RESPONSE_BODY_BYTES in src/core/constants.py if your system has enough RAM.",
             )
         if min_size > 0 and total_size < min_size:
             return self._rewrite_206_to_200(first_resp)
