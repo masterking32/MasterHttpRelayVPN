@@ -1826,7 +1826,8 @@ class DomainFronter:
             # internal proxy metadata to the upstream destination server.
             filt = {k: v for k, v in headers.items()
                     if k.lower() not in self._STRIP_HEADERS}
-            payload["h"] = filt if filt else headers
+            if filt:
+                payload["h"] = filt
         if body:
             payload["b"] = base64.b64encode(body).decode()
             ct = headers.get("Content-Type") or headers.get("content-type")
