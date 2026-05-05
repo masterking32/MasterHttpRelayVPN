@@ -216,6 +216,29 @@ Notes:
 - `mode: "selective"` = only domains in `hosts` go through exit node.
 - `psk` must exactly match your deployed exit node secret.
 
+**Failover (multiple exit nodes):** Add a `urls` list to configure fallback exit nodes. The proxy monitors all of them with periodic health checks and automatically switches to the next available URL when one goes down:
+
+```json
+"exit_node": {
+  "enabled": true,
+  "provider": "cloudflare",
+  "url": "https://PRIMARY-WORKER.YOUR-SUBDOMAIN.workers.dev",
+  "urls": [
+    "https://PRIMARY-WORKER.YOUR-SUBDOMAIN.workers.dev",
+    "https://FALLBACK-WORKER.YOUR-SUBDOMAIN.workers.dev"
+  ],
+  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
+  "mode": "full",
+  "health_check_interval": 30,
+  "health_check_failures_before_failover": 3
+}
+```
+
+- `urls` — ordered list of exit node URLs; primary first, fallbacks after.
+- `health_check_interval` — seconds between health checks (default: `30`).
+- `health_check_failures_before_failover` — consecutive failures before a URL is marked dead and the next one is tried (default: `3`).
+- When the primary URL recovers, the proxy automatically switches back to it.
+
 Production recommendation:
 - Keep `verify_ssl: true`
 - Keep `listen_host: 127.0.0.1` unless LAN sharing is explicitly needed

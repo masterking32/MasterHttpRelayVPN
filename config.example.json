@@ -89,11 +89,14 @@
 		"enabled": false,
 		"provider": "cloudflare",
 		"url": "",
+		"urls": [],
 		"psk": "",
 		"mode": "full",
 		"hosts": [
 			"example.com",
 			"example.org"
-		]
+		],
+		"health_check_interval": 30,
+		"health_check_failures_before_failover": 3
 	}
 }
