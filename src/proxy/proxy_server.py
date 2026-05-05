@@ -531,6 +531,11 @@ class ProxyServer:
           1. Explicit entry in config `hosts` map (exact or suffix match).
           2. Built-in `_SNI_REWRITE_SUFFIXES` → mapped to config `google_ip`.
         """
+        # Force 'music.youtube.com' to use the relay regardless of youtube_via_relay setting.
+        h = host.lower().rstrip(".")
+        if h == "music.youtube.com" or h.endswith(".music.youtube.com"):
+            return None
+            
         ip = self._hosts_ip(host)
         if ip:
             return ip
