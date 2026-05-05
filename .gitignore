@@ -37,3 +37,4 @@ domainfront_certs_*/
 
 # Local scripts (excluded from git pushes)
 scripts/
+ideas.md
