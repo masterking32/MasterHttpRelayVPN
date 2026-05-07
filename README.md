@@ -94,9 +94,8 @@ instructions in **Step 2** below before running the wizard so you have a
 Deployment ID ready.
 
 ---
-### Windows Application (GUI)
-This application is fast, fully portable, and requires no prerequisites, installation, or configuration.
-For more details and documentation, visit the [MasterHttpRelayVPN](https://github.com/AriPath/MasterVPN) repository.
+**Windows Application (GUI)** This application is fast, fully portable, and requires no prerequisites, installation, or configuration.  
+For more details and documentation, visit the [MasterHttpRelayVPN](https://github.com/AriPath/MasterVPN) repository.  
 The application files are available in the [`Windows App`](./Windows%20App/) directory of this project.
 ---
 
