@@ -93,6 +93,13 @@ and generates a strong random password for you. Follow the Apps Script deploymen
 instructions in **Step 2** below before running the wizard so you have a
 Deployment ID ready.
 
+---
+
+### Windows Application (GUI)
+
+This application is fast, fully portable, and requires no prerequisites, installation, or configuration. For more details and documentation, visit the <a href="https://github.com/AriPath/MasterVPN"><strong>MasterHttpRelayVPN</strong></a> repository. The application files are available in the <a href="./Windows%20App/"><strong><code>Windows App</code></strong></a> directory of this project.
+
+---
 
 ## Step-by-Step Setup Guide (Manual)
 
