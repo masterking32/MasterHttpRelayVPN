@@ -1433,6 +1433,22 @@ class DomainFronter:
             except asyncio.TimeoutError:
                 log.debug("Pool warm timeout — proceeding with cold pool")
 
+        # SABR / videoplayback: strip quality-track selection fields (field 3,
+        # tag 0x1a) from the top-level protobuf before relaying.  Those entries
+        # ask googlevideo to bundle multiple simultaneous quality tracks into one
+        # response, which easily exceeds Apps Script UrlFetchApp's ~10 MB buffer
+        # and produces "Response too large" → 502.  Removing them forces a
+        # single-track response that stays within the limit.
+        if method == "POST" and body and "/videoplayback" in url:
+            stripped = self._strip_sabr_quality_tracks(body)
+            if stripped != body:
+                log.debug(
+                    "SABR strip: removed %d quality-track bytes from %s",
+                    len(body) - len(stripped),
+                    url.split("?")[0][-60:],
+                )
+                body = stripped
+
         payload = self._build_payload(method, url, headers, body)
 
         # Exit node short-circuit: route to non-Google IP before Apps Script
@@ -1969,6 +1985,72 @@ class DomainFronter:
         "proxy-authorization",   # never forward credentials to origin
         "proxy-connection",
     })
+
+    @staticmethod
+    def _strip_sabr_quality_tracks(body: bytes) -> bytes:
+        """Strip field-3 (quality-track selection) entries from a SABR protobuf.
+
+        SABR videoplayback POST bodies may contain field-3 (tag byte 0x1a,
+        wire-type 2) entries that select multiple simultaneous quality tracks.
+        The combined multi-track response easily exceeds Apps Script
+        UrlFetchApp's ~10 MB response buffer.  Removing these top-level
+        field-3 entries forces a single-track response within the limit.
+
+        Only top-level fields are inspected; nested messages are left intact.
+        If any unrecognised wire type is encountered the remainder of the
+        buffer is copied verbatim so a malformed body is never silently lost.
+        """
+        out = bytearray()
+        i = 0
+        n = len(body)
+        while i < n:
+            seg_start = i
+            # ── decode varint tag ───────────────────────────────────
+            tag = 0
+            shift = 0
+            while i < n:
+                b = body[i]; i += 1
+                tag |= (b & 0x7F) << shift
+                shift += 7
+                if not (b & 0x80):
+                    break
+            else:
+                # truncated tag byte — copy remainder verbatim
+                out.extend(body[seg_start:])
+                break
+
+            field_number = tag >> 3
+            wire_type    = tag & 0x07
+
+            # ── advance i past the field value ─────────────────────
+            if wire_type == 0:          # varint
+                while i < n and (body[i] & 0x80):
+                    i += 1
+                if i < n:
+                    i += 1
+            elif wire_type == 1:        # 64-bit fixed
+                i = min(i + 8, n)
+            elif wire_type == 2:        # length-delimited
+                val_len = 0
+                shift = 0
+                while i < n:
+                    b = body[i]; i += 1
+                    val_len |= (b & 0x7F) << shift
+                    shift += 7
+                    if not (b & 0x80):
+                        break
+                i = min(i + val_len, n)
+            elif wire_type == 5:        # 32-bit fixed
+                i = min(i + 4, n)
+            else:
+                # unknown wire type — cannot safely skip; copy rest verbatim
+                out.extend(body[seg_start:])
+                break
+
+            if field_number != 3:
+                out.extend(body[seg_start:i])
+
+        return bytes(out)
 
     def _build_payload(self, method, url, headers, body):
         """Build the JSON relay payload dict."""
