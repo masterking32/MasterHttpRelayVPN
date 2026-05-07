@@ -1988,24 +1988,45 @@ class DomainFronter:
 
     @staticmethod
     def _strip_sabr_quality_tracks(body: bytes) -> bytes:
-        """Strip field-3 (quality-track selection) entries from a SABR protobuf.
+        """Strip field-3 (quality-track selection) entries from a SABR
+        segment-fetch protobuf.
 
-        SABR videoplayback POST bodies may contain field-3 (tag byte 0x1a,
-        wire-type 2) entries that select multiple simultaneous quality tracks.
-        The combined multi-track response easily exceeds Apps Script
-        UrlFetchApp's ~10 MB response buffer.  Removing these top-level
-        field-3 entries forces a single-track response within the limit.
+        SABR videoplayback POSTs come in two distinct message types:
+
+        • Segment-fetch  — contains field-2 (0x12) top-level entries that
+          carry byte-range requests for video/audio segments.  Field-3
+          (0x1a) entries in these messages are quality-track selectors that
+          ask googlevideo to bundle multiple simultaneous quality tracks into
+          one response, easily exceeding Apps Script UrlFetchApp's ~10 MB
+          buffer → 502.  We strip them to force a single-track response.
+
+        • Session-init   — contains field-5 (0x2a) entries and NO field-2
+          entries.  Field-3 entries in this message type carry essential
+          session metadata (language, viewer state, etc.).  Stripping them
+          corrupts the init handshake → CDN returns 403.
+
+        We therefore only strip field-3 entries when at least one field-2
+        entry is found at the top level (segment-fetch body).  For any other
+        body type the original bytes are returned unchanged.
 
         Only top-level fields are inspected; nested messages are left intact.
         If any unrecognised wire type is encountered the remainder of the
         buffer is copied verbatim so a malformed body is never silently lost.
         """
-        out = bytearray()
+        # ── phase 1: single pass — collect all top-level fields ────
+        # We need to know whether field 2 exists before deciding to strip.
+        # Rather than walking the buffer twice, we accumulate (field_number,
+        # seg_start, seg_end) tuples in one pass, then decide what to keep.
+        segments: list[tuple[int, int, int]] = []   # (field_number, start, end)
+        has_field2 = False
+        has_field3 = False
         i = 0
         n = len(body)
+        tail_start = n  # if we bail early, copy from here
+
         while i < n:
             seg_start = i
-            # ── decode varint tag ───────────────────────────────────
+            # decode varint tag
             tag = 0
             shift = 0
             while i < n:
@@ -2015,14 +2036,13 @@ class DomainFronter:
                 if not (b & 0x80):
                     break
             else:
-                # truncated tag byte — copy remainder verbatim
-                out.extend(body[seg_start:])
+                tail_start = seg_start
                 break
 
             field_number = tag >> 3
             wire_type    = tag & 0x07
 
-            # ── advance i past the field value ─────────────────────
+            # advance i past the field value
             if wire_type == 0:          # varint
                 while i < n and (body[i] & 0x80):
                     i += 1
@@ -2043,13 +2063,28 @@ class DomainFronter:
             elif wire_type == 5:        # 32-bit fixed
                 i = min(i + 4, n)
             else:
-                # unknown wire type — cannot safely skip; copy rest verbatim
-                out.extend(body[seg_start:])
+                # unknown wire type — bail, copy rest verbatim from seg_start
+                tail_start = seg_start
                 break
 
-            if field_number != 3:
-                out.extend(body[seg_start:i])
+            if field_number == 2:
+                has_field2 = True
+            elif field_number == 3:
+                has_field3 = True
+            segments.append((field_number, seg_start, i))
 
+        # ── phase 2: decide ────────────────────────────────────────
+        # Only strip when this is a segment-fetch body (has field 2).
+        # Initialization bodies lack field 2 — field 3 is essential there.
+        if not has_field2 or not has_field3:
+            return body  # nothing to do — return original unchanged
+
+        out = bytearray()
+        for field_number, seg_start, seg_end in segments:
+            if field_number != 3:
+                out.extend(body[seg_start:seg_end])
+        # append any tail bytes that were copied verbatim on early bail
+        out.extend(body[tail_start:])
         return bytes(out)
 
     def _build_payload(self, method, url, headers, body):
