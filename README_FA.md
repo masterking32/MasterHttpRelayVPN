@@ -524,6 +524,16 @@ MasterHttpRelayVPN/
 - **لیست‌های فیلتر آگهی:** [PersianBlocker](https://github.com/MasterKia/PersianBlocker/) نوشته MasterKia
 
 ---
+---
+
+## پروژه‌های جانبی
+
+### [کلاینت ویندوز MasterVPN](https://github.com/AriPath/MasterVPN)
+
+یک اپلیکیشن ویندوز که بر مبنای MasterHttpRelay ساخته شده است.  
+این پروژه توسط AriPath توسعه داده شده است و می‌توانید تنها با یک کلیک، بدون هیچ چالش و پیش‌نیازی، از MHR استفاده کنید.
+
+---
 
 ## License
 
