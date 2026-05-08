@@ -173,6 +173,17 @@ GOOGLE_OWNED_EXACT = frozenset({
 })
 
 
+# ── Relay URL patterns ───────────────────────────────────────────────────
+# URL path prefixes that are forced through the Apps Script relay.
+# Format: "host/path/prefix" (no scheme). The host is MITM'd so paths can
+# be inspected; only URLs starting with the pattern go to relay, all other
+# paths on that host are forwarded via SNI-rewrite (fast path).
+# Can be extended via config.json "relay_url_patterns" key.
+RELAY_URL_PATTERNS: tuple[str, ...] = (
+    "youtube.com/youtubei/",
+)
+
+
 # ── SNI-rewrite suffixes ──────────────────────────────────────────────────
 # Google-owned properties whose real SNI is DPI-blocked but are served by
 # the same edge IP as `front_domain`. Routed through the configured

@@ -32,6 +32,7 @@ from core.constants import (
     LARGE_FILE_EXTS,
     MAX_HEADER_BYTES,
     MAX_REQUEST_BODY_BYTES,
+    RELAY_URL_PATTERNS,
     SNI_REWRITE_SUFFIXES,
     TCP_CONNECT_TIMEOUT,
     TRACE_HOST_SUFFIXES,
@@ -186,6 +187,49 @@ class ProxyServer:
             log.info("youtube_via_relay enabled — YouTube routed through relay")
         else:
             self._SNI_REWRITE_SUFFIXES = SNI_REWRITE_SUFFIXES
+
+        # relay_url_patterns: list of URL path prefixes
+        # (e.g. "youtube.com/youtubei/") that are forced through the Apps Script
+        # relay even when youtube_via_relay is false.
+        # The host is extracted and removed from SNI-rewrite so the proxy can
+        # MITM-decrypt and inspect paths. Requests whose URL contains the full
+        # pattern go to relay; all other paths on that host are forwarded
+        # directly via SNI-rewrite HTTP (fast path).
+        # When youtube_via_relay is true, RELAY_URL_PATTERNS is ignored entirely
+        # so all of youtube.com goes through relay without path inspection.
+        # Defaults to RELAY_URL_PATTERNS from constants.py; config key extends it.
+        _youtube_via_relay: bool = config.get("youtube_via_relay", False)
+        relay_patterns: list[str] = [
+            p.strip() for p in config.get("relay_url_patterns", []) if str(p).strip()
+        ]
+        if not _youtube_via_relay:
+            relay_patterns = list(RELAY_URL_PATTERNS) + relay_patterns
+
+        # Store the full patterns for per-request matching in _relay_smart.
+        self._relay_url_patterns: tuple[str, ...] = tuple(
+            re.sub(r'^https?://', '', p).lower() for p in relay_patterns
+        )
+        if relay_patterns:
+            forced: set[str] = set()
+            for p in self._relay_url_patterns:
+                host_part = p.split('/')[0].lstrip('.')
+                if host_part:
+                    forced.add(host_part)
+            # Remove matched suffixes from SNI-rewrite so they get MITM'd.
+            self._SNI_REWRITE_SUFFIXES = tuple(
+                s for s in self._SNI_REWRITE_SUFFIXES
+                if not any(
+                    s == h or s.endswith('.' + h) or h.endswith('.' + s)
+                    for h in forced
+                )
+            )
+            log.info(
+                "relay_url_patterns: MITM forced on %s; relay only for: %s",
+                ', '.join(sorted(forced)),
+                ', '.join(self._relay_url_patterns),
+            )
+        else:
+            self._relay_url_patterns = ()
 
         try:
             from .mitm import MITMCertManager, CA_CERT_FILE
@@ -1141,16 +1185,102 @@ class ProxyServer:
     # ── CORS helpers ──────────────────────────────────────────────
     # cors_preflight_response() and inject_cors_headers() live in proxy_support.
 
+    def _url_matches_relay_pattern(self, url: str) -> bool:
+        """Return True if url matches any entry in _relay_url_patterns.
+
+        Pattern format: "host/path" (no scheme).  The url host may have
+        extra subdomains (e.g. www.youtube.com matches youtube.com).
+        """
+        normalized = re.sub(r'^https?://', '', url).lower()
+        slash = normalized.find('/')
+        url_host = normalized[:slash] if slash != -1 else normalized
+        url_path = normalized[slash:] if slash != -1 else '/'
+        for p in self._relay_url_patterns:
+            slash_p = p.find('/')
+            pat_host = p[:slash_p] if slash_p != -1 else p
+            pat_path = p[slash_p:] if slash_p != -1 else '/'
+            host_match = (url_host == pat_host or url_host.endswith('.' + pat_host))
+            if host_match and url_path.startswith(pat_path):
+                return True
+        return False
+
+    async def _forward_via_sni_rewrite(self, method: str, url: str,
+                                       headers: dict, body: bytes) -> bytes:
+        """Forward an HTTP request to its real origin via the SNI-rewrite path.
+
+        Connects to google_ip:443 with SNI=front_domain (DPI only sees a safe
+        Google SNI), then sends the actual HTTP/1.1 request with the real Host
+        header so YouTube's edge serves the correct response.
+        """
+        # Parse host and path from URL.
+        stripped = re.sub(r'^https?://', '', url)
+        slash = stripped.find('/')
+        if slash == -1:
+            host = stripped
+            path = '/'
+        else:
+            host = stripped[:slash]
+            path = stripped[slash:]
+
+        # Build HTTP/1.1 request bytes.
+        req_headers = dict(headers)
+        req_headers['Host'] = host
+        # Use Connection: close so we don't need to manage keep-alive.
+        req_headers['Connection'] = 'close'
+        req_lines = [f"{method} {path} HTTP/1.1\r\n"]
+        for k, v in req_headers.items():
+            req_lines.append(f"{k}: {v}\r\n")
+        req_lines.append("\r\n")
+        request_bytes = "".join(req_lines).encode() + (body or b"")
+
+        r, w = await asyncio.wait_for(
+            asyncio.open_connection(
+                self.fronter.connect_host,
+                443,
+                ssl=self.fronter._ssl_ctx(),
+                server_hostname=self.fronter.sni_host,
+            ),
+            timeout=self._tcp_connect_timeout,
+        )
+        try:
+            w.write(request_bytes)
+            await w.drain()
+            chunks = []
+            while True:
+                chunk = await asyncio.wait_for(r.read(65536), timeout=30)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        finally:
+            try:
+                w.close()
+            except Exception:
+                pass
+        return b"".join(chunks)
+
     async def _relay_smart(self, method, url, headers, body):
         """Choose optimal relay strategy based on request type.
 
-        - GET requests for likely-large downloads use parallel-range.
-        - All other requests (API calls, HTML, JSON, XHR) go through the
-          single-request relay. This avoids injecting a synthetic Range
-          header on normal traffic, which some origins honor by returning
-          206 — breaking fetch()/XHR on sites like x.com or Cloudflare
-          challenge pages.
+        - If relay_url_patterns are configured and the URL does NOT match,
+          forward via SNI-rewrite HTTP (fast direct path).
+        - GET requests for likely-large downloads use parallel-range relay.
+        - All other requests go through the single-request relay.
         """
+        # Path-level relay routing: only matching URL prefixes go through relay;
+        # everything else on the same host is forwarded via SNI-rewrite.
+        if self._relay_url_patterns and not self._url_matches_relay_pattern(url):
+            # Check if this host is one we pulled out of SNI-rewrite.
+            stripped = re.sub(r'^https?://', '', url).lower()
+            slash = stripped.find('/')
+            req_host = stripped[:slash] if slash != -1 else stripped
+            pattern_hosts = {p.split('/')[0] for p in self._relay_url_patterns}
+            host_covered = any(
+                req_host == h or req_host.endswith('.' + h)
+                for h in pattern_hosts
+            )
+            if host_covered:
+                return await self._forward_via_sni_rewrite(method, url, headers, body)
+
         if method == "GET" and not body:
             # Respect client's own Range header verbatim.
             if header_value(headers, "range"):
