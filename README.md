@@ -592,6 +592,14 @@ Special thanks to [@abolix](https://github.com/abolix) for making this project p
 
 - **Ad blocker filter lists:** [PersianBlocker](https://github.com/MasterKia/PersianBlocker/) by MasterKia
 
+---
+## Third-Party Projects
+
+- [MHRWindowsApp Windows Client](https://github.com/AriPath/MHRWindowsApp)
+
+> A Windows application built on top of MasterHttpRelay.  
+> This project is developed by AriPath and allows users to use MHR with just one click, without any setup or technical prerequisites.
+---
 ## License
 
 MIT

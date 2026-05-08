@@ -525,6 +525,15 @@ MasterHttpRelayVPN/
 
 ---
 
+## پروژه‌های جانبی
+
+- [کلاینت ویندوز MHRWindowsApp](https://github.com/AriPath/MHRWindowsApp)
+
+> یک اپلیکیشن ویندوز که بر مبنای MasterHttpRelay ساخته شده است.  
+> این پروژه توسط AriPath توسعه داده شده است و می‌توانید تنها با یک کلیک، بدون هیچ چالش و پیش‌نیازی، از MHR استفاده کنید.
+
+---
+
 ## License
 
 MIT
