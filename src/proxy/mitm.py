@@ -137,6 +137,14 @@ class MITMCertManager:
                 f.write(cert_pem + ca_pem)
             with open(key_file, "wb") as f:
                 f.write(key_pem)
+            # Restrict private key to current user only on POSIX.
+            # os.chmod is effectively a no-op on Windows (NTFS ACLs govern
+            # access there), but the temp directory is already user-scoped.
+            if os.name == "posix":
+                try:
+                    os.chmod(key_file, 0o600)
+                except OSError:
+                    pass
 
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             ctx.set_alpn_protocols(["http/1.1"])

@@ -5,6 +5,9 @@ config.json
 # CA certificates (generated at runtime, contain private keys)
 ca/
 
+# Adblock list cache (downloaded at runtime)
+adblock_cache/
+
 # Python
 __pycache__/
 *.py[cod]

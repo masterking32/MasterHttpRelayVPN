@@ -64,6 +64,9 @@ LEVEL_LABEL = {
 # Special spotlight line for execution usage updates.
 EXEC_USAGE_PREFIX = "Apps Script executions used so far:"
 
+# Spotlight line for the CA certificate LAN download URL.
+CA_DOWNLOAD_PREFIX = "CA certificate download"
+
 # Stable per-component color (keeps log scanning easy).
 COMPONENT_COLORS = {
     "Main":         FG_CYAN,
@@ -156,8 +159,19 @@ class PrettyFormatter(logging.Formatter):
             and isinstance(message, str)
             and message.startswith(EXEC_USAGE_PREFIX)
         )
+        highlight_ca_download = (
+            isinstance(message, str)
+            and message.startswith(CA_DOWNLOAD_PREFIX)
+        )
 
-        if highlight_exec_usage:
+        if highlight_ca_download:
+            plain_time = self._fmt_time(record)
+            plain_level = f"{LEVEL_GLYPH.get(record.levelname, '·')} {LEVEL_LABEL.get(record.levelname, record.levelname[:5].ljust(5))}"
+            plain_comp = f"[{record.name[: self.COMPONENT_WIDTH].ljust(self.COMPONENT_WIDTH)}]"
+            line = f"{plain_time}  {plain_level}  {plain_comp}  {message}"
+            if self.use_color:
+                line = f"{BOLD}{FG_GREEN}{line}{RESET}"
+        elif highlight_exec_usage:
             # Force a single vivid color for the entire line so this metric pops.
             plain_time = self._fmt_time(record)
             plain_level = f"{LEVEL_GLYPH.get(record.levelname, '·')} {LEVEL_LABEL.get(record.levelname, record.levelname[:5].ljust(5))}"

@@ -43,7 +43,10 @@ async def read_http_response(
     while b"\r\n\r\n" not in raw:
         if len(raw) > 65536:  # 64 KB header size limit
             return 0, {}, b""
-        chunk = await asyncio.wait_for(reader.read(8192), timeout=8)
+        # 30s per-read: exit-node chain (Apps Script → VPS → target) needs
+        # time to fetch + process large responses before sending headers.
+        # The outer asyncio.wait_for in _relay_single caps total time.
+        chunk = await asyncio.wait_for(reader.read(8192), timeout=30)
         if not chunk:
             break
         raw += chunk

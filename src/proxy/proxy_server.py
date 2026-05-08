@@ -22,6 +22,7 @@ except Exception:  # optional dependency fallback
 from core.constants import (
     CACHE_MAX_MB,
     CLIENT_IDLE_TIMEOUT,
+    DEFAULT_BYPASS_HOSTS,
     GOOGLE_DIRECT_ALLOW_EXACT,
     GOOGLE_DIRECT_ALLOW_SUFFIXES,
     GOOGLE_DIRECT_EXACT_EXCLUDE,
@@ -73,14 +74,15 @@ class ProxyServer:
 
     def __init__(self, config: dict):
         self.host = config.get("listen_host", "127.0.0.1")
-        self.port = config.get("listen_port", 8080)
-        self.socks_enabled = config.get("socks5_enabled", True)
+        # Prefer the new key (http_port) but keep listen_port for old configs.
+        self.port = config.get("http_port", config.get("listen_port", 8080))
+        self.socks_enabled = True
         self.socks_host = config.get("socks5_host", self.host)
         self.socks_port = config.get("socks5_port", 1080)
         if self.socks_enabled and self.socks_host == self.host \
                 and int(self.socks_port) == int(self.port):
             raise ValueError(
-                f"listen_port and socks5_port must differ on the same host "
+                f"http_port and socks5_port must differ on the same host "
                 f"(both set to {self.port} on {self.host}). "
                 f"Change one of them in config.json."
             )
@@ -137,12 +139,42 @@ class ProxyServer:
         }
 
         # ── Per-host policy ────────────────────────────────────────
-        # block_hosts  — refuse traffic entirely (close or 403)
-        # bypass_hosts — route directly (no MITM, no relay)
+        # block_hosts   — refuse traffic entirely (close or 403)
+        # direct_hosts  — route directly (no MITM, no relay)
+        # bypass_hosts  — legacy alias kept for backward compatibility
         # Both accept exact hostnames and leading-dot suffix patterns,
         # e.g. ".local" matches any *.local domain.
         self._block_hosts  = load_host_rules(config.get("block_hosts", []))
-        self._bypass_hosts = load_host_rules(config.get("bypass_hosts", []))
+
+        # ── Adblock host lists ─────────────────────────────────────
+        # adblock_lists: list of URLs to hosts-format blocklists.
+        # Lists are loaded from disk cache at startup (fast), then
+        # re-downloaded in background when the cache is stale.
+        self._adblock_urls: list[str] = [
+            str(u).strip() for u in config.get("adblock_lists", []) if u
+        ]
+        if self._adblock_urls:
+            try:
+                from core.adblock import load_all
+                _ab_domains = load_all(self._adblock_urls)
+                self._adblock_hosts = load_host_rules(_ab_domains)
+                log.info(
+                    "Adblock: %d domains active (%d lists)",
+                    len(_ab_domains), len(self._adblock_urls),
+                )
+            except Exception as exc:
+                log.warning("Adblock: failed to load lists at startup: %s", exc)
+                self._adblock_hosts = (set(), ())
+        else:
+            self._adblock_hosts = (set(), ())
+
+        direct_hosts = config.get("direct_hosts", [])
+        bypass_hosts = config.get("bypass_hosts")
+        if bypass_hosts is None:
+            bypass_hosts = list(DEFAULT_BYPASS_HOSTS)
+        self._bypass_hosts = load_host_rules(
+            list(bypass_hosts) + list(direct_hosts)
+        )
 
         # Route YouTube through the relay when requested; the Google frontend
         # IP can enforce SafeSearch on the SNI-rewrite path.
@@ -156,12 +188,17 @@ class ProxyServer:
             self._SNI_REWRITE_SUFFIXES = SNI_REWRITE_SUFFIXES
 
         try:
-            from .mitm import MITMCertManager
+            from .mitm import MITMCertManager, CA_CERT_FILE
             self.mitm = MITMCertManager()
+            self._ca_cert_file = CA_CERT_FILE
         except ImportError:
             log.error("Apps Script relay requires the 'cryptography' package.")
             log.error("Run: pip install cryptography")
             raise SystemExit(1)
+
+        # When LAN sharing is active, serve the CA cert over HTTP so other
+        # devices on the network can download and install it easily.
+        self._lan_sharing: bool = bool(config.get("lan_sharing", False))
 
     # ── Host-policy helpers ───────────────────────────────────────
 
@@ -215,7 +252,27 @@ class ProxyServer:
             self._client_tasks.discard(task)
 
     def _is_blocked(self, host: str) -> bool:
-        return host_matches_rules(host, self._block_hosts)
+        return (
+            host_matches_rules(host, self._block_hosts)
+            or host_matches_rules(host, self._adblock_hosts)
+        )
+
+    async def _refresh_adblock_lists(self) -> None:
+        """Background task: re-download stale adblock lists and hot-swap rules."""
+        if not self._adblock_urls:
+            return
+        try:
+            from core.adblock import refresh_all
+
+            def _update(domains: list[str]) -> None:
+                self._adblock_hosts = load_host_rules(domains)
+                log.info(
+                    "Adblock: rules updated — %d domains active", len(domains)
+                )
+
+            await refresh_all(self._adblock_urls, callback=_update)
+        except Exception as exc:
+            log.warning("Adblock: background refresh failed: %s", exc)
 
     def _is_bypassed(self, host: str) -> bool:
         return host_matches_rules(host, self._bypass_hosts)
@@ -268,6 +325,10 @@ class ProxyServer:
                 self.socks_host, self.socks_port,
             )
 
+        # Kick off adblock refresh in the background — won't block startup.
+        if self._adblock_urls:
+            asyncio.create_task(self._refresh_adblock_lists())
+
         try:
             async with http_srv:
                 if socks_srv:
@@ -310,6 +371,31 @@ class ProxyServer:
 
     # ── client handler ────────────────────────────────────────────
 
+    async def _serve_ca_cert(self, writer: asyncio.StreamWriter) -> None:
+        """Serve the MITM CA certificate so LAN devices can install it."""
+        import os as _os
+        ca_path = getattr(self, "_ca_cert_file", None)
+        if not ca_path or not _os.path.exists(ca_path):
+            writer.write(
+                b"HTTP/1.1 404 Not Found\r\n"
+                b"Content-Length: 0\r\n"
+                b"Connection: close\r\n\r\n"
+            )
+            await writer.drain()
+            return
+        with open(ca_path, "rb") as f:
+            cert_data = f.read()
+        headers = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: application/x-x509-ca-cert\r\n"
+            b"Content-Disposition: attachment; filename=\"ca.crt\"\r\n"
+            + b"Content-Length: " + str(len(cert_data)).encode() + b"\r\n"
+            + b"Connection: close\r\n\r\n"
+        )
+        writer.write(headers + cert_data)
+        await writer.drain()
+        log.info("Served CA certificate to LAN device")
+
     async def _on_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         addr = writer.get_extra_info("peername")
         task = self._track_current_task()
@@ -345,6 +431,11 @@ class ProxyServer:
                 return
 
             method = parts[0].upper()
+            path = parts[1] if len(parts) >= 2 else "/"
+
+            if method == "GET" and path == "/ca.crt" and self._lan_sharing:
+                await self._serve_ca_cert(writer)
+                return
 
             if method == "CONNECT":
                 await self._do_connect(parts[1], reader, writer)
@@ -428,7 +519,7 @@ class ProxyServer:
             return
 
         if self._is_bypassed(host):
-            log.info("Bypass tunnel → %s:%d (matches bypass_hosts)", host, port)
+            log.info("Direct tunnel → %s:%d (matches direct_hosts/bypass_hosts)", host, port)
             await self._do_direct_tunnel(host, port, reader, writer)
             return
 
@@ -775,21 +866,14 @@ class ProxyServer:
             return
         writer._transport = new_transport
 
-        # Step 2: open outgoing TLS to target IP with the safe SNI
-        ssl_ctx_client = ssl.create_default_context()
-        if certifi is not None:
-            try:
-                ssl_ctx_client.load_verify_locations(cafile=certifi.where())
-            except Exception:
-                pass
-        if not self.fronter.verify_ssl:
-            ssl_ctx_client.check_hostname = False
-            ssl_ctx_client.verify_mode = ssl.CERT_NONE
+        # Step 2: open outgoing TLS to target IP with the safe SNI.
+        # Reuse the SSLContext already built by DomainFronter (certifi bundle,
+        # verify_ssl flag) — no need to rebuild it on every CONNECT.
         try:
             r_out, w_out = await asyncio.wait_for(
                 asyncio.open_connection(
                     target_ip, port,
-                    ssl=ssl_ctx_client,
+                    ssl=self.fronter._ssl_ctx(),
                     server_hostname=sni_out,
                 ),
                 timeout=self._tcp_connect_timeout,
@@ -1069,12 +1153,8 @@ class ProxyServer:
         """
         if method == "GET" and not body:
             # Respect client's own Range header verbatim.
-            if headers:
-                for k in headers:
-                    if k.lower() == "range":
-                        return await self.fronter.relay(
-                            method, url, headers, body
-                        )
+            if header_value(headers, "range"):
+                return await self.fronter.relay(method, url, headers, body)
             # Only probe with Range when the URL looks like a big file.
             if self._is_likely_download(url, headers):
                 return await self.fronter.relay_parallel(
@@ -1107,10 +1187,8 @@ class ProxyServer:
                                      writer) -> bool:
         if method.upper() != "GET" or body:
             return False
-        if headers:
-            for key in headers:
-                if key.lower() == "range":
-                    return False
+        if header_value(headers, "range"):
+            return False
         effective_headers = headers or {}
         if not self._is_likely_download(url, effective_headers):
             return False

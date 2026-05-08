@@ -77,6 +77,9 @@ _STRIP_HEADERS = frozenset(
         "x-real-ip",
         "forwarded",
         "via",
+        # urllib.request cannot decompress gzip/br/deflate — stripping this
+        # forces targets to reply with plain bodies the server can forward.
+        "accept-encoding",
     ]
 )
 
@@ -91,6 +94,21 @@ _OUTBOUND_TIMEOUT = 30
 
 # Pre-shared key loaded at startup.
 _PSK: str = ""
+
+# ---------------------------------------------------------------------------
+# HTTP client — no-redirect opener
+# ---------------------------------------------------------------------------
+
+_NO_REDIRECT_OPENER = urllib.request.OpenerDirector()
+for _h in (
+    urllib.request.UnknownHandler(),
+    urllib.request.HTTPDefaultErrorHandler(),
+    urllib.request.HTTPErrorProcessor(),
+    urllib.request.HTTPHandler(),
+    urllib.request.HTTPSHandler(),
+):
+    _NO_REDIRECT_OPENER.add_handler(_h)
+del _h
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -140,6 +158,32 @@ def _safe_url(url: str) -> bool:
     return True
 
 
+def _collect_headers(raw_headers) -> dict:
+    """Collect HTTP response headers, preserving all values for duplicate names.
+
+    Python's http.client.HTTPMessage yields duplicate header names (e.g. multiple
+    Set-Cookie lines) as separate items when iterated.  A plain dict assignment
+    silently overwrites earlier values, so sites like auth.openai.com that set
+    several Set-Cookie headers in one response would lose all but the last one.
+    Accumulate duplicates into a list so every value reaches the browser.
+    """
+    out: dict = {}
+    key_map: dict[str, str] = {}  # lowercase name → first-seen canonical case
+    for k, v in raw_headers.items():
+        kl = k.lower()
+        if kl not in key_map:
+            key_map[kl] = k
+            out[k] = v
+        else:
+            canonical = key_map[kl]
+            cur = out[canonical]
+            if isinstance(cur, list):
+                cur.append(v)
+            else:
+                out[canonical] = [cur, v]
+    return out
+
+
 def _relay_request(
     url: str, method: str, headers: dict[str, str], body: bytes
 ) -> dict:
@@ -149,25 +193,18 @@ def _relay_request(
         request.data = body
 
     try:
-        with urllib.request.urlopen(request, timeout=_OUTBOUND_TIMEOUT) as resp:
+        with _NO_REDIRECT_OPENER.open(request, timeout=_OUTBOUND_TIMEOUT) as resp:
             data = resp.read(_MAX_RESPONSE_BODY)
-            resp_headers: dict[str, str] = {}
-            for k, v in resp.headers.items():
-                resp_headers[k] = v
             return {
                 "s": resp.status,
-                "h": resp_headers,
+                "h": _collect_headers(resp.headers),
                 "b": base64.b64encode(data).decode(),
             }
     except urllib.error.HTTPError as exc:
         data = exc.read(_MAX_RESPONSE_BODY) if exc.fp else b""
-        resp_headers = {}
-        if exc.headers:
-            for k, v in exc.headers.items():
-                resp_headers[k] = v
         return {
             "s": exc.code,
-            "h": resp_headers,
+            "h": _collect_headers(exc.headers) if exc.headers else {},
             "b": base64.b64encode(data).decode(),
         }
 

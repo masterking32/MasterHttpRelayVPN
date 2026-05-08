@@ -68,10 +68,23 @@ class H2Transport:
 
     def __init__(self, connect_host: str, sni_host: str,
                  verify_ssl: bool = True,
-                 sni_hosts: list[str] | None = None):
+                 sni_hosts: list[str] | None = None,
+                 no_sni: bool = False,
+                 ping_interval: float = 0.2):
         self.connect_host = connect_host
         self.sni_host = sni_host
         self.verify_ssl = verify_ssl
+        # no_sni=True: omit the SNI extension from TLS ClientHello entirely.
+        # DPI cannot match a hostname → may bypass per-SNI throttle rules.
+        # Google's GFE accepts SNI-less connections (returns default cert).
+        # Requires verify_ssl=False since hostname won't be in default cert CN.
+        self._no_sni: bool = no_sni
+        # ping_interval: seconds between H2 PING frames sent while waiting
+        # for a relay response.  Fills the TCP silence that Iran DPI uses to
+        # classify and throttle Apps Script relay connections.  Server MUST
+        # reply with PING ACK → continuous bidirectional flow visible to DPI.
+        # Set to 0 to disable.  Default 0.2s (5 pings/s during GAS execution).
+        self._ping_interval: float = ping_interval
         # Optional SNI rotation pool — picked round-robin on each new connect.
         # Falls back to the single sni_host if no pool is given.
         self._sni_hosts: list[str] = [h for h in (sni_hosts or []) if h] or [sni_host]
@@ -131,6 +144,13 @@ class H2Transport:
         sni = self._sni_hosts[self._sni_idx % len(self._sni_hosts)]
         self._sni_idx += 1
         self.sni_host = sni  # kept for backward-compat logging
+
+        # no_sni mode: omit SNI extension entirely so DPI can't classify by
+        # hostname.  Forces cert-verification off (default cert won't match).
+        if self._no_sni:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            sni = None  # server_hostname=None → no SNI extension sent
 
         # Create raw TCP socket with TCP_NODELAY BEFORE TLS handshake.
         # Nagle's algorithm can delay small writes (H2 frames) by up to 200ms
@@ -320,14 +340,28 @@ class H2Transport:
 
             await self._flush()
 
-        # Wait for complete response
+        # Wait for complete response, sending H2 PING frames concurrently.
+        # The PING/ACK bidirectional traffic masks the Apps Script execution
+        # silence that Iran DPI uses to identify and throttle relay patterns.
+        ping_task = None
+        if self._ping_interval > 0:
+            ping_task = asyncio.create_task(
+                self._ping_keepalive(state, self._ping_interval)
+            )
         try:
             await asyncio.wait_for(state.done.wait(), timeout=timeout)
         except asyncio.TimeoutError:
+            if ping_task:
+                ping_task.cancel()
+                await asyncio.gather(ping_task, return_exceptions=True)
             self._streams.pop(stream_id, None)
             raise TimeoutError(
                 f"H2 stream {stream_id} timed out ({timeout}s)"
             )
+        finally:
+            if ping_task:
+                ping_task.cancel()
+                await asyncio.gather(ping_task, return_exceptions=True)
 
         self._streams.pop(stream_id, None)
 
@@ -341,6 +375,32 @@ class H2Transport:
             resp_body = codec.decode(resp_body, enc)
 
         return state.status, state.headers, resp_body
+
+    async def _ping_keepalive(self, state: "_StreamState", interval: float):
+        """Send H2 PING frames at *interval* seconds until *state* completes.
+
+        Iran DPI throttles relay responses when it detects a long TCP silence
+        between the client's POST upload and the server's first response byte
+        (Apps Script typically takes 2-5 s to execute).  Sending PING frames
+        forces the server to emit PING ACK frames, creating continuous
+        bidirectional traffic that looks like a normal persistent connection
+        rather than a relay waiting for proxy execution.
+        """
+        opaque = b"dpi-ping"  # 8-byte PING opaque data
+        try:
+            while not state.done.is_set():
+                await asyncio.sleep(interval)
+                if state.done.is_set():
+                    break
+                try:
+                    async with self._write_lock:
+                        if self._h2 and self._connected:
+                            self._h2.ping(opaque)
+                            await self._flush()
+                except Exception:
+                    break  # connection lost; let the main wait() handle it
+        except asyncio.CancelledError:
+            pass
 
     def _send_body(self, stream_id: int, body: bytes):
         """Send request body, respecting H2 flow control window.

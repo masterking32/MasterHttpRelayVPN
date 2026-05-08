@@ -230,7 +230,12 @@ class ResponseCache:
 
         if b"HTTP/1.1 200" not in raw_response[:20]:
             return 0
-        if "no-store" in hdr or "private" in hdr or "set-cookie:" in hdr:
+        # Scope no-store / private checks to the Cache-Control header line so
+        # URLs like "Location: /api/private/…" or "Server: private-build"
+        # don't accidentally suppress caching for cacheable responses.
+        if re.search(r"cache-control:[^\r\n]*\b(?:no-store|private)\b", hdr):
+            return 0
+        if "set-cookie:" in hdr:
             return 0
 
         max_age_match = re.search(r"max-age=(\d+)", hdr)

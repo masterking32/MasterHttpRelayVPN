@@ -21,10 +21,11 @@ classify_relay_error(raw) -> str
 """
 
 import base64
-import codecs
+import gzip
 import json
 import logging
 import re
+import zlib
 
 log = logging.getLogger("Fronter")
 
@@ -111,6 +112,16 @@ def classify_relay_error(raw: str) -> str:
     developers.google.com/apps-script/guides/support/troubleshooting
     """
     lower = raw.lower()
+
+    # Relay loop detected by Code.gs or a Cloudflare Worker exit node.
+    if "loop detected" in lower or lower == "loop_detected":
+        return (
+            "Relay loop detected. "
+            "Your exit node URL is misconfigured — it points back to a "
+            "Google Apps Script deployment or to the Cloudflare Worker itself. "
+            "Set 'exit_node_url' in config.json to the actual exit node address "
+            "(Cloudflare Worker, Deno Deploy, or VPS), not to a GAS script URL."
+        )
 
     if any(p in lower for p in _QUOTA_PATTERNS):
         return (
@@ -220,11 +231,53 @@ def parse_relay_json(data: dict, max_body_bytes: int) -> bytes:
     status = data.get("s", 200)
     resp_headers = data.get("h", {})
     resp_body = base64.b64decode(data.get("b", ""))
+
+    # Decompress relay-level gzip applied by Code.gs to shrink bytes-on-wire
+    # over DPI-shaped connections.  The "gz" flag is set when Code.gs found
+    # that gzip saved space (all text content: JS, CSS, HTML, JSON).
+    if data.get("gz"):
+        try:
+            resp_body = gzip.decompress(resp_body)
+        except Exception as _exc:
+            log.debug("relay gz decompress failed: %s", _exc)
+
+    # ── Decompress if the target sent a compressed body ─────────────────────────
+    # UrlFetchApp does NOT auto-decompress gzip/deflate responses, so if the
+    # client's Accept-Encoding header was forwarded and the server compressed
+    # its reply, we receive raw compressed bytes.  We decompress here so the
+    # browser always gets plain content (and we can safely drop the header).
+    _ce = ""
+    for _k, _v in resp_headers.items():
+        if _k.lower() == "content-encoding":
+            _ce = str(_v).lower().strip()
+            break
+    if _ce == "gzip":
+        try:
+            resp_body = gzip.decompress(resp_body)
+        except Exception as _exc:
+            log.debug("gzip decompress skipped (%s) — body may already be plain", _exc)
+    elif _ce in ("deflate", "zlib"):
+        try:
+            # Try zlib wrapper first, then raw deflate
+            resp_body = zlib.decompress(resp_body)
+        except Exception:
+            try:
+                resp_body = zlib.decompress(resp_body, -15)
+            except Exception as _exc:
+                log.debug("deflate decompress skipped (%s)", _exc)
+    elif _ce == "br":
+        # Brotli is uncommon in this relay path but log if seen so it is visible
+        log.debug("brotli-encoded response from target — install 'brotli' package for support")
+        try:
+            import brotli  # type: ignore
+            resp_body = brotli.decompress(resp_body)
+        except Exception:
+            pass  # leave body as-is; browser will likely fail gracefully
     if len(resp_body) > max_body_bytes:
         return error_response(
             502,
             f"Relay response exceeds cap ({max_body_bytes} bytes). "
-            "Increase max_response_body_bytes if your system has enough RAM.",
+            "Increase MAX_RESPONSE_BODY_BYTES in src/core/constants.py if your system has enough RAM.",
         )
 
     status_text = {
@@ -259,7 +312,13 @@ def parse_relay_json(data: dict, max_body_bytes: int) -> bytes:
 
 
 def extract_apps_script_user_html(text: str) -> str | None:
-    """Extract embedded user HTML from an Apps Script HTML-page response."""
+    """Extract embedded user HTML from an Apps Script HTML-page response.
+
+    Google's IFRAME_SANDBOX mode returns /exec responses wrapped in an HTML
+    page that includes a goog.script.init("...") call. The first argument is
+    a JS string literal (\\xNN hex escapes) containing a JSON payload with
+    a ``userHtml`` field that holds the actual relay response.
+    """
     marker = 'goog.script.init("'
     start = text.find(marker)
     if start == -1:
@@ -271,7 +330,17 @@ def extract_apps_script_user_html(text: str) -> str | None:
 
     encoded = text[start:end]
     try:
-        decoded = codecs.decode(encoded, "unicode_escape")
+        # The JS string uses \xNN hex escapes and \/ for forward-slash.
+        # Also unescape \\ → \ (JS double-backslash = literal backslash).
+        # Order: hex first, then double-backslash, then \/ so that
+        # \\/ (JS for literal-backslash + /) works correctly.
+        decoded = re.sub(
+            r'\\x([0-9a-fA-F]{2})',
+            lambda m: chr(int(m.group(1), 16)),
+            encoded,
+        )
+        decoded = decoded.replace("\\\\", "\\")
+        decoded = decoded.replace("\\/", "/")
         payload = json.loads(decoded)
     except Exception:
         return None

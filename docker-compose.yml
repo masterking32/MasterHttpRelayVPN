@@ -1,0 +1,27 @@
+name: masterhttprelayvpn
+
+services:
+  proxy:
+    build: .
+    container_name: masterhttprelayvpn
+    restart: unless-stopped
+
+    ports:
+      - "8085:8085" # HTTP proxy
+      - "1080:1080" # SOCKS5 proxy
+
+    volumes:
+      # Mount your config.json so secrets stay outside the image.
+      - ./config.json:/app/config.json:ro
+
+      # Persist the MITM CA certificate across container restarts.
+      # On first run the container generates ca/ca.crt and ca/ca.key here.
+      - ./ca:/app/ca
+
+    networks:
+      - proxy-net
+
+networks:
+  proxy-net:
+    name: masterhttprelayvpn-net
+    driver: bridge

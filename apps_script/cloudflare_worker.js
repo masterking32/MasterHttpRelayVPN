@@ -17,6 +17,11 @@ const STRIP_HEADERS = new Set([
   "x-real-ip",
   "forwarded",
   "via",
+  // Internal relay hop header — must not propagate to the final target.
+  "x-mhr-hop",
+  // Workers cannot decompress gzip/br/deflate — stripping accept-encoding
+  // forces targets to reply with plain bodies the Worker can forward as-is.
+  "accept-encoding",
 ]);
 
 function decodeBase64ToBytes(input) {
@@ -87,6 +92,34 @@ export default {
 
       if (k !== PSK) return Response.json({ e: "unauthorized" }, { status: 401 });
       if (!/^https?:\/\//i.test(u)) return Response.json({ e: "bad_url" }, { status: 400 });
+
+      // ── Loop detection ────────────────────────────────────────────────────
+      // Case 1 — self-loop: target URL resolves back to this Worker.
+      //   Happens when a user sets exit_node_url to the Worker URL itself.
+      try {
+        const targetHost = new URL(u).hostname.toLowerCase();
+        const workerHost = new URL(req.url).hostname.toLowerCase();
+        if (targetHost === workerHost) {
+          return Response.json(
+            { e: "loop_detected", detail: "target URL resolves to this Worker" },
+            { status: 508 }
+          );
+        }
+      } catch (_) {
+        // Malformed URL already caught by the regex above; ignore parse errors.
+      }
+      // Case 2 — GAS→Worker→GAS loop: the incoming request was relayed from
+      //   a Google Apps Script instance (x-mhr-hop header set), and the
+      //   target is another Apps Script script URL.
+      //   Without this guard, a misconfigured chain would bounce between
+      //   Apps Script and Cloudflare until quota is exhausted.
+      const hopHeader = req.headers.get("x-mhr-hop");
+      if (hopHeader && /\/macros\/s\//i.test(u)) {
+        return Response.json(
+          { e: "loop_detected", detail: "GAS→Worker→GAS relay loop" },
+          { status: 508 }
+        );
+      }
 
       let payload;
       if (typeof b64 === "string" && b64.length > 0) payload = decodeBase64ToBytes(b64);

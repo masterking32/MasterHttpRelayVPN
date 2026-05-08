@@ -1,0 +1,19 @@
+# Never bake secrets or runtime state into the image.
+config.json
+ca/
+
+# Python runtime artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+*.egg-info/
+
+# Development / OS clutter
+.git/
+.gitignore
+.vscode/
+*.log
+adblock_cache/
