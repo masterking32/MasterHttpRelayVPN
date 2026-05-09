@@ -33,7 +33,7 @@ Click the links below for guides on common topics.
 
 [Exit Node](docs/exit-node/EXIT_NODE_DEPLOYMENT.md) : Connect to Cloudflare Workers or a VPS for destinations to fix ChatGPT, Turnstile, and similar sites blocking Google IPs.
 
-[LAN Sharing](docs/LAN_SHARING.md) : Share the proxy with other devices on your local network.
+[LAN Sharing](docs/LAN_SHARING.md) : Share the proxy with other devices on your local network. (Android, iOS, other computers)
 
 [Configuration](docs/CONFIGURATION.md) : Reference for all config options, plus diagnostic commands.
 

@@ -55,4 +55,4 @@ The network sees a Google-facing connection. The relay request carries the real 
 Browser -> Local proxy -> Apps Script -> Exit node -> Target website
 ```
 
-Exit nodes can run on Cloudflare Workers, Deno Deploy, or a VPS. See [Exit Node Guide](exit-node/EXIT_NODE_DEPLOYMENT.md).
+Exit nodes can run on Cloudflare Workers or your own VPS. See [Exit Node Guide](exit-node/EXIT_NODE_DEPLOYMENT.md).

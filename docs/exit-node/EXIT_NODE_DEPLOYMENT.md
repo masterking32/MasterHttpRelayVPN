@@ -1,4 +1,4 @@
-# Exit Node Deployment Guide (Cloudflare / Deno / VPS)
+# Exit Node Deployment Guide (Cloudflare / VPS)
 
 This guide explains how to deploy an exit node for MasterHttpRelayVPN on free platforms or your own VPS server.
 
@@ -11,7 +11,6 @@ Use this when destinations block Google datacenter egress.
 ## 1) Choose One Provider
 
 - Cloudflare Workers (free tier available)
-- Deno Deploy (free, not fully tested)
 - **Your Own VPS** (full control, Linux server — automated installer included)
 
 You only need one provider.
@@ -41,19 +40,7 @@ Steps:
 6. Deploy.
 7. Copy URL, usually like https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev
 
-## 4) Deploy On Deno Deploy (It's not tested Yet)
-
-Source file: apps_script/deno_deploy.ts
-
-Steps:
-1. Sign in at https://dash.deno.com
-2. Select new playground.
-3. Paste apps_script/deno_deploy.ts.
-4. Set PSK constant in code.
-5. Deploy.
-6. Copy URL, usually like https://YOUR-PROJECT.deno.net
-
-## 5) Deploy On Your Own VPS  (Linux only)
+## 4) Deploy On Your Own VPS  (Linux only)
 
 Source files:
 - `apps_script/vps_exit_node.py`  — the relay server
@@ -81,11 +68,11 @@ The script automatically downloads `vps_exit_node.py` from GitHub, so no `git cl
 Note:
 - To rotate the PSK, edit `/etc/exit-node.env` and restart: `systemctl restart exit-node`.
 
-## 6) Configure MasterHttpRelayVPN
+## 5) Configure MasterHttpRelayVPN
 
 Update `config.json`:
 
-For Cloudflare / Deno:
+For Cloudflare:
 ```json
 "exit_node": {
   "enabled": true,
@@ -121,7 +108,6 @@ For your own VPS:
 
 Provider values:
 - `cloudflare`
-- `deno`
 - `vps`
 
 If `mode` is `selective`, only hosts listed in `hosts` use the exit node.

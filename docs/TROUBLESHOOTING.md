@@ -79,8 +79,7 @@ Fix:
 1. Update this project and install dependencies again with `pip install -r requirements.txt`.
 2. Redeploy [apps_script/Code.gs](../apps_script/Code.gs) as a new Apps Script deployment.
 3. Copy the new Deployment ID into `config.json` if it changed.
-4. If you use a Deno exit node, redeploy [apps_script/deno_deploy.ts](../apps_script/deno_deploy.ts).
-5. Restart the proxy and fully reopen the browser.
+4. Restart the proxy and fully reopen the browser.
 
 ## Connection Timeout
 

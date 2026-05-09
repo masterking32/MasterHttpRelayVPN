@@ -97,7 +97,7 @@ Use an exit node when a destination blocks Google datacenter egress.
 | Setting | Meaning |
 |---------|---------|
 | `exit_node.enabled` | Turns exit-node routing on or off. |
-| `exit_node.provider` | `cloudflare`, `deno`, `vps`, or `custom`. |
+| `exit_node.provider` | `cloudflare`, `vps`, or `custom`. |
 | `exit_node.url` | URL for the selected provider. |
 | `exit_node.psk` | Shared secret for the exit node. Must match the deployed exit-node code. |
 | `exit_node.mode` | `full` for all relayed traffic, `selective` for only listed hosts. |
