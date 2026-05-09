@@ -75,19 +75,19 @@ If you want more detail, use [Getting Started](docs/GETTING_STARTED.md#2-deploy-
 
 Download the project with either Git or ZIP, then run the one-click launcher.
 
-**Option A: Git**
+
+**Option A: ZIP**
+
+[Click to Download](https://github.com/masterking32/MasterHttpRelayVPN/archive/refs/heads/python_testing.zip)
+
+
+**Option B: Git**
 
 ```bash
 git clone https://github.com/masterking32/MasterHttpRelayVPN.git
 cd MasterHttpRelayVPN
 ```
 
-**Option B: ZIP**
-
-1. Open [the GitHub repository](https://github.com/masterking32/MasterHttpRelayVPN).
-2. Click **Code** -> **Download ZIP**.
-3. Extract the ZIP file.
-4. Open a terminal inside the extracted `MasterHttpRelayVPN` folder.
 
 Then start the app:
 
