@@ -13,20 +13,19 @@ cd MasterHttpRelayVPN
 
 **با ZIP:**
 
-1. صفحه [GitHub پروژه](https://github.com/masterking32/MasterHttpRelayVPN) را باز کنید.
-2. روی **Code** -> **Download ZIP** کلیک کنید.
-3. فایل ZIP را extract کنید.
-4. داخل پوشه `MasterHttpRelayVPN` یک terminal باز کنید.
+- صفحه [GitHub پروژه](https://github.com/masterking32/MasterHttpRelayVPN) را باز کنید.
+- روی **Code** -> **Download ZIP** کلیک کنید.
+- فایل ZIP را extract کنید.
+- داخل پوشه `MasterHttpRelayVPN` یک terminal باز کنید.
 
 ## 2. ساخت رله Google
 
-1. به [Google Apps Script](https://script.google.com/) بروید.
-2. یک پروژه جدید بسازید.
-3. محتوای [apps_script/Code.gs](../../apps_script/Code.gs) را داخل فایل `Code.gs` کپی کنید.
-4. مقدار `AUTH_KEY` را به یک رمز طولانی و تصادفی تغییر دهید.
-5. از مسیر **Deploy** -> **New deployment** نوع **Web app** را انتخاب کنید.
-6. گزینه **Execute as** را روی **Me** و گزینه دسترسی را روی **Anyone** بگذارید.
-7. Deploy کنید و `Deployment ID` را نگه دارید.
+- به [Google Apps Script](https://script.google.com/) بروید و یک پروژه جدید بسازید.
+- محتوای [apps_script/Code.gs](../../apps_script/Code.gs) را داخل فایل `Code.gs` کپی کنید.
+- مقدار `AUTH_KEY` را به یک رمز طولانی و تصادفی تغییر دهید.
+- از مسیر **Deploy** -> **New deployment** نوع **Web app** را انتخاب کنید.
+- گزینه **Execute as** را روی **Me** و گزینه دسترسی را روی **Anyone** بگذارید.
+- Deploy کنید و `Deployment ID` را نگه دارید.
 
 بعد از هر تغییر در `Code.gs` باید deployment جدید بسازید.
 
