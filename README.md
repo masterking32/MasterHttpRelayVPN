@@ -132,6 +132,14 @@ You can use telegram as : https://t.me/socks?server=127.0.0.1&port=1080 or if yo
 - Windows client (3rd party): [MHRWindowsApp](https://github.com/AriPath/MHRWindowsApp)
 - Ad blocker filter source: [PersianBlocker](https://github.com/MasterKia/PersianBlocker/)
 
+## Donate 🍩
+
+If you find this project helpful, you can support it with a donation:
+
+- **TON network:** `masterking32.ton`
+- **EVM-compatible networks (ETH and compatible chains):** `0x517f07305D6ED781A089322B6cD93d1461bF8652`
+- **TRC20 network (TRON):** `TLApdY8APWkFHHoxebxGY8JhMeChiETqFH`
+
 ## Safety 🔒
 
 This project is provided for educational, testing, and research use. You are responsible for following applicable laws and service terms. Never share `config.json`, `auth_key`, `ca/`, or an exit-node URL together with a valid PSK. Read [Security Notes](docs/SECURITY.md) before sharing the proxy with other devices.
