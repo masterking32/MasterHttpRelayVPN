@@ -62,6 +62,26 @@ Fix:
 3. Confirm the deployment is a Web App with **Execute as: Me** and **Who has access: Anyone**.
 4. If quota is exhausted, wait for the quota reset or add more deployments with `script_ids`.
 
+## Page Looks Like Random Characters
+
+Symptoms:
+
+- A website opens as unreadable text like `�` and random symbols.
+- The issue appears only for some users or only on some websites.
+- HTML, JavaScript, or JSON is shown as binary-looking output instead of a normal page.
+
+Most likely cause:
+
+The target website sent a compressed response, but the browser received it without a usable `Content-Encoding` header. This usually happens when an old Apps Script deployment or exit node still forwards `Accept-Encoding` to the target website.
+
+Fix:
+
+1. Update this project and install dependencies again with `pip install -r requirements.txt`.
+2. Redeploy [apps_script/Code.gs](../apps_script/Code.gs) as a new Apps Script deployment.
+3. Copy the new Deployment ID into `config.json` if it changed.
+4. If you use a Deno exit node, redeploy [apps_script/deno_deploy.ts](../apps_script/deno_deploy.ts).
+5. Restart the proxy and fully reopen the browser.
+
 ## Connection Timeout
 
 The current `google_ip` may be blocked or slow on your network.
