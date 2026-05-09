@@ -20,7 +20,7 @@ Set this in `config.json`:
 
 Restart the proxy. The startup log prints LAN addresses other devices can use. it would be something like `192.168.x.x` or `10.x.x.x`.
 
-in terminal you would see a message like `CA certificate download :  http://192.168.xxxxxx/ca.crt` in a green color, on the other devide open this URL in browser to download the CA certificate and install it there as well.
+in terminal you would see a message like `CA certificate download :  http://192.168.xxxxxx/ca.crt` in a green color, on the other device open this URL in browser to download the CA certificate and install it there as well.
 
 
 ## Configure Other Devices
