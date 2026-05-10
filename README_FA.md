@@ -100,7 +100,6 @@ chmod +x start.sh
 ## پشتیبانی و اطلاع‌رسانی 📣
 
 - کانال Telegram: [https://t.me/masterdnsvpn](https://t.me/masterdnsvpn)
-- کلاینت Windows: [MHRWindowsApp](https://github.com/AriPath/MHRWindowsApp)
 - منبع فیلتر تبلیغات: [PersianBlocker](https://github.com/MasterKia/PersianBlocker/)
 
 ## امنیت 🔒

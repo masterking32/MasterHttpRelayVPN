@@ -129,7 +129,6 @@ You can use telegram as : https://t.me/socks?server=127.0.0.1&port=1080 or if yo
 
 - Telegram channel: [https://t.me/MasterDnsVPN](https://t.me/MasterDnsVPN)
 - Telegram group: [https://t.me/MasterDnsVPNGroup](https://t.me/MasterDnsVPNGroup)
-- Windows client (3rd party): [MHRWindowsApp](https://github.com/AriPath/MHRWindowsApp)
 - Ad blocker filter source: [PersianBlocker](https://github.com/MasterKia/PersianBlocker/)
 
 ## Donate 🍩
