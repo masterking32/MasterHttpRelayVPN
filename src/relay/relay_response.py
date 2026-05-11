@@ -25,7 +25,8 @@ import gzip
 import json
 import logging
 import re
-import zlib
+
+from core import codec
 
 log = logging.getLogger("Fronter")
 
@@ -218,6 +219,77 @@ def split_set_cookie(blob: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
+def _target_content_encoding(headers: dict) -> str:
+    for key, value in headers.items():
+        if str(key).lower() == "content-encoding":
+            return str(value).strip().lower()
+    return ""
+
+
+def _looks_like_plain_body(body: bytes) -> bool:
+    if not body:
+        return True
+
+    sample = body[:512].lstrip()
+    lower = sample[:64].lower()
+    if lower.startswith((
+        b"<!doctype",
+        b"<html",
+        b"<head",
+        b"<body",
+        b"<?xml",
+        b"{",
+        b"[",
+        b"function",
+        b"var ",
+        b"let ",
+        b"const ",
+        b"/*",
+        b"//",
+    )):
+        return True
+    if b"\x00" in sample[:128]:
+        return False
+
+    try:
+        sample.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _decode_target_body(body: bytes, encoding: str) -> tuple[bytes, bool]:
+    encodings = []
+    for part in (encoding or "").lower().split(","):
+        layer = part.strip()
+        if not layer or layer == "identity":
+            continue
+        encodings.append("deflate" if layer == "zlib" else layer)
+    if not body or not encodings:
+        return body, False
+
+    # Apps Script's UrlFetchApp transparently decompresses gzip/br/deflate
+    # responses but preserves the original Content-Encoding header in the
+    # forwarded metadata. The body therefore arrives as already-plain bytes
+    # while still being labelled (e.g.) "br". Detect that case up front so
+    # we don't pay the CPU cost of a guaranteed-failing brotli/zstd decode
+    # on every relayed response.
+    if _looks_like_plain_body(body):
+        return body, True
+
+    decoded = body
+    for layer in reversed(encodings):
+        before = decoded
+        decoded = codec.decode(before, layer)
+        if decoded == before:
+            if _looks_like_plain_body(body):
+                log.debug("dropping stale target content-encoding (%s)", encoding)
+                return body, True
+            log.debug("preserving target content-encoding (%s)", encoding)
+            return body, False
+    return decoded, True
+
+
 # ── JSON → HTTP response ─────────────────────────────────────────────────────
 
 def parse_relay_json(data: dict, max_body_bytes: int) -> bytes:
@@ -241,38 +313,11 @@ def parse_relay_json(data: dict, max_body_bytes: int) -> bytes:
         except Exception as _exc:
             log.debug("relay gz decompress failed: %s", _exc)
 
-    # ── Decompress if the target sent a compressed body ─────────────────────────
-    # UrlFetchApp does NOT auto-decompress gzip/deflate responses, so if the
-    # client's Accept-Encoding header was forwarded and the server compressed
-    # its reply, we receive raw compressed bytes.  We decompress here so the
-    # browser always gets plain content (and we can safely drop the header).
-    _ce = ""
-    for _k, _v in resp_headers.items():
-        if _k.lower() == "content-encoding":
-            _ce = str(_v).lower().strip()
-            break
-    if _ce == "gzip":
-        try:
-            resp_body = gzip.decompress(resp_body)
-        except Exception as _exc:
-            log.debug("gzip decompress skipped (%s) — body may already be plain", _exc)
-    elif _ce in ("deflate", "zlib"):
-        try:
-            # Try zlib wrapper first, then raw deflate
-            resp_body = zlib.decompress(resp_body)
-        except Exception:
-            try:
-                resp_body = zlib.decompress(resp_body, -15)
-            except Exception as _exc:
-                log.debug("deflate decompress skipped (%s)", _exc)
-    elif _ce == "br":
-        # Brotli is uncommon in this relay path but log if seen so it is visible
-        log.debug("brotli-encoded response from target — install 'brotli' package for support")
-        try:
-            import brotli  # type: ignore
-            resp_body = brotli.decompress(resp_body)
-        except Exception:
-            pass  # leave body as-is; browser will likely fail gracefully
+    # UrlFetchApp and some exit-node hosts can pass through compressed target
+    # bodies. Decode only when confirmed; otherwise preserve Content-Encoding so
+    # the browser does not receive compressed bytes labeled as plain text.
+    target_encoding = _target_content_encoding(resp_headers)
+    resp_body, target_body_decoded = _decode_target_body(resp_body, target_encoding)
     if len(resp_body) > max_body_bytes:
         return error_response(
             502,
@@ -288,8 +333,9 @@ def parse_relay_json(data: dict, max_body_bytes: int) -> bytes:
     }.get(status, "OK")
     result = f"HTTP/1.1 {status} {status_text}\r\n"
 
-    skip = {"transfer-encoding", "connection", "keep-alive",
-            "content-length", "content-encoding"}
+    skip = {"transfer-encoding", "connection", "keep-alive", "content-length"}
+    if target_body_decoded:
+        skip.add("content-encoding")
     for k, v in resp_headers.items():
         if k.lower() in skip:
             continue

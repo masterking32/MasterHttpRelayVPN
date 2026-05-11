@@ -18,6 +18,7 @@ import asyncio
 import logging
 import socket
 import ssl
+import time
 from urllib.parse import urlparse
 
 try:
@@ -104,9 +105,18 @@ class H2Transport:
         # Per-stream tracking
         self._streams: dict[int, _StreamState] = {}
 
+        # Connection-level keepalive: ONE pinger task per connection, runs
+        # only while at least one stream is in flight.  Replaces the previous
+        # per-stream ping task (N concurrent streams → N pingers each at
+        # ping_interval cadence → N×(1/interval) pings/sec, all serialised on
+        # _write_lock).  With 20 in-flight streams and 0.2s interval that was
+        # ~100 PING/s contending with stream sends.
+        self._inflight_pinger_task: asyncio.Task | None = None
+
         # Stats
         self.total_requests = 0
         self.total_streams = 0
+        self._ping_count = 0
 
     # ── Connection lifecycle ──────────────────────────────────────
 
@@ -246,6 +256,11 @@ class H2Transport:
         if read_task:
             read_task.cancel()
             await asyncio.gather(read_task, return_exceptions=True)
+        pinger_task = self._inflight_pinger_task
+        self._inflight_pinger_task = None
+        if pinger_task:
+            pinger_task.cancel()
+            await asyncio.gather(pinger_task, return_exceptions=True)
         if self._writer:
             try:
                 writer = self._writer
@@ -340,28 +355,17 @@ class H2Transport:
 
             await self._flush()
 
-        # Wait for complete response, sending H2 PING frames concurrently.
-        # The PING/ACK bidirectional traffic masks the Apps Script execution
-        # silence that Iran DPI uses to identify and throttle relay patterns.
-        ping_task = None
-        if self._ping_interval > 0:
-            ping_task = asyncio.create_task(
-                self._ping_keepalive(state, self._ping_interval)
-            )
+        # Connection-level pinger: start if not running.  ONE task pings the
+        # connection while ANY stream is in-flight.  Replaces the previous
+        # per-stream pinger that produced O(N) pings/sec with N streams.
+        self._ensure_inflight_pinger()
         try:
             await asyncio.wait_for(state.done.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            if ping_task:
-                ping_task.cancel()
-                await asyncio.gather(ping_task, return_exceptions=True)
             self._streams.pop(stream_id, None)
             raise TimeoutError(
                 f"H2 stream {stream_id} timed out ({timeout}s)"
             )
-        finally:
-            if ping_task:
-                ping_task.cancel()
-                await asyncio.gather(ping_task, return_exceptions=True)
 
         self._streams.pop(stream_id, None)
 
@@ -376,29 +380,62 @@ class H2Transport:
 
         return state.status, state.headers, resp_body
 
-    async def _ping_keepalive(self, state: "_StreamState", interval: float):
-        """Send H2 PING frames at *interval* seconds until *state* completes.
+    def _ensure_inflight_pinger(self) -> None:
+        """Start the connection-level inflight pinger if not already running.
 
-        Iran DPI throttles relay responses when it detects a long TCP silence
+        ONE task pings the connection at ping_interval while at least one
+        stream is in flight.  Auto-exits when no streams remain so it
+        doesn't ping during idle periods (keepalive_loop handles those).
+        """
+        if self._ping_interval <= 0:
+            return
+        if self._inflight_pinger_task and not self._inflight_pinger_task.done():
+            return
+        self._inflight_pinger_task = asyncio.create_task(
+            self._inflight_pinger_loop()
+        )
+
+    async def _inflight_pinger_loop(self):
+        """Background: ping while any stream is in-flight.
+
+        Iran DPI throttles relay responses when it detects long TCP silence
         between the client's POST upload and the server's first response byte
-        (Apps Script typically takes 2-5 s to execute).  Sending PING frames
+        (Apps Script typically takes 2-5s to execute).  Sending PING frames
         forces the server to emit PING ACK frames, creating continuous
         bidirectional traffic that looks like a normal persistent connection
         rather than a relay waiting for proxy execution.
+
+        One pinger per connection regardless of in-flight stream count.
         """
-        opaque = b"dpi-ping"  # 8-byte PING opaque data
+        opaque = b"dpi-ping"
+        # Keep pinging for ~5s after the last stream finishes so Apps Script
+        # doesn't drop the connection during the brief gaps between bursts of
+        # requests (e.g. user navigating between pages). The full keepalive
+        # loop in domain_fronter pings only every 60s, which leaves a window
+        # where the server can send GOAWAY and the next request loses the race.
+        idle_grace_seconds = 5.0
+        idle_since: float | None = None
         try:
-            while not state.done.is_set():
-                await asyncio.sleep(interval)
-                if state.done.is_set():
+            while True:
+                await asyncio.sleep(self._ping_interval)
+                if not self._connected or not self._h2:
                     break
+                if not self._streams:
+                    now = time.monotonic()
+                    if idle_since is None:
+                        idle_since = now
+                    elif (now - idle_since) >= idle_grace_seconds:
+                        break
+                else:
+                    idle_since = None
                 try:
                     async with self._write_lock:
                         if self._h2 and self._connected:
                             self._h2.ping(opaque)
                             await self._flush()
+                            self._ping_count += 1
                 except Exception:
-                    break  # connection lost; let the main wait() handle it
+                    break  # connection lost; main wait() will surface error
         except asyncio.CancelledError:
             pass
 

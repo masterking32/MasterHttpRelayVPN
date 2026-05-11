@@ -34,13 +34,21 @@ fi
 
 VPY="$VENV_DIR/bin/python"
 
-echo "[*] Installing dependencies ..."
-"$VPY" -m pip install --disable-pip-version-check -q --upgrade pip >/dev/null
-if ! "$VPY" -m pip install --disable-pip-version-check -q -r requirements.txt; then
-    echo "[!] PyPI install failed. Retrying via runflare mirror ..."
-    "$VPY" -m pip install --disable-pip-version-check -q -r requirements.txt \
-        -i https://mirror-pypi.runflare.com/simple/ \
-        --trusted-host mirror-pypi.runflare.com
+# Skip dependency install when all required packages are already importable.
+# Pip install (even with -q) takes ~3-8s every launch; this drops it to <0.1s
+# on warm runs.  Falls through to the install path on first run or if any
+# import fails for any reason.
+if "$VPY" -c "import cryptography, h2, brotli, zstandard" >/dev/null 2>&1; then
+    echo "[*] Dependencies already installed — skipping pip install."
+else
+    echo "[*] Installing dependencies ..."
+    "$VPY" -m pip install --disable-pip-version-check -q --upgrade pip >/dev/null
+    if ! "$VPY" -m pip install --disable-pip-version-check -q -r requirements.txt; then
+        echo "[!] PyPI install failed. Retrying via runflare mirror ..."
+        "$VPY" -m pip install --disable-pip-version-check -q -r requirements.txt \
+            -i https://mirror-pypi.runflare.com/simple/ \
+            --trusted-host mirror-pypi.runflare.com
+    fi
 fi
 
 if [ ! -f "config.json" ]; then

@@ -234,6 +234,21 @@ def configure(level: str = "INFO", *, stream=None) -> None:
     # stream in TLS via start_tls(); there's nothing actionable to do.
     _install_asyncio_noise_filter()
 
+    # Quiet very chatty third-party loggers even when the root logger is set
+    # to DEBUG: we only care about our own component DEBUG output. hpack
+    # emits one log line per header field, asyncio emits raw selector spam.
+    for noisy in (
+        "hpack",
+        "hpack.hpack",
+        "hpack.table",
+        "h2",
+        "h2.connection",
+        "asyncio",
+        "urllib3",
+        "chardet",
+    ):
+        logging.getLogger(noisy).setLevel(logging.INFO)
+
 
 class _AsyncioNoiseFilter(logging.Filter):
     _SUPPRESSED = (

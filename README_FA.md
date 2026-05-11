@@ -1,529 +1,121 @@
 # MasterHttpRelayVPN
 
-**[English README](README.md)**
+**زبان:** [English](README.md) | فارسی
 
-یک ابزار رایگان برای عبور از فیلترینگ و DPI که ترافیک شما را پشت دامنه‌های قابل اعتماد مثل Google پنهان می‌کند. برای حالت ساده، به VPS یا سرور نیاز ندارید و فقط یک اکانت Google کافی است.
+**کانال تلگرام 📣:** [https://t.me/masterdnsvpn](https://t.me/masterdnsvpn)
 
-> **توضیح ساده:** مرورگر شما به این ابزار روی کامپیوتر خودتان وصل می‌شود. این ابزار ترافیک را شبیه ترافیک عادی Google نشان می‌دهد. فیلتر فقط `google.com` را می‌بیند و اجازه عبور می‌دهد. در پشت صحنه، یک Google Apps Script رایگان سایت واقعی را برای شما دریافت می‌کند.
+**تشکر ویژه ❤️:** [Abolix](https://github.com/abolix)
 
----
-
-## کانال اطلاع‌رسانی و پشتیبانی 📢
-
-برای دریافت آخرین اخبار، نسخه‌ها و اطلاعیه‌های پروژه، کانال تلگرام ما را دنبال کنید: [Telegram Channel](https://t.me/masterdnsvpn)
-
----
-
-### اگر از پروژه راضی‌اید، با دادن ستاره (⭐) در گیت‌هاب از ما حمایت کنید — این کار به دیده‌شدن پروژه کمک می‌کند.
-
----
-
-### حمایت مالی (اختیاری) 💸
-
-- شبکه TON:
-
-`masterking32.ton`
-
-- آدرس روی شبکه‌های EVM (ETH و سازگارها):
-
-`0x517f07305D6ED781A089322B6cD93d1461bF8652`
-
-- شبکه TRC20 (TRON):
-
-`TLApdY8APWkFHHoxebxGY8JhMeChiETqFH`
-
-از هر نوع حمایت و بازخورد شما سپاسگزاریم — کمک‌ها برای توسعه و بهبود پروژه بسیار ارزشمند است.
-
----
-
-## سلب مسئولیت
-
-پروژه MasterHttpRelayVPN فقط برای اهداف آموزشی، تست و پژوهش ارائه شده است.
-
-- **بدون ضمانت:** این نرم‌افزار به صورت «همان‌گونه که هست» ارائه می‌شود و هیچ‌گونه ضمانت صریح یا ضمنی، از جمله قابلیت فروش، مناسب بودن برای هدف خاص، یا عدم نقض حقوق دیگران برای آن وجود ندارد.
-- **محدودیت مسئولیت:** توسعه‌دهندگان و مشارکت‌کنندگان این پروژه هیچ مسئولیتی در قبال خسارت‌های مستقیم، غیرمستقیم، اتفاقی، تبعی، یا هر نوع خسارت دیگر ناشی از استفاده یا ناتوانی در استفاده از این پروژه ندارند.
-- **مسئولیت کاربر:** استفاده از این پروژه خارج از محیط‌های کنترل‌شده و آزمایشی ممکن است بر شبکه، حساب‌ها، پراکسی‌ها، گواهی‌ها یا سیستم‌های متصل اثر بگذارد. تمام مسئولیت نصب، پیکربندی و استفاده بر عهده کاربر است.
-- **رعایت قوانین:** پیش از استفاده از این نرم‌افزار، رعایت تمام قوانین و مقررات محلی، کشوری و بین‌المللی بر عهده کاربر است.
-- **رعایت قوانین Google:** اگر از Google Apps Script یا دیگر سرویس‌های Google در این پروژه استفاده می‌کنید، مسئولیت رعایت شرایط استفاده، محدودیت‌ها، سهمیه‌ها و سیاست‌های پلتفرم Google با خود شما است. استفاده نادرست ممکن است باعث تعلیق یا غیرفعال شدن اکانت Google یا deployment های شما شود.
-- **شرایط مجوز:** استفاده، کپی، توزیع و تغییر این نرم‌افزار فقط تحت شرایط مجوز موجود در مخزن مجاز است و هر استفاده خارج از آن شرایط ممنوع است.
-
----
-
-## نحوه کار
-
-```
-مرورگر -> پراکسی محلی -> Google/CDN -> رله شما -> سایت مقصد
-           |
-           +-> فیلتر فقط google.com را می‌بیند
-```
-
-مرورگر، درخواست‌ها را به پراکسی محلی می‌فرستد. پراکسی این درخواست‌ها را از مسیر Google عبور می‌دهد تا برای فیلتر شبیه ترافیک عادی به نظر برسد. سپس رله‌ای که شما deploy کرده‌اید، سایت اصلی را دریافت می‌کند و پاسخ را برمی‌گرداند.
-
----
-
-## راه‌اندازی مرحله‌به‌مرحله
-
-### مرحله 1: دریافت پروژه
-
-```bash
-git clone -b python_testing https://github.com/masterking32/MasterHttpRelayVPN.git
-cd MasterHttpRelayVPN
-pip install -r requirements.txt
-```
-
-> **دسترسی به PyPI ندارید؟** از این mirror استفاده کنید:
-> ```bash
-> pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
-> ```
-
-اگر نخواستید با Git کار کنید، می‌توانید فایل ZIP پروژه را از GitHub دانلود و extract کنید.
-
-### مرحله 2: راه‌اندازی رله Google با `Code.gs`
-
-این بخش همان رله‌ای است که روی سرورهای Google اجرا می‌شود و سایت‌ها را برای شما دریافت می‌کند.
-
-1. وارد [Google Apps Script](https://script.google.com/) شوید.
-2. روی **New project** کلیک کنید.
-3. کد پیش‌فرض را کامل حذف کنید.
-4. فایل `apps_script/Code.gs` همین پروژه را باز کنید، همه محتوای آن را کپی کنید و داخل Apps Script قرار دهید.
-5. این خط را به یک رمز دلخواه و امن تغییر دهید:
-   ```javascript
-   const AUTH_KEY = "your-secret-password-here";
-   ```
-6. روی **Deploy -> New deployment** کلیک کنید.
-7. نوع deployment را **Web app** بگذارید.
-8. این تنظیمات را انتخاب کنید:
-   - **Execute as:** Me
-   - **Who has access:** Anyone
-9. روی **Deploy** بزنید.
-   - اگر پنجره‌ای باز شد، روی **Authorize access** کلیک کنید.
-   - اگر Google پیغام **Google hasn't verified this app** نشان داد، روی **Advanced** کلیک کنید و سپس **Go to <نام پروژه> (unsafe)** را بزنید تا ادامه دهید.
-10. مقدار **Deployment ID** را کپی کنید. در مرحله بعد به آن نیاز دارید.
-
-نکته: مقداری که برای `AUTH_KEY` می‌گذارید باید دقیقا با `auth_key` در فایل `config.json` یکی باشد.
-
-### مرحله 3: تنظیم `config.json`
-
-ابتدا فایل نمونه را کپی کنید:
-
-```bash
-cp config.example.json config.json
-```
-
-در ویندوز می‌توانید فایل را دستی کپی و rename کنید.
-
-سپس `config.json` را باز کنید و مقادیر را وارد کنید:
-
-```json
-{
-  "google_ip": "216.239.38.120",
-  "front_domain": "www.google.com",
-  "script_id": "PASTE_YOUR_DEPLOYMENT_ID_HERE",
-  "auth_key": "your-secret-password-here",
-  "listen_host": "127.0.0.1",
-  "http_port": 8085,
-  "socks5_port": 1080,
-  "log_level": "INFO",
-  "verify_ssl": true
-}
-```
-
-- `script_id` : همان Deployment ID مرحله 2
-- `auth_key` : همان رمزی که در `Code.gs` گذاشته‌اید
-
-### مرحله 3.5: نود خروجی اختیاری برای Full Tunnel
-
-برخی سایت‌ها (مثل ChatGPT) خروجی مستقیم از IPهای دیتاسنتر Google را مسدود می‌کنند.
-برای حل این مورد، نود خروجی (exit node) را فعال کنید تا مسیر این‌گونه شود:
+MasterHttpRelayVPN یک پراکسی محلی است که ترافیک مرورگر را از مسیر Google Apps Script و Domain Fronting عبور می‌دهد. برای مسیر ساده فقط همین پروژه و یک اکانت رایگان Google کافی است. اگر بعضی سایت‌ها خروجی Google را مسدود کنند، بعدا می‌توانید Exit Node اضافه کنید.
 
 ```text
-مرورگر -> پراکسی محلی -> Apps Script -> Exit Node (Cloudflare / Deno / VPS) -> سایت مقصد
+مرورگر -> پراکسی محلی -> مسیر Google -> رله Apps Script شما -> سایت مقصد
+                         فیلتر فقط اتصال شبیه Google را می‌بیند
 ```
 
-می‌توانید یکی از این backend های نود خروجی را deploy کنید:
+## منوی سریع 🧭
 
-1. Cloudflare Workers: [apps_script/cloudflare_worker.js](apps_script/cloudflare_worker.js)
-2. Deno Deploy: [apps_script/deno_deploy.ts](apps_script/deno_deploy.ts)
-3. سرور VPS شخصی
+[شروع سریع](docs/fa/GETTING_STARTED.md) | [Docker](docs/fa/DOCKER.md) | [اشتراک گذاری LAN](docs/fa/LAN_SHARING.md) | [راهنمای Exit Node](docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md)
 
-راهنمای کامل مرحله‌به‌مرحله برای هر provider:
-- [docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md](docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md) (فارسی)
-- [docs/exit-node/EXIT_NODE_DEPLOYMENT.md](docs/exit-node/EXIT_NODE_DEPLOYMENT.md) (انگلیسی)
+[مرجع تنظیمات](docs/fa/CONFIGURATION.md) | [رفع مشکل](docs/fa/TROUBLESHOOTING.md) | [نکات امنیتی](docs/fa/SECURITY.md) | [معماری](docs/fa/ARCHITECTURE.md)
 
-سپس همان secret را هم در کد نود خروجی (`PSK`) و هم در `config.json` یکسان بگذارید.
+## شروع خیلی سریع ⚡
 
-نمونه کانفیگ برای سوییچ بین provider ها:
+قبل از اجرای پراکسی، باید یک بار رله Google را deploy کنید. فقط یک اکانت Google لازم دارید و این کار حدود دو دقیقه زمان می‌برد.
 
-```json
-"exit_node": {
-  "enabled": true,
-  "provider": "cloudflare",
-  "url": "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev",
-  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
-  "mode": "full",
-  "hosts": [
-    "chatgpt.com",
-    "openai.com",
-    "claude.ai",
-    "anthropic.com"
-  ]
-}
-```
+## ساخت رله Google ☁️
 
-نکات:
-- برای تنظیم ساده، فقط `provider`، `url` و `psk` را پر کنید.
-- برای تغییر backend مقدار `exit_node.provider` و `exit_node.url` را عوض کنید.
-- `mode: "full"` یعنی همه ترافیک از exit node عبور می‌کند (`hosts` نادیده گرفته می‌شود).
-- `mode: "selective"` یعنی فقط دامنه‌های داخل `hosts` از exit node عبور می‌کنند.
-- مقدار `psk` باید دقیقا با secret تنظیم‌شده در runtime برابر باشد.
+- وارد [Google Apps Script](https://script.google.com/) شوید و روی **New project** کلیک کنید.
+- محتوای پیش‌فرض ادیتور را کامل پاک کنید.
+- فایل [apps_script/Code.gs](apps_script/Code.gs) را باز کنید، همه کد آن را کپی کنید، و داخل Apps Script قرار دهید.
+- این خط را پیدا کنید و با یک رمز طولانی و مخصوص خودتان عوض کنید:
 
-### مرحله 4: اجرا
+    ```javascript
+    const AUTH_KEY = "your-secret-password-here";
+    ```
+
+- از مسیر **Deploy** -> **New deployment** -> **Web app** بروید.
+- گزینه **Execute as** را روی **Me** بگذارید.
+- گزینه **Who has access** را روی **Anyone** بگذارید.
+- روی **Deploy** کلیک کنید، دسترسی‌ها را تایید کنید، و **Deployment ID** را کپی کنید.
+
+این دو مقدار را برای setup wizard نگه دارید:
+
+- `Deployment ID` از Google Apps Script
+- `AUTH_KEY`، یک رمز طولانی که باید دقیقا با `auth_key` در کانفیگ محلی یکی باشد
+
+اگر توضیح کامل‌تر می‌خواهید، [شروع سریع](docs/fa/GETTING_STARTED.md#2-ساخت-رله-google) را ببینید.
+
+پروژه را با Git یا ZIP دریافت کنید، سپس لانچر یک‌کلیکی را اجرا کنید.
+
+**گزینه A: Git**
 
 ```bash
-python3 main.py
+git clone https://github.com/masterking32/MasterHttpRelayVPN.git
+cd MasterHttpRelayVPN
 ```
 
-اگر همه‌چیز درست باشد، پراکسی HTTP روی `127.0.0.1:8085` و SOCKS5 روی `127.0.0.1:1080` بالا می‌آید.
+**گزینه B: ZIP**
 
-### مرحله 5: تنظیم مرورگر
+- [صفحه GitHub پروژه](https://github.com/masterking32/MasterHttpRelayVPN) را باز کنید.
+- روی **Code** -> **Download ZIP** کلیک کنید.
+- فایل ZIP را extract کنید.
+- داخل پوشه extract شده `MasterHttpRelayVPN` یک terminal باز کنید.
 
-مرورگر را روی این پراکسی تنظیم کنید:
+بعد برنامه را اجرا کنید:
 
-- **Proxy Address:** `127.0.0.1`
-- **Proxy Port:** `8085`
-- **Type:** HTTP
-- **SOCKS5 Port (اختیاری):** `1080`
+**Windows**
 
-نمونه تنظیم مرورگرها:
+```cmd
+start.bat
+```
 
-- **Firefox:** Settings -> General -> Network Settings -> Manual proxy
-- **Chrome / Edge:** از تنظیمات پراکسی سیستم استفاده می‌کنند
-- یا از افزونه‌هایی مثل FoxyProxy استفاده کنید
-
-### مرحله 6: نصب گواهی CA برای HTTPS
-
-در حالت `apps_script`، برنامه برای مدیریت HTTPS یک گواهی محلی می‌سازد. اگر آن را نصب نکنید، مرورگر برای سایت‌ها خطای امنیتی می‌دهد.
-
-فایل گواهی بعد از اولین اجرا در این مسیر ساخته می‌شود:
-
-`ca/ca.crt`
-
-#### ویندوز
-1. روی `ca/ca.crt` دوبار کلیک کنید.
-2. گزینه **Install Certificate** را بزنید.
-3. گزینه **Current User** را انتخاب کنید.
-4. گزینه **Place all certificates in the following store** را بزنید.
-5. از بخش **Browse**، گزینه **Trusted Root Certification Authorities** را انتخاب کنید.
-6. مراحل را تا پایان ادامه دهید.
-7. مرورگر را یک بار ببندید و دوباره باز کنید.
-
-#### Firefox
-Firefox معمولا certificate store جداگانه دارد:
-
-1. به **Settings -> Privacy & Security -> Certificates** بروید.
-2. روی **View Certificates** کلیک کنید.
-3. در تب **Authorities**، روی **Import** بزنید.
-4. فایل `ca/ca.crt` را انتخاب کنید.
-5. گزینه **Trust this CA to identify websites** را فعال کنید.
-
-> **نصب خودکار هنگام اجرا:** در حالت `apps_script`، برنامه به صورت خودکار وضعیت اعتماد گواهی CA را بررسی کرده و در صورت نیاز نصب می‌کند. در صورت موفقیت پیام تأیید در لاگ نمایش داده می‌شود. اگر نصب خودکار ناموفق بود، می‌توانید دستور `python main.py --install-cert` را اجرا کنید.
-
-نکته امنیتی: پوشه `ca/` را با کسی به اشتراک نگذارید. اگر خواستید از اول گواهی جدید بسازید، این پوشه را حذف کنید تا دوباره ساخته شود.
-
-
----
-
-## حالت‌های موجود
-
-این پروژه کاملاً روی حالت **Apps Script** تمرکز دارد. فقط به یک اکانت رایگان Google نیاز دارید — بدون VPS، بدون سرور، بدون Cloudflare. همه‌چیز برای همین حالت تنظیم شده است.
-
----
-
-## اشتراک‌گذاری در شبکه محلی (اختیاری)
-
-به‌طور پیش‌فرض، پروکسی فقط به `127.0.0.1` (localhost) گوش می‌دهد، به این معنی که فقط کامپیوتر شما می‌تواند از آن استفاده کند. برای اینکه سایر دستگاه‌های موجود در شبکه محلی (LAN) شما بتوانند از این پروکسی استفاده کنند:
-
-۱. در فایل `config.json` خود، مقدار `"lan_sharing"` را `true` قرار دهید.
-۲. پروکسی به طور خودکار به تمام رابط‌های شبکه (`0.0.0.0`) گوش خواهد داد.
-۳. در لاگ راه‌اندازی، آدرس‌های IP شبکه محلی شما که سایر دستگاه‌ها می‌توانند به آن متصل شوند، نمایش داده می‌شود.
-
-**نمونه پیکربندی برای شبکه محلی:**
-json
-{
-  "lan_sharing": true,
-  "listen_host": "0.0.0.0",
-  "http_port": 8085
-}
-
-**هشدار امنیتی:** وقتی اشتراک‌گذاری در شبکه محلی فعال باشد، هر کسی در شبکه محلی شما می‌تواند از پروکسی شما استفاده کند. اطمینان حاصل کنید که شبکه شما مورد اعتماد است و اقدامات امنیتی بیشتری را در نظر بگیرید.
-
-**در سایر دستگاه‌ها:** آن‌ها را طوری پیکربندی کنید که از آدرس IP کامپیوتر شما در شبکه محلی (که در لاگ راه‌اندازی نمایش داده می‌شود) و پورت 8085 به عنوان پروکسی HTTP استفاده کنند.
-
----
-## Docker (اختیاری)
-
-اگر ترجیح می‌دهید پروکسی را در یک container اجرا کنید، Docker پشتیبانی می‌شود.
-
-**پیش‌نیاز:** [Docker](https://docs.docker.com/get-docker/) و [Docker Compose](https://docs.docker.com/compose/)
-
-### راه‌اندازی
-
-۱. فایل config را کپی و تکمیل کنید:
-   ```bash
-   cp config.example.json config.json
-   # script_id و auth_key را پر کنید
-   ```
-
-۲. Build و start کنید:
-   ```bash
-   docker compose up -d
-   ```
-
-Container به‌طور خودکار روی `0.0.0.0` گوش می‌دهد، پس هر دو پورت از host قابل دسترس هستند:
-- `127.0.0.1:8085` — HTTP proxy
-- `127.0.0.1:1080` — SOCKS5 proxy
-
-### گواهی CA در Docker
-
-در اولین اجرا، container فایل `ca/ca.crt` را داخل volume مربوط به `./ca` روی host می‌سازد. آن را به صورت دستی در مرورگر نصب کنید — مرحله ۶ را ببینید. اجرای `--install-cert` داخل container تأثیری روی cert store سیستم host ندارد.
-
-### دستورهای مفید
+**Linux / macOS**
 
 ```bash
-docker compose up -d          # اجرا در پس‌زمینه
-docker compose logs -f        # دنبال کردن لاگ
-docker compose restart        # ری‌استارت بعد از تغییر config
-docker compose down           # توقف و حذف container
-docker compose build          # بازسازی image بعد از تغییر کد
+chmod +x start.sh
+./start.sh
 ```
 
-> **فایل `config.json` به صورت read-only** داخل container mount می‌شود و هرگز داخل image قرار نمی‌گیرد، پس اطلاعات شما روی host باقی می‌ماند.
+لانچر virtualenv می‌سازد، وابستگی‌ها را نصب می‌کند، اگر `config.json` وجود نداشته باشد setup wizard را باز می‌کند، و سپس پراکسی را اجرا می‌کند.
 
----
-## تنظیمات اصلی
+بعد از اجرا، مرورگر را روی این پراکسی تنظیم کنید:
 
-| تنظیم | توضیح |
-|------|-------|
-| `auth_key` | رمز مشترک بین کامپیوتر شما و رله |
-| `script_id` | شناسه Deployment مربوط به Google Apps Script شما |
-| `listen_host` | محل گوش دادن (`127.0.0.1` = فقط همین کامپیوتر، `0.0.0.0` = همه اینترفیس‌ها برای اشتراک‌گذاری LAN) |
-| `http_port` | پورت HTTP پروکسی (پیش‌فرض: `8085`) |
-| `lan_sharing` | فعال‌سازی اشتراک‌گذاری LAN تا دستگاه‌های دیگر در شبکه شما بتوانند از پروکسی استفاده کنند (به‌صورت پیش‌فرض `false`) |
-| `log_level` | میزان جزئیات لاگ: `DEBUG`، `INFO`، `WARNING`، `ERROR` |
+| گزینه | مقدار |
+|-------|-------|
+| نوع پراکسی | HTTP |
+| آدرس | `127.0.0.1` |
+| پورت | `8085` |
+| پورت SOCKS5، اختیاری | `1080` |
 
-### تنظیمات پیشرفته
+برای سایت‌های HTTPS، اگر برنامه نتوانست گواهی را خودکار نصب کند، فایل `ca/ca.crt` را نصب کنید. راهنمای کامل در [شروع سریع](docs/fa/GETTING_STARTED.md) است.
 
-| تنظیم | مقدار پیش‌فرض | توضیح |
-|------|---------------|-------|
-| `google_ip` | `216.239.38.120` | IP مورد استفاده برای مسیر Google |
-| `front_domain` | `www.google.com` | دامنه‌ای که فیلتر می‌بیند |
-| `verify_ssl` | `true` | بررسی اعتبار TLS فقط برای اتصال fronted محلی به Google/CDN |
-| `relay_timeout` | `25` | مهلت کل برای هر درخواست relay قبل از fail شدن |
-| `tls_connect_timeout` | `15` | مهلت اتصال TLS پروکسی به endpoint fronted روی Google/CDN |
-| `tcp_connect_timeout` | `10` | مهلت اتصال برای tunnel مستقیم و SNI-rewrite |
-| `script_ids` | - | چند Deployment ID برای load balancing |
-| `chunked_download_extensions` | مطابق [config.example.json](config.example.json) | پسوند فایل‌هایی که باید از دانلود range-parallel استفاده کنند. از `".*"` هم برای probe همه دانلودهای GET پشتیبانی می‌شود. |
-| `chunked_download_min_size` | `5242880` | حداقل اندازه کل فایل (۵ مگابایت) برای فعال ماندن دانلود موازی |
-| `chunked_download_chunk_size` | `524288` | اندازه هر chunk در دانلود موازی |
-| `chunked_download_max_parallel` | `8` | حداکثر تعداد range request همزمان برای یک دانلود |
-| `chunked_download_max_chunks` | `256` | سقف نرم برای تعداد کل chunk request ها؛ برای فایل‌های خیلی بزرگ اندازه chunk به‌صورت خودکار بیشتر می‌شود |
-| `hosts` | `{}` | نگاشت دستی DNS (`hostname` یا `.suffix` به IP). مثال: `{ "example.org": "93.184.216.34", ".internal.lan": "192.168.1.10" }`. |
-| `block_hosts` | `[]` | هاست‌هایی که هرگز نباید tunnel شوند (پاسخ 403). نام دقیق (`ads.example.com`) یا پسوند با نقطه‌ی ابتدایی (`.doubleclick.net`). |
-| `direct_hosts` | `[]` | دامنه‌هایی که همیشه باید مستقیم بروند (بدون MITM و بدون relay/domain-fronting). از نام دقیق یا پسوند نقطه‌دار پشتیبانی می‌کند. |
-| `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | هاست‌هایی که مستقیم می‌روند (بدون MITM و بدون رله). برای منابع داخلی شبکه یا سایت‌هایی که با MITM مشکل دارند. |
-| `direct_google_exclude` | مراجعه به [config.example.json](config.example.json) | اپ‌های Google که باید از مسیر MITM برای رله استفاده کنند به‌جای tunnel مستقیم. |
-| `youtube_via_relay` | `false` | مسیردهی YouTube (`youtube.com`، `youtu.be`، `youtube-nocookie.com`) از طریق رله Apps Script به‌جای مسیر SNI-rewrite. مسیر SNI-rewrite از IP فرانت‌اند Google عبور می‌کند که SafeSearch را اجباری می‌کند و می‌تواند باعث خطای **«ویدیو در دسترس نیست»** شود. با فعال کردن این گزینه، پخش ویدیو درست می‌شود اما تعداد اجراهای Apps Script بیشتر و تأخیر اندکی بالاتر می‌رود. |
-| `exit_node.provider` | `cloudflare` | backend انتخاب‌شده برای exit node: `cloudflare`، `deno`، `vps` یا `custom`. |
-| `exit_node.url` | `""` | آدرس ساده و اصلی برای provider انتخاب‌شده. |
+## قدم‌های بعدی رایج 🛠️
 
-نمونه کاربردی برای policy ها:
+- اگر مرورگر خطای certificate نشان می‌دهد، [بخش خطای گواهی](docs/fa/TROUBLESHOOTING.md#خطاهای-certificate) را ببینید.
+- اگر خطای `unauthorized` می‌بینید، مقدار `AUTH_KEY` در [apps_script/Code.gs](apps_script/Code.gs) باید دقیقا با `auth_key` در `config.json` یکی باشد.
+- اگر سرعت پایین است یا timeout می‌گیرید، دستور `python main.py --scan` را اجرا کنید و [مرجع تنظیمات](docs/fa/CONFIGURATION.md#دستورهای-عیب‌یابی) را ببینید.
+- اگر سایت‌هایی مثل ChatGPT یا Turnstile با خروجی Google مشکل دارند، [راهنمای Exit Node](docs/exit-node/EXIT_NODE_DEPLOYMENT_FA.md) را بخوانید.
 
-```json
-{
-  "block_hosts": [
-    "ads.example.com",
-    ".doubleclick.net"
-  ],
-  "direct_hosts": [
-    "chat.openai.com",
-    ".openai.com"
-  ],
-  "hosts": {
-    "example.org": "93.184.216.34",
-    ".internal.lan": "192.168.1.10"
-  }
-}
-```
+## پشتیبانی و اطلاع‌رسانی 📣
 
-- `block_hosts`: این دامنه‌ها کامل مسدود می‌شوند (پاسخ `403`).
-- `direct_hosts`: این دامنه‌ها همیشه مستقیم می‌روند (بدون MITM و بدون relay fronting).
-- `hosts`: قبل از DNS واقعی، نگاشت دستی اعمال می‌شود (برای تست یا split-DNS workaround).
+- کانال Telegram: [https://t.me/masterdnsvpn](https://t.me/masterdnsvpn)
+- منبع فیلتر تبلیغات: [PersianBlocker](https://github.com/MasterKia/PersianBlocker/)
 
-نکته: سقف اندازه پاسخ relay حالا یک مقدار ثابت کدی (`MAX_RESPONSE_BODY_BYTES`) در [src/core/constants.py](src/core/constants.py) است و دیگر گزینه‌ی کاربری config نیست.
+## امنیت 🔒
 
-### وابستگی‌های اختیاری
+این پروژه برای آموزش، تست و پژوهش ارائه شده است. مسئولیت رعایت قوانین و شرایط سرویس‌ها با کاربر است. فایل `config.json`، مقدار `auth_key`، پوشه `ca/`، و آدرس Exit Node همراه با PSK معتبر را با کسی به اشتراک نگذارید. قبل از فعال کردن استفاده در شبکه محلی، [نکات امنیتی](docs/fa/SECURITY.md) را بخوانید.
 
-همه وابستگی‌های [`requirements.txt`](requirements.txt) اختیاری هستند — در حالت پایه بدون هیچ‌کدام کار می‌کند، ولی با نصب آن‌ها امکانات بیشتری در دسترس است:
+## سلب مسئولیت قانونی ⚠️
 
-| بسته | کاربرد |
-|------|---------|
-| `cryptography` | رمزگشایی MITM برای HTTPS (در حالت `apps_script` لازم است) |
-| `h2` | ارتباط HTTP/2 با رله Apps Script (به‌طور محسوسی سریع‌تر) |
-| `brotli` | پشتیبانی از فشرده‌سازی `Content-Encoding: br` |
-| `zstandard` | پشتیبانی از فشرده‌سازی `Content-Encoding: zstd` |
+MasterHttpRelayVPN فقط برای آموزش، تست و پژوهش ارائه شده است.
 
-### استفاده از چند Script ID
-
-اگر چند نسخه از `Code.gs` را deploy کنید، می‌توانید همه Deployment ID ها را در آرایه `script_ids` بگذارید:
-
-```json
-{
-  "script_ids": [
-    "DEPLOYMENT_ID_1",
-    "DEPLOYMENT_ID_2",
-    "DEPLOYMENT_ID_3"
-  ]
-}
-```
-> **نکته :** اگر از چندین دیپلویمنت آیدی استفاده میکنید توجه داشته باشید که auth_key های همه دیپلویمنت ها باید یکسان باشند.
----
-
-## به‌روزرسانی `Code.gs`
-
-اگر فایل `Code.gs` را تغییر دادید، باید دوباره **Deploy -> New deployment** بزنید و `script_id` جدید را داخل `config.json` قرار دهید. صرفا ذخیره کردن کد، نسخه فعال را عوض نمی‌کند.
-
----
-
-## دستورهای اجرا
-
-```bash
-python3 main.py
-python3 main.py -p 9090
-python3 main.py --socks5-port 1081
-python3 main.py --log-level DEBUG
-python3 main.py -c /path/to/config.json
-python3 main.py --install-cert        # نصب گواهی CA و خروج
-python3 main.py --uninstall-cert      # حذف گواهی CA و خروج
-python3 main.py --no-cert-check       # رد شدن از بررسی خودکار گواهی
-python3 main.py --scan                # اسکن IP های Google و یافتن سریع‌ترین
-```
-
-> **نصب خودکار:** هنگام اجرا در حالت `apps_script`، برنامه به‌طور خودکار بررسی می‌کند که آیا گواهی CA قابل اعتماد است یا نه و در صورت نیاز آن را نصب می‌کند. اگر نصب خودکار ناموفق بود (مثلاً نیاز به دسترسی مدیر دارد)، می‌توانید دستور `python main.py --install-cert` را اجرا کنید یا مراحل مرحله ۶ را دنبال کنید.
-
-### اسکن کردن برای یافتن سریع‌ترین IP گوگل
-
-اگر `google_ip` فعلی در `config.json` بلاک شده یا آهسته است، می‌توانید اسکن کنید تا سریع‌ترین آن را پیدا کنید:
-
-```bash
-python3 main.py --scan
-```
-
-این دستور:
-1. ۲۷ IP برای fronting Google را به‌صورت موازی بررسی می‌کند
-2. تأخیر (latency) از شبکه شما را اندازه می‌گیرد
-3. نتایج را در جدول نمایش می‌دهد
-4. سریع‌ترین IP را پیشنهاد می‌دهد
-5. اگر حداقل یک IP در دسترس باشد کد خروج ۰، ورنه ۱ را برمی‌گرداند
-
-**نمونه خروجی:**
-```
-Scanning 27 Google frontend IPs
-  SNI: www.google.com
-  Timeout: 4s per IP
-  Concurrency: 8 parallel probes
-
-IP                   LATENCY      STATUS
--------------------- ------------ -------------------------
-216.239.32.120          42ms   OK
-216.239.34.120          45ms   OK
-216.239.36.120          52ms   OK
-142.250.80.142       timeout   timeout
-...
-
-Result: 15 / 27 reachable
-
-Top 3 fastest IPs:
-  1. 216.239.32.120 (42ms)
-  2. 216.239.34.120 (45ms)
-  3. 216.239.36.120 (52ms)
-
-Recommended: Set "google_ip": "216.239.32.120" in config.json
-```
-
-پس از اسکن، مقدار `google_ip` در `config.json` را با IP پیشنهادی به‌روزرسانی کنید و پراکسی را دوباره راه‌اندازی کنید.
-
----
-
-## معماری
-
-```
-┌─────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────┐
-│ Browser │────►│ Local Proxy  │────►│ CDN / Google │────►│  Relay   │──► Internet
-│         │◄────│ (this tool)  │◄────│  (fronted)   │◄────│ Endpoint │◄──
-└─────────┘     └──────────────┘     └─────────────┘     └──────────┘
-```
-
----
-
-## فایل‌های پروژه
-
-```
-MasterHttpRelayVPN/
-├── main.py                    # نقطه شروع: پراکسی را راه‌اندازی می‌کند
-├── config.example.json        # نمونه کانفیگ (به config.json کپی شود)
-├── requirements.txt           # وابستگی‌های اختیاری پایتون
-├── apps_script/
-│   ├── Code.gs                # اسکریپت رله روی Google Apps Script
-│   ├── cloudflare_worker.js   # template نود خروجی برای Cloudflare Workers
-│   └── deno_deploy.ts         # template نود خروجی برای Deno Deploy
-├── ca/                        # گواهی MITM (هرگز به اشتراک نگذارید)
-│   ├── ca.crt
-│   └── ca.key
-└── src/                       # پیاده‌سازی پراکسی
-    ├── proxy_server.py        # دریافت CONNECT و SOCKS5
-    ├── domain_fronter.py      # کلاینت رله Apps Script (fronted از طریق Google)
-    ├── h2_transport.py        # ارتباط HTTP/2 (اختیاری)
-    ├── mitm.py                # ساخت و مدیریت گواهی‌ها
-    ├── cert_installer.py      # نصب خودکار CA در ویندوز/مک/لینوکس + فایرفاکس
-    ├── codec.py               # رمزگشای Content-Encoding (gzip/deflate/br/zstd)
-    ├── google_ip_scanner.py   # اسکنر IP های Google برای یافتن سریع‌ترین
-    ├── constants.py           # مقادیر پیش‌فرض قابل تنظیم
-    └── logging_utils.py       # فرمت‌دهنده‌ی لاگ رنگی و منظم
-```
-
----
-
-## رفع مشکل
-
-| مشکل | راه‌حل |
-|------|--------|
-| `Config not found` | فایل `config.example.json` را به `config.json` کپی کنید |
-| خطای certificate در مرورگر | گواهی CA را نصب کنید (مرحله ۶) |
-| تلگرام کار می‌کند ولی مرورگر سایت‌ها را باز نمی‌کند | تقریباً مطمئناً گواهی CA نصب نشده. مرحله ۶ را دنبال کنید، سپس مرورگر را **کاملاً ببندید و دوباره باز کنید** (برای Chrome/Edge مطمئن شوید هیچ پروسه Chrome در پس‌زمینه باز نیست). |
-| گواهی نصب شد ولی مرورگر هنوز خطا می‌دهد | Chrome و Edge گواهی‌ها را cache می‌کنند — باید مرورگر را **کاملاً ببندید** (Task Manager یا system tray را چک کنید) و دوباره باز کنید. Firefox نیاز به import جداگانه دارد (بخش Firefox در مرحله ۶). |
-| خطای `unauthorized` | مقدار `auth_key` و `AUTH_KEY` باید یکسان باشند |
-| timeout | IP دیگری برای Google امتحان کنید |
-| سرعت کم | از چند `script_id` برای load balancing استفاده کنید |
-| خطای `502 Bad JSON` | Google به‌جای JSON پاسخ HTML برگردانده (مثلاً صفحه quota یا 404). دلایل: `script_id` اشتباه، تجاوز از سهمیه روزانه Apps Script، یا عدم ایجاد deployment جدید پس از ویرایش `Code.gs`. `script_id` را بررسی کنید و یک **deployment جدید** بسازید. |
-| تلگرام روی HTTP proxy کار می‌کند ولی روی SOCKS5 نه | **طبیعی است.** کلاینت SOCKS5 نام دامنه را روی سیستم خودش resolve می‌کند و مستقیم به IP وصل می‌شود، پس بایت‌های MTProto تلگرام به IP فیلترشده می‌رسد که نه می‌توانیم direct-tunnel کنیم و نه MITM. تلگرام را به‌جای SOCKS5 به صورت **HTTP proxy** (`127.0.0.1:8085`) تنظیم کنید — در این حالت نام دامنه ارسال می‌شود و پراکسی با SNI-rewrite از طریق Google عبور می‌دهد. |
-| گوگل و یوتیوب باز می‌شوند ولی ویدیوهای یوتیوب پخش نمی‌شوند و سایت‌های دیگر باز نمی‌شوند | اتصال به `script.google.com` با موفقیت برقرار نشده. احتمالاً مشکل از deployment فایل `Code.gs` روی Google Apps Script است یا سهمیه روزانه اجرا تمام شده. یک deployment جدید از `Code.gs` بسازید و `script_id` را بررسی کنید، یا منتظر بمانید تا سهمیه reset شود (نیمه‌شب به وقت Pacific / ۱۰:۳۰ ظهر به وقت ایران). |
-
----
-
-## نکات امنیتی
-
-- فایل `config.json` را با کسی به اشتراک نگذارید.
-- مقدار پیش‌فرض `AUTH_KEY` را قبل از deploy عوض کنید.
-- پوشه `ca/` را منتشر نکنید.
-- بهتر است `listen_host` روی `127.0.0.1` بماند.
-- هر دیپلویمنت روی گوگل اسکریپت دارای محدودیت 20,000 درخواست در هر 24 ساعت است
----
-
-## منابع
-
-- **لیست‌های فیلتر آگهی:** [PersianBlocker](https://github.com/MasterKia/PersianBlocker/) نوشته MasterKia
-
----
+- **محدودیت مسئولیت:** توسعه‌دهنده‌ها و مشارکت‌کننده‌ها در قبال هرگونه خسارت مستقیم، غیرمستقیم، اتفاقی، تبعی، یا هر نوع خسارت دیگر ناشی از استفاده یا عدم امکان استفاده از این پروژه مسئول نیستند.
+- **مسئولیت کاربر:** اجرای این پروژه خارج از محیط کنترل‌شده ممکن است روی شبکه، اکانت‌ها، پراکسی‌ها، گواهی‌ها، یا سیستم‌های متصل اثر بگذارد. مسئولیت کامل نصب، پیکربندی، و استفاده با خود کاربر است.
+- **رعایت قوانین:** قبل از استفاده از این نرم‌افزار، رعایت همه قوانین و مقررات محلی، ملی، و بین‌المللی بر عهده کاربر است.
+- **رعایت قوانین Google:** اگر از Google Apps Script یا دیگر سرویس‌های Google استفاده می‌کنید، رعایت Terms of Service، قوانین استفاده، سهمیه‌ها (quota)، و سیاست‌های پلتفرم Google بر عهده شماست. استفاده نادرست ممکن است باعث تعلیق یا مسدود شدن اکانت یا deployment شود.
+- **هشدار TLS/CA:** در حالت Apps Script، ترافیک HTTPS به‌صورت محلی decrypt و دوباره encrypt می‌شود. برای جلوگیری از خطاهای امنیتی مرورگر، باید گواهی CA تولیدشده را نصب کنید.
+- **هشدار LAN:** وقتی LAN sharing فعال است، دستگاه‌های شبکه محلی می‌توانند از پراکسی شما استفاده کنند. این قابلیت را فقط روی شبکه‌های قابل اعتماد فعال کنید و در صورت نیاز لایه‌های امنیتی اضافه بگذارید.
 
 ## License
 

@@ -2,618 +2,153 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-MasterHttpRelayVPN-blue?logo=github)](https://github.com/masterking32/MasterHttpRelayVPN) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/masterking32/MasterHttpRelayVPN) [![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/85a1f608-5c6d-4fcd-9b7f-b1ff8b680852.svg)](https://oosmetrics.com/repo/masterking32/MasterHttpRelayVPN) [![oosmetrics](https://api.oosmetrics.com/api/v1/badge/achievement/de9bee73-bc68-4f98-ba83-6957007046b1.svg)](https://oosmetrics.com/repo/masterking32/MasterHttpRelayVPN)
 
-**[🇮🇷 راهنمای فارسی (Persian)](README_FA.md)**
-
-A free tool that lets you access the internet freely by hiding your traffic behind trusted websites like Google. No VPS or server needed — just a free Google account.
-
-> **How it works in simple terms:** Your browser talks to this tool on your computer. This tool disguises your traffic to look like normal Google traffic. The firewall/filter sees "google.com" and lets it pass. Behind the scenes, a free Google Apps Script relay fetches the real website for you.
+>**Youtube safe search** and **live streaming** are now **Bypassed & Working** by default. so you don't need `youtube_via_relay` or Cloudflare / VPS `exit_node` for it.
 
 
----
+**Language:** English | [Persian / فارسی](README_FA.md)
 
-## Announcement and Support Channel 📢
+> نسخه فارسی با AI ایجاد شده. ترجیحا از نسخه انگلیسی استفاده کنید.
 
-For the latest news, releases, and project updates, follow our Telegram channel: [Telegram Channel](https://t.me/masterdnsvpn)
+**Telegram Channel 📣:** [https://t.me/MasterDnsVPN](https://t.me/MasterDnsVPN) | @MasterDnsVPN
 
----
+**Telegram Group 📣:** [https://t.me/MasterDnsVPNGroup](https://t.me/MasterDnsVPNGroup) | @MasterDnsVPNGroup
 
-### If you like this project, please support it by starring it on GitHub (⭐). It helps the project get discovered.
 
----
+**❤️ Special Thanks to** [Abolix](https://github.com/abolix) for making this project possible and maintaining it.
 
-### Optional Financial Support 💸
+MasterHttpRelayVPN is a local proxy that routes browser traffic through a Google Apps Script relay using domain fronting. The simple path needs only this project and a free Google account. For sites that block Google egress, you can optionally add an exit node later.
 
-- TON network:
+We mainly use MITM (Man in the Middle) and Domain Fronting techniques.
 
-`masterking32.ton`
-
-- EVM-compatible networks (ETH and compatible chains):
-
-`0x517f07305D6ED781A089322B6cD93d1461bF8652`
-
-- TRC20 network (TRON):
-
-`TLApdY8APWkFHHoxebxGY8JhMeChiETqFH`
-
-Every contribution and every piece of feedback is appreciated. Support directly helps ongoing development and improvement.
-
----
-
-## Disclaimer
-
-MasterHttpRelayVPN is provided for educational, testing, and research purposes only.
-
-- **Provided without warranty:** This software is provided "AS IS", without express or implied warranty, including merchantability, fitness for a particular purpose, and non-infringement.
-- **Limitation of liability:** The developers and contributors are not responsible for any direct, indirect, incidental, consequential, or other damages resulting from the use of this project or the inability to use it.
-- **User responsibility:** Running this project outside controlled test environments may affect networks, accounts, proxies, certificates, or connected systems. You are solely responsible for installation, configuration, and use.
-- **Legal compliance:** You are responsible for complying with all local, national, and international laws and regulations before using this software.
-- **Google services compliance:** If you use Google Apps Script or other Google services with this project, you are responsible for complying with Google's Terms of Service, acceptable use rules, quotas, and platform policies. Misuse may lead to suspension or termination of your Google account or deployments.
-- **License terms:** Use, copying, distribution, and modification of this software are governed by the repository license. Any use outside those terms is prohibited.
-
----
-
-## How It Works
-
-```
-Browser -> Local Proxy -> Google/CDN front -> Your relay -> Target website
-             |
-             +-> shows google.com to the network filter
+```text
+Browser -> Local proxy -> Google front -> Your Apps Script relay -> Target site
+                         network filter sees a Google-facing connection
 ```
 
-In normal use, the browser sends traffic to the proxy running on your computer.
-The proxy sends that traffic through Google-facing infrastructure so the network only sees an allowed domain such as `www.google.com`.
-Your deployed relay then fetches the real website and sends the response back through the same path.
+## Quick Menu 🧭
 
-This means the filter sees normal-looking Google traffic, while the actual destination stays hidden inside the relay request.
+Click the links below for guides on common topics.
 
----
+[Getting Started](docs/GETTING_STARTED.md) : How to set up the proxy and deploy the Google relay.
 
-## Quick Start (Recommended)
+[Exit Node](docs/exit-node/EXIT_NODE_DEPLOYMENT.md) : Connect to Cloudflare Workers or a VPS for destinations to fix ChatGPT, Turnstile, and similar sites blocking Google IPs.
 
-One command sets up a virtualenv, installs dependencies, launches an interactive
-config wizard, and starts the proxy.
+[LAN Sharing](docs/LAN_SHARING.md) : Share the proxy with other devices on your local network. (Android, iOS, other computers)
 
-**Windows:**
-```cmd
-git clone https://github.com/masterking32/MasterHttpRelayVPN.git
-cd MasterHttpRelayVPN
-start.bat
-```
+[Configuration](docs/CONFIGURATION.md) : Reference for all config options, plus diagnostic commands.
 
-**Linux / macOS:**
+[Security](docs/SECURITY.md) : Important notes on safely using and sharing the proxy.
+
+[Troubleshooting](docs/TROUBLESHOOTING.md) : Common issues and how to resolve them.
+
+[Docker](docs/DOCKER.md) : Instructions for running the proxy in a Docker container.
+
+[Architecture](docs/ARCHITECTURE.md) : Overview of the system design and components.
+
+## Fast Start ⚡
+
+Before running the local proxy, deploy the Google relay once. You only need a Google account and about two minutes.
+
+## Deploy The Google Relay ☁️
+
+1. Open [Google Apps Script](https://script.google.com/) and sign in.
+2. Click **New project**.
+3. Delete the default editor content.
+4. Open [apps_script/Code.gs](apps_script/Code.gs), copy everything, and paste it into Apps Script.
+5. Find this line and replace it with your own long secret:
+
+    ```javascript
+    const AUTH_KEY = "your-secret-password-here";
+    ```
+
+6. Click **Deploy** -> **New deployment** -> **Web app**.
+7. Set **Execute as** to **Me**.
+8. Set **Who has access** to **Anyone**.
+9. Click **Deploy**, approve the permission screen, and copy the **Deployment ID**.
+
+Keep these two values ready for the setup wizard:
+
+- `Deployment ID` from Google Apps Script
+- `AUTH_KEY`, a long secret that must match `auth_key` in your local config
+
+If you want more detail, use [Getting Started](docs/GETTING_STARTED.md#2-deploy-the-google-relay).
+
+Download the project with either Git or ZIP, then run the one-click launcher.
+
+
+**Option A: ZIP**
+
+[Click to Download](https://github.com/masterking32/MasterHttpRelayVPN/archive/refs/heads/python_testing.zip)
+
+
+**Option B: Git**
+
 ```bash
 git clone https://github.com/masterking32/MasterHttpRelayVPN.git
 cd MasterHttpRelayVPN
+```
+
+
+Then start the app:
+
+**Windows**
+
+```cmd
+start.bat
+```
+
+**Linux / macOS**
+
+```bash
 chmod +x start.sh
 ./start.sh
 ```
 
-The first time it runs, the wizard asks for your Google Apps Script Deployment ID
-and generates a strong random password for you. Follow the Apps Script deployment
-instructions in **Step 2** below before running the wizard so you have a
-Deployment ID ready.
+The launcher creates a virtual environment, installs dependencies, opens the setup wizard if `config.json` is missing, and starts the proxy.
 
+After it starts, configure your browser to use:
 
-## Step-by-Step Setup Guide (Manual)
+| Field | Value |
+|-------|-------|
+| Proxy type | HTTP |
+| Address | `127.0.0.1` |
+| Port | `8085` |
+| SOCKS5 port | `1080` |
 
-### Step 1: Download This Project
+After starting, CA will be installed automatically.
 
-```bash
-git clone https://github.com/masterking32/MasterHttpRelayVPN.git
-cd MasterHttpRelayVPN
-pip install -r requirements.txt
-```
+You can use telegram as : https://t.me/socks?server=127.0.0.1&port=1080 or if you are using PC client, you can add HTTP proxy with manually.
 
-> **Can't reach PyPI directly?** Use this mirror instead:
-> ```bash
-> pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
-> ```
+## Common Next Steps 🛠️
 
-Or download the ZIP from [GitHub](https://github.com/masterking32/MasterHttpRelayVPN) and extract it.
+- If the browser shows certificate warnings, open [Troubleshooting](docs/TROUBLESHOOTING.md#certificate-errors).
+- If you see `unauthorized`, make sure `AUTH_KEY` in [apps_script/Code.gs](apps_script/Code.gs) exactly matches `auth_key` in `config.json`.
+- If ChatGPT, Turnstile, or similar sites block the Google exit IP, use [Exit Node Guide](docs/exit-node/EXIT_NODE_DEPLOYMENT.md).
 
-### Step 2: Set Up the Google Relay (Code.gs)
+## Support And Updates 📣
 
-This is the "relay" that sits on Google's servers and fetches websites for you. It's free.
+- Telegram channel: [https://t.me/MasterDnsVPN](https://t.me/MasterDnsVPN)
+- Telegram group: [https://t.me/MasterDnsVPNGroup](https://t.me/MasterDnsVPNGroup)
+- Ad blocker filter source: [PersianBlocker](https://github.com/MasterKia/PersianBlocker/)
 
-1. Open [Google Apps Script](https://script.google.com/) and sign in with your Google account.
-2. Click **New project**.
-3. **Delete** all the default code in the editor.
-4. Open the [`Code.gs`](apps_script/Code.gs) file from this project (under `apps_script/`), **copy everything**, and paste it into the Apps Script editor.
-5. **Important:** Change the password on this line to something only you know:
-   ```javascript
-   const AUTH_KEY = "your-secret-password-here";
-   ```
-6. Click **Deploy** → **New deployment**.
-7. Choose **Web app** as the type.
-8. Set:
-   - **Execute as:** Me
-   - **Who has access:** Anyone
-9. Click **Deploy**.
-   - If prompted, click **Authorize access**.
-   - You may see **Google hasn't verified this app**. Click **Advanced** then **Go to <your project name> (unsafe)** to continue.
-10. **Copy the Deployment ID** (it looks like a long random string). You'll need it in the next step.
+## Donate 🍩
 
-> ⚠️ Remember the password you set in step 5. You'll use the same password in the config file below.
+If you find this project helpful, you can support it with a donation:
 
-### Step 3: Configure
+- **TON network:** `masterking32.ton`
+- **EVM-compatible networks (ETH and compatible chains):** `0x517f07305D6ED781A089322B6cD93d1461bF8652`
+- **TRC20 network (TRON):** `TLApdY8APWkFHHoxebxGY8JhMeChiETqFH`
 
-**Option A — interactive wizard (recommended):**
-```bash
-python setup.py
-```
-It'll prompt for your Deployment ID, generate a random `auth_key`, and write
-`config.json` for you.
+## Safety 🔒
 
-**Option B — manual:**
+This project is provided for educational, testing, and research use. You are responsible for following applicable laws and service terms. Never share `config.json`, `auth_key`, `ca/`, or an exit-node URL together with a valid PSK. Read [Security Notes](docs/SECURITY.md) before sharing the proxy with other devices.
 
-1. Copy the example config file:
-   ```bash
-   cp config.example.json config.json
-   ```
-   On Windows, you can also just copy & rename the file manually.
+## Legal Disclaimer ⚠️
 
-2. Open `config.json` in any text editor and fill in your values:
-   ```json
-   {
-     "google_ip": "216.239.38.120",
-     "front_domain": "www.google.com",
-     "script_id": "PASTE_YOUR_DEPLOYMENT_ID_HERE",
-     "auth_key": "your-secret-password-here",
-     "listen_host": "127.0.0.1",
-    "http_port": 8085,
-     "socks5_port": 1080,
-     "log_level": "INFO",
-     "verify_ssl": true
-   }
-   ```
-   - `script_id` → Paste the Deployment ID from Step 2.
-   - `auth_key` → The **same password** you set in `Code.gs`.
-
-### Step 3.5: Optional Exit Node for Full-Tunnel (ChatGPT/Turnstile Friendly)
-
-Some websites block Google datacenter IPs when traffic exits directly from Apps Script.
-To fix that, configure an exit node so traffic path becomes:
-
-```text
-Browser -> Local Proxy -> Apps Script -> Exit Node (Cloudflare / Deno / VPS) -> Target website
-```
-
-You can deploy any one of these exit-node backends:
-
-1. Cloudflare Workers: [`apps_script/cloudflare_worker.js`](apps_script/cloudflare_worker.js)
-2. Deno Deploy: [`apps_script/deno_deploy.ts`](apps_script/deno_deploy.ts)
-3. Your own VPS server
-
-Full step-by-step deployment guide (all providers):
-- [docs/exit-node/EXIT_NODE_DEPLOYMENT.md](docs/exit-node/EXIT_NODE_DEPLOYMENT.md)
-
-Set the same PSK secret inside the exit-node code (`PSK` constant) and in `config.json`.
-
-Then configure provider switching like this:
-
-```json
-"exit_node": {
-  "enabled": true,
-  "provider": "cloudflare",
-  "url": "https://YOUR-WORKER.YOUR-SUBDOMAIN.workers.dev",
-  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
-  "mode": "full",
-  "hosts": [
-    "chatgpt.com",
-    "openai.com",
-    "claude.ai",
-    "anthropic.com"
-  ]
-}
-```
-
-Notes:
-- For simple setup, only fill `provider`, `url`, and `psk`.
-- Switch provider by changing `exit_node.provider` and `exit_node.url`.
-- `mode: "full"` = everything goes through exit node (ignore `hosts`).
-- `mode: "selective"` = only domains in `hosts` go through exit node.
-- `psk` must exactly match your deployed exit node secret.
-
-**Failover (multiple exit nodes):** Add a `urls` list to configure fallback exit nodes. The proxy monitors all of them with periodic health checks and automatically switches to the next available URL when one goes down:
-
-```json
-"exit_node": {
-  "enabled": true,
-  "provider": "cloudflare",
-  "url": "https://PRIMARY-WORKER.YOUR-SUBDOMAIN.workers.dev",
-  "urls": [
-    "https://PRIMARY-WORKER.YOUR-SUBDOMAIN.workers.dev",
-    "https://FALLBACK-WORKER.YOUR-SUBDOMAIN.workers.dev"
-  ],
-  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
-  "mode": "full",
-  "health_check_interval": 30,
-  "health_check_failures_before_failover": 3
-}
-```
-
-- `urls` — ordered list of exit node URLs; primary first, fallbacks after.
-- `health_check_interval` — seconds between health checks (default: `30`).
-- `health_check_failures_before_failover` — consecutive failures before a URL is marked dead and the next one is tried (default: `3`).
-- When the primary URL recovers, the proxy automatically switches back to it.
-
-Production recommendation:
-- Keep `verify_ssl: true`
-- Keep `listen_host: 127.0.0.1` unless LAN sharing is explicitly needed
-- Rotate both secrets periodically
-- Never publish your live exit-node URL with valid PSK
-
-### Step 4: Run
-
-```bash
-python3 main.py
-```
-
-You should see a message saying the HTTP proxy is running on `127.0.0.1:8085` and SOCKS5 on `127.0.0.1:1080`.
-
-### Step 5: Set Up Your Browser
-
-Set your browser to use the proxy:
-
-- **Proxy Address:** `127.0.0.1`
-- **Proxy Port:** `8085`
-- **Type:** HTTP
-- **Optional SOCKS5 Port:** `1080`
-
-**How to set proxy in common browsers:**
-- **Firefox:** Settings → General → Network Settings → Manual proxy → enter `127.0.0.1` port `8085` for HTTP Proxy → check "Also use this proxy for HTTPS"
-- **Chrome/Edge:** Uses system proxy. Go to Windows Settings → Network → Proxy → Manual setup → enter `127.0.0.1:8085`
-- **Or** use extensions like [FoxyProxy](https://addons.mozilla.org/en-US/firefox/addon/foxyproxy-standard/) or [SwitchyOmega](https://chrome.google.com/webstore/detail/proxy-switchyomega/) for easier switching.
-
-### Step 6: Install the CA Certificate (Required for HTTPS)
-
-When using `apps_script` mode, the tool needs to decrypt and re-encrypt HTTPS traffic locally. It generates a CA certificate on first run. **You must install it** or you'll see security warnings on every website.
-
-The certificate file is created at `ca/ca.crt` inside the project folder after the first run.
-
-#### Windows
-1. Double-click `ca/ca.crt`.
-2. Click **Install Certificate**.
-3. Choose **Current User** (or Local Machine for all users).
-4. Select **Place all certificates in the following store** → click **Browse** → choose **Trusted Root Certification Authorities**.
-5. Click **Next** → **Finish**.
-6. Restart your browser.
-
-#### macOS
-1. Double-click `ca/ca.crt` — it opens in Keychain Access.
-2. It goes into the **login** keychain.
-3. Find the certificate, double-click it.
-4. Click on View Certificate then expand **Trust** → set **When using this certificate** to **Always Trust**.
-5. Select System in the Keychain section and press add button.
-6. Close and enter your password. Restart your browser.
-
-#### Linux (Ubuntu/Debian)
-```bash
-sudo cp ca/ca.crt /usr/local/share/ca-certificates/masterhttp-relay.crt
-sudo update-ca-certificates
-```
-Restart your browser.
-
-#### Firefox (All Platforms)
-Firefox uses its own certificate store, so even after OS-level install you need to do this:
-1. Go to **Settings** → **Privacy & Security** → **Certificates** → **View Certificates**.
-2. Go to the **Authorities** tab → click **Import**.
-3. Select `ca/ca.crt` from the project folder.
-4. Check **Trust this CA to identify websites** → click **OK**.
-
-> **Auto-install on startup:** When running in `apps_script` mode the proxy will automatically detect if the CA is not yet trusted and attempt to install it for you. If it succeeds you'll see a confirmation in the log; if it fails (e.g. needs administrator rights) it will print instructions. You can also run `python main.py --install-cert` at any time to (re-)install the certificate.
-
-> **Uninstalling:** To remove the certificate from your system's trust stores, run `python main.py --uninstall-cert` or use `start.bat --uninstall-cert` on Windows. This removes the certificate from all system trust stores and Firefox profiles.
-
-> ⚠️ **Security note:** This certificate only works locally on your machine. Don't share the `ca/` folder with anyone. If you want to start fresh, delete the `ca/` folder and the tool will generate a new one.
-
----
-
-## LAN Sharing (Optional)
-
-By default, the proxy only listens on `127.0.0.1` (localhost), meaning only your computer can use it. To allow other devices on your local network (LAN) to use the proxy:
-
-1. Set `"lan_sharing": true` in your `config.json`
-2. The proxy will automatically listen on all network interfaces (`0.0.0.0`)
-3. The startup log will show your LAN IP addresses that other devices can connect to
-
-**Example LAN configuration:**
-```json
-{
-  "lan_sharing": true,
-  "listen_host": "0.0.0.0",
-  "http_port": 8085
-}
-```
-
-**Security Warning:** When LAN sharing is enabled, anyone on your local network can use your proxy. Ensure your network is trusted and consider additional security measures.
-
-**On other devices:** Configure them to use your computer's LAN IP (shown in the startup log) and port 8085 as the HTTP proxy.
-
----
-
-## Docker (Optional)
-
-If you prefer running the proxy in a container instead of managing a Python environment, Docker is supported.
-
-**Requirements:** [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/)
-
-### Setup
-
-1. Copy and fill in your config:
-   ```bash
-   cp config.example.json config.json
-   # Edit config.json — set your script_id and auth_key
-   ```
-
-2. Build and start:
-   ```bash
-   docker compose up -d
-   ```
-
-The container automatically listens on `0.0.0.0`, so both ports are reachable from the host:
-- `127.0.0.1:8085` — HTTP proxy
-- `127.0.0.1:1080` — SOCKS5 proxy
-
-### CA Certificate in Docker
-
-On first run, the container generates `ca/ca.crt` into the `./ca` volume on your host. Install it in your browser manually — see [Step 6](#step-6-install-the-ca-certificate-required-for-https) above. Running `--install-cert` inside the container has no effect on the host OS certificate store.
-
-### Useful Commands
-
-```bash
-docker compose up -d          # Start in background
-docker compose logs -f        # Follow logs
-docker compose restart        # Restart after config change
-docker compose down           # Stop and remove container
-docker compose build          # Rebuild image after code change
-```
-
-> **`config.json` is mounted read-only** into the container and is never baked into the image, so your secrets stay on the host.
-
----
-
-## Modes Overview
-
-This project is centered on the **Apps Script** relay (free, no VPS needed). For destinations that block Google egress, you can optionally chain an edge exit node (Cloudflare Workers, Deno Deploy, or your own VPS).
-
----
-
-## Configuration Options
-
-### Main Settings
-
-| Setting | What It Does |
-|---------|-------------|
-| `auth_key` | Password shared between your computer and the relay |
-| `script_id` | Your Google Apps Script Deployment ID |
-| `listen_host` | Where to listen (`127.0.0.1` = only this computer, `0.0.0.0` = all interfaces for LAN sharing) |
-| `http_port` | Which HTTP proxy port to listen on (default: `8085`) |
-| `lan_sharing` | Enable LAN sharing to allow other devices on your network to use the proxy (`false` by default) |
-| `log_level` | How much detail to show: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
-
-### Advanced Settings
-
-| Setting | Default | What It Does |
-|---------|---------|-------------|
-| `google_ip` | `216.239.38.120` | Google IP address to connect through |
-| `front_domain` | `www.google.com` | Domain shown to the firewall/filter |
-| `verify_ssl` | `true` | Verify the TLS certificate on the local fronted connection to Google/CDN |
-| `relay_timeout` | `25` | Total timeout for one relayed request before it fails |
-| `tls_connect_timeout` | `15` | Timeout for the proxy's TLS connection to the fronted Google/CDN endpoint |
-| `tcp_connect_timeout` | `10` | Timeout for direct TCP tunnels and outbound SNI-rewrite connects |
-| `script_ids` | — | Multiple Script IDs for load balancing (array) |
-| `chunked_download_extensions` | see [config.example.json](config.example.json) | File extensions that should use parallel range downloading. Supports `".*"` to probe all GET downloads. |
-| `chunked_download_min_size` | `5242880` | Minimum total file size (5 MB) before range-parallel download stays enabled |
-| `chunked_download_chunk_size` | `524288` | Per-range chunk size used by parallel downloads |
-| `chunked_download_max_parallel` | `8` | Maximum simultaneous range requests for one download |
-| `chunked_download_max_chunks` | `256` | Soft upper bound for total chunk requests; chunk size is raised automatically for very large files |
-| `hosts` | `{}` | Manual DNS override map (`hostname` or `.suffix` -> IP). Example: `{ "example.org": "93.184.216.34", ".internal.lan": "192.168.1.10" }`. |
-| `block_hosts` | `[]` | Hosts that must never be tunneled (return HTTP 403). Supports exact names (`ads.example.com`) or leading-dot suffixes (`.doubleclick.net`). |
-| `direct_hosts` | `[]` | Hosts that must always go direct (no MITM and no relay/domain-fronting). Supports exact names and leading-dot suffixes. |
-| `bypass_hosts` | `["localhost", ".local", ".lan", ".home.arpa"]` | Hosts that go direct (no MITM, no relay). Useful for LAN resources or sites that break under MITM. |
-| `direct_google_exclude` | see [config.example.json](config.example.json) | Google apps that must use the MITM relay path instead of the fast direct tunnel. |
-| `youtube_via_relay` | `false` | Route YouTube (`youtube.com`, `youtu.be`, `youtube-nocookie.com`) through the Apps Script relay instead of the SNI-rewrite path. The SNI-rewrite path uses Google's frontend IP which enforces SafeSearch and can cause **"Video Unavailable"** errors. Setting this to `true` fixes playback at the cost of using more Apps Script executions and slightly higher latency. |
-| `exit_node.provider` | `cloudflare` | Selected exit-node backend: `cloudflare`, `deno`, `vps`, or `custom`. |
-| `exit_node.url` | `""` | Beginner-friendly single URL for the selected provider. |
-
-Practical host-policy example:
-
-```json
-{
-  "block_hosts": [
-    "ads.example.com",
-    ".doubleclick.net"
-  ],
-  "direct_hosts": [
-    "chat.openai.com",
-    ".openai.com"
-  ],
-  "hosts": {
-    "example.org": "93.184.216.34",
-    ".internal.lan": "192.168.1.10"
-  }
-}
-```
-
-- `block_hosts`: deny requests entirely (`403`) for exact names or full suffix trees.
-- `direct_hosts`: force plain direct tunnel only (no MITM, no relay fronting).
-- `hosts`: force DNS mapping before any real lookup (useful for testing/split-DNS workarounds).
-
-Note: the relay response body cap is now a code constant (`MAX_RESPONSE_BODY_BYTES`) in [src/core/constants.py](src/core/constants.py), not a user config key.
-
-### Optional Dependencies
-
-Install everything from [`requirements.txt`](requirements.txt). All listed packages are optional — the proxy runs with no third-party dependencies in basic modes, but without them you lose features:
-
-| Package | Provides |
-|---------|----------|
-| `cryptography` | MITM TLS interception (required for `apps_script` mode with HTTPS sites) |
-| `h2` | HTTP/2 multiplexing to the Apps Script relay (significantly faster) |
-| `brotli` | Decompression of `Content-Encoding: br` responses |
-| `zstandard` | Decompression of `Content-Encoding: zstd` responses |
-
-
-### Load Balancing
-
-To increase speed, deploy `Code.gs` multiple times to different Apps Script projects and use all their IDs:
-
-```json
-{
-  "script_ids": [
-    "DEPLOYMENT_ID_1",
-    "DEPLOYMENT_ID_2",
-    "DEPLOYMENT_ID_3"
-  ]
-}
-```
-> ⚠️ **Note:** If you are using multiple deployments, the auth-keys must be identical. (All deployments must use the same auth-key.)
----
-
-## Updating the Google Relay
-
-If you change `Code.gs`, you must **create a new deployment** in Google Apps Script (Deploy → New deployment) and **update the `script_id`** in your `config.json`. Just editing the code does not update the live version.
-
----
-
-## Command Line Options
-
-```bash
-python3 main.py                          # Normal start
-python3 main.py -p 9090                  # Use HTTP port 9090 instead
-python3 main.py --socks5-port 1081       # Use SOCKS5 port 1081
-python3 main.py --log-level DEBUG        # Show detailed logs
-python3 main.py -c /path/to/config.json  # Use a different config file
-python3 main.py --install-cert           # Install MITM CA certificate and exit
-python3 main.py --uninstall-cert         # Remove MITM CA certificate and exit
-python3 main.py --no-cert-check          # Skip automatic CA install check on startup
-python3 main.py --scan                   # Scan Google IPs and find the fastest one
-```
-
-> **Auto-install:** On startup (MITM mode), the proxy automatically checks if the CA certificate is trusted and attempts to install it. Use `--no-cert-check` to skip this. If auto-install fails (e.g. needs elevation), run `python main.py --install-cert` manually or follow Step 6 above.
-
-### Scanning for the Fastest Google IP
-
-If your current `google_ip` in `config.json` is blocked or slow, you can scan to find a faster one:
-
-```bash
-python3 main.py --scan
-```
-
-This will:
-1. Probe 27 candidate Google IPs in parallel
-2. Measure latency from your network
-3. Display results in a table
-4. Recommend the fastest IP
-5. Exit with exit code 0 if at least one IP is reachable, 1 otherwise
-
-**Example output:**
-```
-Scanning 27 Google frontend IPs
-  SNI: www.google.com
-  Timeout: 4s per IP
-  Concurrency: 8 parallel probes
-
-IP                   LATENCY      STATUS
--------------------- ------------ -------------------------
-216.239.32.120          42ms   OK
-216.239.34.120          45ms   OK
-216.239.36.120          52ms   OK
-142.250.80.142       timeout   timeout
-...
-
-Result: 15 / 27 reachable
-
-Top 3 fastest IPs:
-  1. 216.239.32.120 (42ms)
-  2. 216.239.34.120 (45ms)
-  3. 216.239.36.120 (52ms)
-
-Recommended: Set "google_ip": "216.239.32.120" in config.json
-```
-
-After scanning, update your `config.json` with the recommended IP and restart the proxy.
-
----
-
-## Architecture
-
-```
-┌─────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────┐
-│ Browser  │────►│ Local Proxy  │────►│ CDN / Google │────►│  Relay   │──► Internet
-│          │◄────│ (this tool)  │◄────│  (fronted)   │◄────│ Endpoint │◄──
-└─────────┘     └──────────────┘     └─────────────┘     └──────────┘
-                  HTTP/CONNECT         TLS (SNI: ok)        Fetch target
-                  MITM (optional)      Host: relay          Return response
-```
-
----
-
-## Project Files
-
-```
-MasterHttpRelayVPN/
-├── main.py                    # Entry point: starts the proxy
-├── setup.py                   # Interactive wizard — writes config.json
-├── start.bat / start.sh       # One-click launcher (venv + deps + wizard + run)
-├── config.example.json        # Copy to config.json and fill in your values
-├── requirements.txt           # Python dependencies
-├── Dockerfile                 # Container image definition
-├── docker-compose.yml         # Compose config: ports, volumes, restart policy
-├── apps_script/
-│   ├── Code.gs                # The relay script you deploy to Google Apps Script
-│   ├── cloudflare_worker.js   # Exit node template for Cloudflare Workers
-│   └── deno_deploy.ts         # Exit node template for Deno Deploy
-├── ca/                        # Generated MITM CA (do NOT share)
-│   ├── ca.crt
-│   └── ca.key
-└── src/                       # Proxy implementation
-    ├── proxy_server.py        # Accepts HTTP CONNECT and SOCKS5
-    ├── domain_fronter.py      # Apps Script relay client (fronted through Google)
-    ├── h2_transport.py        # Optional HTTP/2 multiplexing
-    ├── mitm.py                # On-the-fly TLS interception
-    ├── cert_installer.py      # Cross-platform CA installer (Windows/macOS/Linux + Firefox)
-    ├── codec.py               # Content-Encoding decoder (gzip/deflate/br/zstd)
-    ├── google_ip_scanner.py   # Scanner to find the fastest reachable Google IP
-    ├── constants.py           # Tunable defaults and shared data
-    └── logging_utils.py       # Colored, aligned log formatter
-```
-
----
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| "Config not found" | Copy `config.example.json` to `config.json` and fill in your values |
-| Browser shows certificate errors | Install the CA certificate (see Step 6 above) |
-| Telegram works but browser doesn't load sites | Almost certainly the CA certificate is not installed. Follow Step 6 to install `ca/ca.crt`, then **fully close and reopen your browser** (for Chrome/Edge, make sure no Chrome process is running in the background before reopening). |
-| Installed the cert but browser still errors | Chrome and Edge cache certificates — you must **completely close** the browser (check Task Manager / system tray) and reopen it for the new cert to take effect. Firefox requires a separate import (see Step 6 Firefox section). |
-| "unauthorized" error | Make sure `auth_key` in `config.json` matches `AUTH_KEY` in `Code.gs` exactly |
-| Connection timeout | Try a different `google_ip` or check your internet connection |
-| Slow browsing | Deploy multiple `Code.gs` copies and use `script_ids` array for load balancing |
-| `502 Bad JSON` error | Google returned an unexpected response (HTML instead of JSON). Causes: wrong `script_id`, Apps Script daily quota exhausted, or the deployment wasn't re-created after editing `Code.gs`. Check your `script_id` and create a **new deployment** if you recently changed `Code.gs`. |
-| Telegram works on HTTP proxy but not on SOCKS5 | **Expected.** SOCKS5 clients resolve hostnames locally and connect to raw IPs, so Telegram's MTProto-obfuscated bytes reach a blocked IP that we can neither direct-tunnel nor intercept. Configure Telegram as an **HTTP proxy** (`127.0.0.1:8085`) instead — it sends hostnames, which the proxy handles via SNI-rewrite through Google. |
-| Google and YouTube open but YouTube videos don't play and other sites don't load | The connection to `script.google.com` was not successfully established. This is likely caused by an issue with the deployment of `Code.gs` on Google Apps Script, or the daily execution quota has been exhausted. Re-deploy `Code.gs` with a new deployment and verify your `script_id`, or wait until the quota resets (midnight Pacific Time / 10:30 AM Iran Time). |
-
----
-
-## Security Tips
-
-- **Never share your `config.json`** — it has your password in it.
-- **Change the default `AUTH_KEY`** in `Code.gs` before deploying.
-- **Don't share the `ca/` folder** — it contains your private certificate key.
-- Keep `listen_host` as `127.0.0.1` so only your computer can use the proxy.
-- Every google scripts deployment has limit of 20,000 requests in 24 hours
----
-
-## Special Thanks
-
-Special thanks to [@abolix](https://github.com/abolix) for making this project possible.
-
-## Sources
-
-- **Ad blocker filter lists:** [PersianBlocker](https://github.com/MasterKia/PersianBlocker/) by MasterKia
+- **Limitation of liability:** Developers and contributors are not responsible for direct, indirect, incidental, consequential, or other damages resulting from use of this project or inability to use it.
+- **User responsibility:** Running this project outside controlled environments may affect networks, accounts, proxies, certificates, or connected systems. You are solely responsible for installation, configuration, and usage.
+- **Legal compliance:** You are responsible for complying with all applicable local, national, and international laws and regulations before using this software.
+- **Google services compliance:** If you use Google Apps Script or other Google services, you are responsible for complying with Google's Terms of Service, acceptable use rules, quotas, and platform policies. Misuse can lead to suspension or termination of accounts or deployments.
 
 ## License
 

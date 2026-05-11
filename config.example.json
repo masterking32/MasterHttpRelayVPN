@@ -13,13 +13,17 @@
 	"socks5_port": 1080,
 	"verify_ssl": true,
 	"lan_sharing": false,
-	"relay_timeout": 25,
-	"tls_connect_timeout": 15,
-	"tcp_connect_timeout": 10,
+	"relay_ip_literals": true,
+	"relay_timeout": 55,
+	"tls_connect_timeout": 20,
+	"tcp_connect_timeout": 15,
 	"parallel_relay": 1,
-	"h2_connections": 2,
-	"enable_sub_batch": true,
-	"log_level": "INFO",
+	"h2_connections": 1,
+	"ping_interval": 0.1,
+	"enable_batch": true,
+	"batch_window_micro": 0.020,
+	"batch_window_macro": 0.100,
+	"enable_sub_batch": false,
 	"block_hosts": [
 		"ads.example.com",
 		".doubleclick.net"
@@ -33,12 +37,6 @@
 		"example.org": "93.184.216.34",
 		".internal.lan": "192.168.1.10"
 	},
-	"adblock_lists": [
-		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerAds-Hosts.txt",
-		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerTrackers-Hosts.txt",
-		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerAnnoyances-Domains.txt",
-		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerHosts.txt"
-	],
 	"exit_node": {
 		"enabled": false,
 		"provider": "cloudflare",
@@ -52,5 +50,12 @@
 		],
 		"health_check_interval": 30,
 		"health_check_failures_before_failover": 3
-	}
+	},
+	"log_level": "INFO",
+	"adblock_lists": [
+		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerAds-Hosts.txt",
+		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerTrackers-Hosts.txt",
+		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerAnnoyances-Domains.txt",
+		"https://raw.githubusercontent.com/MasterKia/PersianBlocker/main/PersianBlockerHosts.txt"
+	]
 }

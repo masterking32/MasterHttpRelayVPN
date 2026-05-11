@@ -176,6 +176,10 @@ class DomainFronter:
         self._warmed = False
         self._refilling = False
         self._pool_min_idle = POOL_MIN_IDLE
+        # H1 is fallback-only when H2 is active.  We don't know yet whether
+        # the H2 pool will succeed (set later in __init__), so default to the
+        # full warm count and let the H2 init below shrink it if applicable.
+        self._warm_count = WARM_POOL_COUNT
         self._maintenance_task: asyncio.Task | None = None
         self._keepalive_task: asyncio.Task | None = None
         self._warm_task: asyncio.Task | None = None
@@ -209,6 +213,11 @@ class DomainFronter:
         self._coalesce: dict[str, list[asyncio.Future]] = {}
         self._h2_failure_streak = 0
         self._h2_disabled_until = 0.0
+        # When the H2 reader loop ends, EVERY in-flight stream raises a
+        # ConnectionError simultaneously.  Without de-duping by connection
+        # generation, a single drop with 5+ in-flight streams trips the
+        # disable threshold and forces a 15s H1 fallback for no reason.
+        self._h2_last_failure_gen: int = -1
         self._stream_download_disabled_until: dict[str, float] = {}
 
         # HTTP/2 multiplexing — pool of parallel connections for DPI bypass.
@@ -244,6 +253,13 @@ class DomainFronter:
                     "(each gets its own DPI token bucket)",
                     n_conns,
                 )
+                # H1 is now fallback-only — shrink the pool we keep warm.
+                # We still want a few ready for instant fallback when H2 hits
+                # a transient failure (cooldown window), but maintaining 30
+                # warm + 15 idle connections that are virtually never used
+                # wastes TLS handshakes and CPU.
+                self._warm_count = min(self._warm_count, 6)
+                self._pool_min_idle = min(self._pool_min_idle, 3)
         except ImportError:
             pass
 
@@ -422,8 +438,35 @@ class DomainFronter:
 
     def _record_h2_success(self) -> None:
         self._h2_failure_streak = 0
+        # Reset the generation guard so the *next* genuine drop is counted
+        # even if the connection happens to share its old generation key.
+        self._h2_last_failure_gen = -1
 
     def _record_h2_failure(self, exc: Exception) -> None:
+        # De-dupe failures from a single connection drop event.  When the
+        # H2 reader loop ends, every in-flight stream raises a transport
+        # error simultaneously — counting each as a separate failure trips
+        # the disable threshold from one drop with 5+ concurrent streams.
+        # Track failures per connection generation so a single drop counts
+        # at most once per H2 transport.
+        gen_key = -1
+        try:
+            if self._h2_pool:
+                # Use the sum of generations across the pool as a proxy
+                # for "have any connections been re-established since the
+                # last failure?".  Bumps once per reconnect.
+                gen_key = sum(
+                    getattr(t, "_conn_generation", 0) for t in self._h2_pool
+                )
+            elif self._h2 is not None:
+                gen_key = getattr(self._h2, "_conn_generation", 0)
+        except Exception:
+            gen_key = -1
+        if gen_key == self._h2_last_failure_gen and gen_key != -1:
+            # Same drop event — already counted.
+            return
+        self._h2_last_failure_gen = gen_key
+
         self._h2_failure_streak += 1
         # Extend the cooldown window on every failure so a burst of concurrent
         # failures doesn't shorten the effective cooldown.
@@ -1271,7 +1314,7 @@ class DomainFronter:
     async def _do_warm(self):
         """Open WARM_POOL_COUNT connections in parallel — failures are fine."""
         await self._ensure_sni_ranked()
-        count = WARM_POOL_COUNT
+        count = self._warm_count
         coros = [self._add_conn_to_pool() for _ in range(count)]
         results = await asyncio.gather(*coros, return_exceptions=True)
         opened = sum(1 for r in results if not isinstance(r, Exception))
@@ -2280,8 +2323,16 @@ class DomainFronter:
 
     def _build_payload(self, method, url, headers, body):
         """Build the JSON relay payload dict."""
+        # Apps Script's UrlFetchApp.fetch() does not accept HEAD or OPTIONS
+        # methods — passing either throws and the relay returns 502.  Map
+        # them to GET on the wire (the upstream still gets the same response
+        # body, and HEAD-aware HTTP clients ignore the body anyway since
+        # they look at Content-Length / framing).  This is the defensive
+        # mirror of the same normalisation done in Code.gs.
+        upper_method = method.upper() if method else "GET"
+        wire_method = "GET" if upper_method in ("HEAD", "OPTIONS") else method
         payload = {
-            "m": method,
+            "m": wire_method,
             "u": url,
             # Let the browser/app see origin redirects and cookies directly.
             "r": False,
@@ -2570,13 +2621,28 @@ class DomainFronter:
                 if not future.done():
                     future.set_result(result)
         except Exception as e:
-            log.warning(
-                "Batch relay failed, disabling batch mode for %ds cooldown. "
-                "Error: %s: %s",
-                self._batch_cooldown, type(e).__name__, e or "(no details)",
-            )
-            self._batch_enabled = False
-            self._batch_disabled_at = time.time()
+            # Only globally disable batch mode for genuine failures (parse
+            # errors, protocol errors).  A bare TimeoutError or transient
+            # connection drop is recoverable on the very next batch — keeping
+            # batch mode disabled for 60s while traffic floods (e.g. a Vercel
+            # marketing page with 200+ chunks) collapses every request into
+            # its own Apps Script execution and explodes quota usage.
+            transient = isinstance(e, (asyncio.TimeoutError, ConnectionError,
+                                        TimeoutError, OSError))
+            if transient:
+                log.warning(
+                    "Batch relay transient error (%s: %s) — falling back "
+                    "individually but keeping batch mode enabled",
+                    type(e).__name__, e or "(no details)",
+                )
+            else:
+                log.warning(
+                    "Batch relay failed, disabling batch mode for %ds cooldown. "
+                    "Error: %s: %s",
+                    self._batch_cooldown, type(e).__name__, e or "(no details)",
+                )
+                self._batch_enabled = False
+                self._batch_disabled_at = time.time()
             # Fallback: send individually
             tasks = []
             for payload, future in batch:
@@ -2721,11 +2787,21 @@ class DomainFronter:
         path = self._exec_path_for_sid(sid)
         self._record_execution(sid)
 
+        t0 = time.perf_counter()
         status, headers, body = await (self._pick_h2() or self._h2).request(
             method="POST", path=path, host=self.http_host,
             headers={"content-type": "application/json"},
             body=json_body,
+            timeout=self._relay_timeout,
         )
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "H2 relay %s [%s] %.0fms (%d bytes)",
+                payload.get("m", "?"),
+                (payload.get("u") or "")[:60],
+                (time.perf_counter() - t0) * 1000.0,
+                len(body),
+            )
 
         return parse_relay_response(body, self._max_response_body_bytes)
 
@@ -2747,6 +2823,7 @@ class DomainFronter:
             method="POST", path=path, host=self.http_host,
             headers={"content-type": "application/json"},
             body=json_body,
+            timeout=self._relay_timeout,
         )
 
         return parse_relay_response(body, self._max_response_body_bytes)
@@ -2849,18 +2926,33 @@ class DomainFronter:
         )
         path = self._exec_path_for_sid(sid)
 
-        # Try HTTP/2 first
+        # Try HTTP/2 first.  Use the configured relay_timeout: batches can
+        # carry the combined response of N requests so they need at least as
+        # much time as a single relay.  A hardcoded 30s timed out legitimate
+        # large-asset bursts and forced batch mode into a 60s cooldown,
+        # collapsing every subsequent request into its own Apps Script
+        # execution (huge quota burn).
         if self._h2_available():
+            batch_timeout = max(self._relay_timeout, 30.0)
             try:
                 self._record_execution(sid)
+                t0 = time.perf_counter()
                 status, headers, body = await asyncio.wait_for(
                     (self._pick_h2() or self._h2).request(
                         method="POST", path=path, host=self.http_host,
                         headers={"content-type": "application/json"},
                         body=json_body,
+                        timeout=batch_timeout,
                     ),
-                    timeout=30,
+                    timeout=batch_timeout,
                 )
+                if log.isEnabledFor(logging.DEBUG):
+                    log.debug(
+                        "H2 batch %d items: %.0fms (%d bytes)",
+                        len(payloads),
+                        (time.perf_counter() - t0) * 1000.0,
+                        len(body),
+                    )
                 self._record_h2_success()
                 return self._parse_batch_body(body, payloads)
             except Exception as e:
