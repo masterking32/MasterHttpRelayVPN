@@ -252,20 +252,15 @@ jobs:
             archive="MasterHttpRelayVPN-${version}-termux-${arch}.zip"
             (cd "$staging" && zip -qr "../release-assets/${archive}" .)
 
-            # Generate checksum with environment variable
-            export ARCHIVE_NAME="$archive"
-            python3 - << 'PYTHON'
+            # Generate checksum
+            python3 << EOF
 import hashlib
 from pathlib import Path
-import os
-archive_name = os.environ.get("ARCHIVE_NAME", "")
-archive = Path("release-assets") / archive_name
-digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-(archive.parent / f"{archive.name}.sha256").write_text(
-    f"{digest}  {archive.name}\n",
-    encoding="utf-8",
-)
-PYTHON
+archive_file = Path("release-assets") / "$archive"
+sha256_sum = hashlib.sha256(archive_file.read_bytes()).hexdigest()
+checksum_file = archive_file.with_suffix(archive_file.suffix + ".sha256")
+checksum_file.write_text(f"{sha256_sum}  $archive\\n")
+EOF
             echo "✓ Packaged: $archive"
           done
           
