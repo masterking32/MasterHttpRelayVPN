@@ -167,6 +167,11 @@ jobs:
       - name: Set up QEMU for cross-arch containers
         uses: docker/setup-qemu-action@v3
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Build Termux binaries (arm64 + armv7)
         shell: bash
         run: |
@@ -183,48 +188,59 @@ jobs:
 
           mkdir -p release-assets termux-dist
 
+          # Build using Alpine Linux with QEMU for cross-compilation
+          # This is more reliable than depending on Termux Docker images
           build_termux_arch () {
-            arch="$1"
-            platform="$2"
-            image="$3"
+            local arch="$1"
+            local platform="$2"
+            local qemu_arch="$3"
 
+            echo "Building for Termux ${arch}..."
             rm -rf dist build *.spec || true
 
+            # Use Alpine with QEMU for reliable cross-platform builds
             docker run --rm --platform "$platform" \
               -v "$PWD:/work" \
               -w /work \
-              "$image" \
-              bash -lc '
+              alpine:latest \
+              sh -c '
                 set -euo pipefail
-                echo "Building Termux binary for ${arch}"
-                pkg update -y
-                pkg install -y python clang make pkg-config libffi openssl rust binutils
-                python -m pip install --upgrade pip
-                pip install pyinstaller
+                echo "Installing build dependencies..."
+                apk add --no-cache python3 py3-pip make gcc musl-dev openssl-dev libffi-dev rust cargo
+                echo "Installing Python packages..."
+                python3 -m pip install --upgrade pip pyinstaller
                 pip install -r requirements.txt
+                echo "Building binary for '"'"'${arch}'"'"'..."
                 pyinstaller --noconfirm --clean --onefile --name MasterHttpRelayVPN --paths src main.py
               '
 
             if [ ! -f dist/MasterHttpRelayVPN ]; then
-              echo "Missing Termux binary output for ${arch}" >&2
+              echo "ERROR: Missing binary output for ${arch}" >&2
               exit 1
             fi
             cp dist/MasterHttpRelayVPN "termux-dist/MasterHttpRelayVPN-${arch}"
             chmod +x "termux-dist/MasterHttpRelayVPN-${arch}"
+            echo "✓ Successfully built for ${arch}"
           }
 
-          build_termux_arch "arm64" "linux/arm64" "termux/termux-docker:aarch64"
-          build_termux_arch "armv7" "linux/arm/v7" "termux/termux-docker:arm"
+          # Build both ARM architectures
+          build_termux_arch "arm64" "linux/arm64" "aarch64"
+          build_termux_arch "armv7" "linux/arm/v7" "arm"
 
+          echo ""
+          echo "Packaging releases..."
           for arch in arm64 armv7; do
             staging="termux-staging-${arch}"
             rm -rf "$staging"
             mkdir -p "$staging"
             cp "termux-dist/MasterHttpRelayVPN-${arch}" "$staging/MasterHttpRelayVPN"
+            chmod +x "$staging/MasterHttpRelayVPN"
+            
             [ -f config.example.json ] && cp config.example.json "$staging/"
             [ -f README.md ] && cp README.md "$staging/"
             [ -f README_FA.md ] && cp README_FA.md "$staging/"
 
+            # Create Termux launch script for native Termux environment
             printf '%s\n' \
               '#!/data/data/com.termux/files/usr/bin/bash' \
               'set -euo pipefail' \
@@ -236,17 +252,22 @@ jobs:
             archive="MasterHttpRelayVPN-${version}-termux-${arch}.zip"
             (cd "$staging" && zip -qr "../release-assets/${archive}" .)
 
-            python - <<PY
-          import hashlib
-          from pathlib import Path
-          archive = Path("release-assets") / "${archive}"
-          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-          (archive.parent / f"{archive.name}.sha256").write_text(
-              f"{digest}  {archive.name}\\n",
-              encoding="utf-8",
-          )
-          PY
+            # Generate checksum
+            python3 - <<PY
+import hashlib
+from pathlib import Path
+archive = Path("release-assets") / "${archive}"
+digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+(archive.parent / f"{archive.name}.sha256").write_text(
+    f"{digest}  {archive.name}\\n",
+    encoding="utf-8",
+)
+PY
+            echo "✓ Packaged: $archive"
           done
+          
+          echo ""
+          ls -lah release-assets/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
