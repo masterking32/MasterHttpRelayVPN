@@ -1,5 +1,8 @@
 name: Release
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   push:
     tags:
@@ -94,8 +97,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $version = ((Get-Content "src/core/constants.py" -Raw) -match '__version__\s*=\s*"([^"]+)"') > $null; $Matches[1]
-          if (-not $version) { throw "Could not read version" }
+          $content = Get-Content "src/core/constants.py" -Raw
+          $m = [regex]::Match($content, '__version__\s*=\s*"([^"]+)"')
+          if (-not $m.Success) { throw "Could not read version from src/core/constants.py" }
+          $version = $m.Groups[1].Value
           New-Item -ItemType Directory -Path "release-assets" -Force | Out-Null
           $staging = "release-staging"
           Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
@@ -131,7 +136,18 @@ jobs:
           done
           archive="MasterHttpRelayVPN-${version}-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz"
           tar -C release-staging -czf "release-assets/$archive" .
-          sha256sum "release-assets/$archive" | awk '{print $1 "  " FILENAME}' FILENAME="$archive" > "release-assets/$archive.sha256"
+          ARCHIVE_NAME="$archive" python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          archive = Path("release-assets") / os.environ["ARCHIVE_NAME"]
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          (archive.parent / f"{archive.name}.sha256").write_text(
+              f"{digest}  {archive.name}\n",
+              encoding="utf-8",
+          )
+          PY
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -147,6 +163,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up QEMU for cross-arch containers
+        uses: docker/setup-qemu-action@v3
 
       - name: Build Termux binaries (arm64 + armv7)
         shell: bash
@@ -177,6 +196,7 @@ jobs:
               "$image" \
               bash -lc '
                 set -euo pipefail
+                echo "Building Termux binary for ${arch}"
                 pkg update -y
                 pkg install -y python clang make pkg-config libffi openssl rust binutils
                 python -m pip install --upgrade pip
@@ -216,7 +236,16 @@ jobs:
             archive="MasterHttpRelayVPN-${version}-termux-${arch}.zip"
             (cd "$staging" && zip -qr "../release-assets/${archive}" .)
 
-            sha256sum "release-assets/${archive}" | awk '{print $1 "  " FILENAME}' FILENAME="$archive" > "release-assets/${archive}.sha256"
+            python - <<PY
+          import hashlib
+          from pathlib import Path
+          archive = Path("release-assets") / "${archive}"
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          (archive.parent / f"{archive.name}.sha256").write_text(
+              f"{digest}  {archive.name}\\n",
+              encoding="utf-8",
+          )
+          PY
           done
 
       - name: Upload build artifacts
