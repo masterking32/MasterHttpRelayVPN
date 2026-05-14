@@ -83,10 +83,13 @@ class AsyncRouteProbe:
                 asyncio.open_connection(target.ip, target.port, ssl=ctx, server_hostname=target.sni),
                 timeout=self.cfg.timeout_s,
             )
+            ssl_obj = writer.get_extra_info("ssl_object")
+            if not ssl_obj or ssl_obj.selected_alpn_protocol() != "h2":
+                raise RuntimeError("h2 alpn not negotiated")
             writer.write(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
             await writer.drain()
-            await asyncio.wait_for(reader.read(1), timeout=0.2)
-            ok = True
+            frame_header = await asyncio.wait_for(reader.readexactly(9), timeout=0.4)
+            ok = len(frame_header) == 9
         except Exception:
             ok = False
         finally:
@@ -105,8 +108,8 @@ class AsyncRouteProbe:
             transport.connect((target.ip, target.port))
             token = random.randbytes(8)
             await loop.sock_sendall(transport, token)
-            await asyncio.wait_for(loop.sock_recv(transport, 32), timeout=0.2)
-            ok = True
+            _ = await asyncio.wait_for(loop.sock_recv(transport, 32), timeout=0.2)
+            ok = False
         except Exception:
             ok = False
         finally:
