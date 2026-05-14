@@ -24,6 +24,7 @@ from core.cert_installer import install_ca, uninstall_ca, is_ca_trusted
 from core.constants import __version__
 from core.lan_utils import log_lan_access
 from core.google_ip_scanner import scan_sync
+from core.adaptive_transport import AdaptiveRouteEngine, ProbeTarget
 from core.logging_utils import configure as configure_logging, print_banner
 from proxy.mitm import CA_CERT_FILE
 from proxy.proxy_server import ProxyServer
@@ -98,6 +99,11 @@ def parse_args():
         "--scan",
         action="store_true",
         help="Scan Google IPs to find the fastest reachable one and exit.",
+    )
+    parser.add_argument(
+        "--adaptive-scan",
+        action="store_true",
+        help="Run adaptive transport scan (jitter/loss/stability-first) and exit.",
     )
     return parser.parse_args()
 
@@ -223,6 +229,24 @@ def main():
         print("Missing 'script_id' in config.")
         print("Deploy the Apps Script from Code.gs and paste the Deployment ID.")
         sys.exit(1)
+
+
+    if args.adaptive_scan:
+        configure_logging("INFO")
+        from core.constants import CANDIDATE_IPS
+        engine = AdaptiveRouteEngine(config.get("route_db", "route_intel.sqlite3"))
+        targets = [
+            ProbeTarget(ip=ip, port=443, sni=config.get("front_domain", "www.google.com"), transport_profile="vless_reality")
+            for ip in CANDIDATE_IPS
+        ]
+        ranked = asyncio.run(engine.evaluate(targets))
+        if not ranked:
+            print("No viable adaptive routes found")
+            sys.exit(1)
+        print("Adaptive route ranking (stability-first):")
+        for i, route in enumerate(ranked[:5], 1):
+            print(f"{i}. {route.target.ip} score={route.score:.4f} median={route.median_rtt_ms:.1f}ms jitter={route.jitter_ms:.1f} loss={route.packet_loss:.2%} handshake={route.handshake_success_rate:.2%}")
+        sys.exit(0)
 
     # ── Google IP Scanner ──────────────────────────────────────────────────
     if args.scan:
