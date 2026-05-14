@@ -1562,6 +1562,44 @@ class DomainFronter:
             latency_ns = int((time.perf_counter() - t0) * 1e9)
             self._record_site(url, len(result), latency_ns, errored)
 
+    async def relay_udp_packet(self, host: str, port: int, payload: bytes) -> bytes | None:
+        """Relay a single UDP packet via exit node over Apps Script.
+
+        This encapsulates UDP into the existing HTTPS relay chain:
+          client UDP -> SOCKS5 UDP ASSOCIATE -> Apps Script -> exit node -> UDP target
+        """
+        if not self._exit_node_enabled or not self._exit_node_url:
+            return None
+
+        inner = {
+            "k": self._exit_node_psk,
+            "udp": 1,
+            "host": host,
+            "port": int(port),
+            "payload": base64.b64encode(payload).decode(),
+        }
+        inner_json = json.dumps(inner).encode()
+        outer = self._build_payload(
+            "POST",
+            self._exit_node_url,
+            {"Content-Type": "application/json"},
+            inner_json,
+        )
+        outer["ct"] = "application/json"
+
+        raw = await self._batch_submit(outer)
+        _, _, relay_bytes = split_raw_response(raw)
+        obj = load_relay_json(relay_bytes)
+        if not isinstance(obj, dict) or obj.get("e"):
+            return None
+        b64 = obj.get("payload")
+        if not isinstance(b64, str) or not b64:
+            return b""
+        try:
+            return base64.b64decode(b64)
+        except Exception:
+            return None
+
     async def _coalesced_submit(self, key: str, payload: dict) -> bytes:
         """Dedup concurrent requests for the same URL (no Range header).
 
@@ -2851,4 +2889,3 @@ class DomainFronter:
         for item in items:
             results.append(parse_relay_json(item, self._max_response_body_bytes))
         return results
-

@@ -520,7 +520,11 @@ class ProxyServer:
             result = await negotiate_socks5(reader, writer)
             if result is None:
                 return
-            host, port = result
+            cmd, host, port = result
+            if cmd == "udp_associate":
+                log.info("SOCKS5 UDP ASSOCIATE requested by %s", addr)
+                await self._handle_socks5_udp_associate(reader, writer)
+                return
             log.info("SOCKS5 CONNECT → %s:%d", host, port)
             await self._handle_target_tunnel(host, port, reader, writer)
         except asyncio.IncompleteReadError:
@@ -538,6 +542,29 @@ class ProxyServer:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+
+
+    async def _handle_socks5_udp_associate(self,
+                                           reader: asyncio.StreamReader,
+                                           writer: asyncio.StreamWriter):
+        """Handle SOCKS5 UDP ASSOCIATE for low-latency UDP apps (e.g., games)."""
+        loop = asyncio.get_running_loop()
+        transport, protocol = await loop.create_datagram_endpoint(
+            lambda: _Socks5UdpRelayProtocol(self.fronter),
+            local_addr=(self.socks_host, 0),
+        )
+        sockname = transport.get_extra_info("sockname")
+        bind_ip = sockname[0] if sockname else self.socks_host
+        bind_port = sockname[1] if sockname else 0
+
+        try:
+            writer.write(b"\x05\x00\x00\x01" + socket.inet_aton(bind_ip) + bind_port.to_bytes(2, "big"))
+            await writer.drain()
+            await reader.read()
+        finally:
+            transport.close()
+
 
     # ── CONNECT (HTTPS tunnelling) ────────────────────────────────
 
@@ -1408,3 +1435,72 @@ class ProxyServer:
 
         writer.write(response)
         await writer.drain()
+
+
+class _Socks5UdpRelayProtocol(asyncio.DatagramProtocol):
+    """Best-effort SOCKS5 UDP relay (single-hop direct UDP forwarding)."""
+
+    def __init__(self, fronter):
+        self.transport: asyncio.DatagramTransport | None = None
+        self._client_addr = None
+        self._fronter = fronter
+        self._loop = asyncio.get_running_loop()
+
+    def connection_made(self, transport):
+        self.transport = transport
+
+
+    async def _forward_udp(self, dst: str, dport: int, payload: bytes):
+        if self.transport is None or self._client_addr is None:
+            return
+        relayed = await self._fronter.relay_udp_packet(dst, dport, payload)
+        if relayed is not None:
+            header = self._build_socks_header(dst, dport)
+            if header is not None:
+                self.transport.sendto(header + relayed, self._client_addr)
+            return
+        self.transport.sendto(payload, (dst, dport))
+
+    @staticmethod
+    def _build_socks_header(host: str, port: int) -> bytes | None:
+        try:
+            host_raw = socket.inet_aton(host)
+            return b"\x00\x00\x00\x01" + host_raw + port.to_bytes(2, "big")
+        except OSError:
+            return None
+    def datagram_received(self, data, addr):
+        if self.transport is None:
+            return
+
+        if self._client_addr is None or addr == self._client_addr:
+            self._client_addr = addr
+            if len(data) < 10 or data[2] != 0x00:
+                return
+            atyp = data[3]
+            pos = 4
+            if atyp == 0x01:  # IPv4
+                dst = socket.inet_ntoa(data[pos:pos + 4])
+                pos += 4
+            elif atyp == 0x03:  # Domain
+                ln = data[pos]
+                pos += 1
+                dst = data[pos:pos + ln].decode(errors="replace")
+                pos += ln
+            elif atyp == 0x04:  # IPv6
+                dst = socket.inet_ntop(socket.AF_INET6, data[pos:pos + 16])
+                pos += 16
+            else:
+                return
+            dport = int.from_bytes(data[pos:pos + 2], "big")
+            payload = data[pos + 2:]
+            self._loop.create_task(self._forward_udp(dst, dport, payload))
+            return
+
+        # response from remote server -> encapsulate back to client
+        host, port = addr[0], addr[1]
+        try:
+            host_raw = socket.inet_aton(host)
+            header = b"\x00\x00\x00\x01" + host_raw + port.to_bytes(2, "big")
+        except OSError:
+            return
+        self.transport.sendto(header + data, self._client_addr)

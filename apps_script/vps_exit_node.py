@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import re
+import socket
 import socketserver
 import sys
 import urllib.error
@@ -209,6 +210,23 @@ def _relay_request(
         }
 
 
+
+
+def _relay_udp_packet(host: str, port: int, payload: bytes) -> dict:
+    """Send one UDP packet and return one response packet (best effort)."""
+    if not host or port <= 0 or port > 65535:
+        return {"e": "bad_udp_target"}
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(2.0)
+        sock.sendto(payload, (host, port))
+        data, _ = sock.recvfrom(65535)
+        return {"ok": True, "payload": base64.b64encode(data).decode()}
+    except Exception as exc:
+        return {"e": str(exc) or type(exc).__name__}
+    finally:
+        sock.close()
+
 # ---------------------------------------------------------------------------
 # HTTP request handler
 # ---------------------------------------------------------------------------
@@ -265,6 +283,7 @@ class _ExitNodeHandler(http.server.BaseHTTPRequestHandler):
         m = str(body.get("m") or "GET").upper()
         h = _sanitize_headers(body.get("h"))
         b64 = body.get("b")
+        udp_mode = bool(body.get("udp"))
 
         if not _PSK:
             self._send_json(500, {"e": "server_psk_missing"})
@@ -273,6 +292,25 @@ class _ExitNodeHandler(http.server.BaseHTTPRequestHandler):
         if k != _PSK:
             log.warning("Rejected unauthorized request from %s", self.client_address[0])
             self._send_json(401, {"e": "unauthorized"})
+            return
+
+
+        if udp_mode:
+            host = str(body.get("host") or "")
+            try:
+                port = int(body.get("port") or 0)
+            except Exception:
+                port = 0
+            payload = b""
+            pb64 = body.get("payload")
+            if isinstance(pb64, str) and pb64:
+                try:
+                    payload = base64.b64decode(pb64)
+                except Exception:
+                    self._send_json(400, {"e": "bad_udp_payload"})
+                    return
+            result = _relay_udp_packet(host, port, payload)
+            self._send_json(200, result)
             return
 
         if not _safe_url(u):
