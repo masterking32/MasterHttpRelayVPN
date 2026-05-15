@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import random
 import socket
 import ssl
 import statistics
@@ -56,11 +55,12 @@ class AsyncRouteProbe:
         writer = None
         ok = False
         try:
-            _, writer = await asyncio.wait_for(
+            reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(target.ip, target.port, ssl=ctx, server_hostname=target.sni),
                 timeout=self.cfg.timeout_s,
             )
-            ok = True
+            ssl_obj = writer.get_extra_info("ssl_object")
+            ok = bool(reader and ssl_obj and ssl_obj.version())
         except Exception:
             ok = False
         finally:
@@ -101,19 +101,19 @@ class AsyncRouteProbe:
     async def _quic_probe(self, target: ProbeTarget) -> ProbeObservation:
         loop = asyncio.get_running_loop()
         start = time.perf_counter()
-        transport = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        transport.setblocking(False)
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.setblocking(False)
         ok = False
         try:
-            transport.connect((target.ip, target.port))
-            token = random.randbytes(8)
-            await loop.sock_sendall(transport, token)
-            _ = await asyncio.wait_for(loop.sock_recv(transport, 32), timeout=0.2)
-            ok = False
+            udp_socket.connect((target.ip, target.port))
+            initial = bytes.fromhex("c300000001088394c8f03e5157080000449e00000002")
+            await loop.sock_sendall(udp_socket, initial)
+            response = await asyncio.wait_for(loop.sock_recv(udp_socket, 1200), timeout=min(self.cfg.timeout_s, 0.5))
+            ok = bool(response)
         except Exception:
             ok = False
         finally:
-            transport.close()
+            udp_socket.close()
         return ProbeObservation("quic", ok, (time.perf_counter() - start) * 1000)
 
 

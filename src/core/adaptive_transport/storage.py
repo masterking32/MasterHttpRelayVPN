@@ -58,7 +58,8 @@ class RouteIntelligenceStore:
             await asyncio.to_thread(self._record_score_sync, score)
 
     def _record_score_sync(self, score: RouteScore) -> None:
-        with sqlite3.connect(self.path) as conn:
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """INSERT INTO route_scores
                 (ip,port,sni,profile,sampled_at,median_rtt_ms,jitter_ms,packet_loss,handshake_success,session_stability,score,success_count,failure_count)
@@ -85,7 +86,8 @@ class RouteIntelligenceStore:
             await asyncio.to_thread(self._record_runtime_metrics_sync, target, metrics, observed_at or time.time())
 
     def _record_runtime_metrics_sync(self, target: ProbeTarget, metrics: RuntimeMetrics, observed_at: float) -> None:
-        with sqlite3.connect(self.path) as conn:
+        with sqlite3.connect(self.path, timeout=30) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """INSERT INTO route_runtime_metrics
                 (ip,port,sni,profile,observed_at,disconnects,retransmissions,latency_spikes,packet_delay_variance)
@@ -102,8 +104,13 @@ class RouteIntelligenceStore:
         with sqlite3.connect(self.path) as conn:
             rows = conn.execute(
                 """SELECT s.ip,s.port,s.sni,s.profile,
-                AVG(s.score * CASE WHEN (? - s.sampled_at) >= ? THEN 0.1 ELSE (1.0 - ((? - s.sampled_at)/?)*0.9) END)
-                - COALESCE(AVG(ABS(s.score - ss.mean_score)), 0.0) * 0.2
+                AVG(
+                    s.score * CASE
+                        WHEN (? - s.sampled_at) >= ? THEN 0.05
+                        ELSE EXP(-((? - s.sampled_at) / ?))
+                    END
+                )
+                - COALESCE(AVG(ABS(s.score - ss.mean_score)), 0.0) * 0.35
                 - COALESCE(SUM(m.disconnects + m.retransmissions + m.latency_spikes) * 0.02, 0.0)
                 - COALESCE(AVG(m.packet_delay_variance) * 0.01, 0.0) AS decayed
                 FROM route_scores s
