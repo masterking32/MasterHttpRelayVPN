@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import sys; sys.path.insert\\(0,'src'\\); from relay.domain_fronter import DomainFronter; print\\('OK'\\)\")"
+    ]
+  }
+}

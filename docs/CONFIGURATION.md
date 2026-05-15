@@ -98,12 +98,15 @@ Use an exit node when a destination blocks Google datacenter egress.
 |---------|---------|
 | `exit_node.enabled` | Turns exit-node routing on or off. |
 | `exit_node.provider` | `cloudflare`, `vps`, or `custom`. |
-| `exit_node.url` | URL for the selected provider. |
+| `exit_node.url` | Primary URL for the selected provider. |
+| `exit_node.urls` | Ordered list of fallback URLs for automatic failover. Primary first. |
 | `exit_node.psk` | Shared secret for the exit node. Must match the deployed exit-node code. |
 | `exit_node.mode` | `full` for all relayed traffic, `selective` for only listed hosts. |
 | `exit_node.hosts` | Host list used by selective mode. |
+| `exit_node.health_check_interval` | Seconds between background health checks for all URLs. Default: `30`. Minimum: `10`. |
+| `exit_node.health_check_failures_before_failover` | Consecutive ping failures before a URL is marked dead. Default: `3`. |
 
-Deployment steps are in [Exit Node Guide](exit-node/EXIT_NODE_DEPLOYMENT.md).
+Deployment steps and failover configuration are in [Exit Node Guide](exit-node/EXIT_NODE_DEPLOYMENT.md).
 
 ## Ad Blocking
 

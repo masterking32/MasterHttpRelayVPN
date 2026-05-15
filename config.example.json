@@ -41,12 +41,15 @@
 		"enabled": false,
 		"provider": "cloudflare",
 		"url": "",
+		"urls": [],
 		"psk": "",
 		"mode": "full",
 		"hosts": [
 			".chatgpt.com",
 			".openai.com"
-		]
+		],
+		"health_check_interval": 30,
+		"health_check_failures_before_failover": 3
 	},
 	"log_level": "INFO",
 	"adblock_lists": [

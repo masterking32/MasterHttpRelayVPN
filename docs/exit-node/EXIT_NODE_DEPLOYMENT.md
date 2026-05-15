@@ -112,3 +112,37 @@ Provider values:
 
 If `mode` is `selective`, only hosts listed in `hosts` use the exit node.
 If `mode` is `full`, all relayed traffic uses the exit node.
+
+## 6) Failover — Multiple Exit Nodes
+
+If you have more than one deployed exit node, you can list all URLs so the proxy automatically switches to a healthy one when the active URL goes down, then switches back to the primary when it recovers.
+
+```json
+"exit_node": {
+  "enabled": true,
+  "provider": "cloudflare",
+  "url": "https://PRIMARY-WORKER.YOUR-SUBDOMAIN.workers.dev",
+  "urls": [
+    "https://PRIMARY-WORKER.YOUR-SUBDOMAIN.workers.dev",
+    "https://FALLBACK-WORKER.YOUR-SUBDOMAIN.workers.dev"
+  ],
+  "psk": "CHANGE_ME_TO_A_STRONG_SECRET",
+  "mode": "full",
+  "health_check_interval": 30,
+  "health_check_failures_before_failover": 3
+}
+```
+
+How it works:
+- `urls` — ordered list of exit node URLs. The first entry is the primary. The rest are fallbacks.
+- The proxy pings each URL in the background every `health_check_interval` seconds.
+- After `health_check_failures_before_failover` consecutive ping failures, that URL is marked dead and the next healthy one is used automatically.
+- When the primary URL recovers, the proxy switches back to it.
+- If all URLs are down, traffic falls back to direct Apps Script relay until one recovers.
+
+Notes:
+- `url` and `urls[0]` can be the same entry — the proxy deduplicates automatically.
+- If you only set `urls` (and leave `url` empty), the first entry in `urls` is used as the primary.
+- The PSK must be the same secret across all exit nodes in the pool.
+- Minimum `health_check_interval` is 10 seconds. Default is 30.
+- Default `health_check_failures_before_failover` is 3.
