@@ -33,6 +33,7 @@ log = logging.getLogger("Fronter")
 
 __all__ = [
     "classify_relay_error",
+    "classify_relay_envelope",
     "error_response",
     "split_raw_response",
     "split_set_cookie",
@@ -201,6 +202,54 @@ def classify_relay_error(raw: str) -> str:
     # Apps Script always prepends, so the message is shorter and cleaner.
     cleaned = re.sub(r'^(Exception|Error):\s*', '', raw, flags=re.IGNORECASE).strip()
     return f"Relay error: {cleaned or raw}"
+
+
+def classify_relay_envelope(body: bytes) -> tuple[str | None, str]:
+    """Classify a raw Apps Script response body into a permanent-failure category.
+
+    Returns ``(category, raw)`` where ``category`` is one of
+    ``"quota" | "auth" | "deploy" | "admin"`` for permanent / quota-class
+    failures that should disable the originating script ID, or ``None``
+    for healthy bodies, transient envelopes, and unrecognised content.
+
+    ``raw`` is the original ``data["e"]`` string (empty when the body
+    has no envelope error).
+
+    The classifier is pure: it never raises, never logs, and never
+    performs IO. Bad input (empty bytes, non-UTF-8, non-JSON, dict with
+    no ``"e"`` key) deterministically returns ``(None, "")``.
+
+    Match priority is quota > auth > deploy > admin > transient/other.
+    Transient envelopes (e.g. "Server not available", "please try
+    again") and any other unrecognised envelope errors fall through to
+    ``(None, raw)`` because the deployment itself is still working —
+    requirement 3.4 says they must keep the existing 502 surface.
+    """
+    try:
+        text = body.decode(errors="replace").strip()
+        if not text:
+            return None, ""
+        data = load_relay_json(text)
+        if data is None or "e" not in data:
+            return None, ""
+        raw = str(data["e"])
+    except (TypeError, ValueError, AttributeError):
+        return None, ""
+
+    lower = raw.lower()
+
+    if any(p in lower for p in _QUOTA_PATTERNS):
+        return "quota", raw
+    if any(p in lower for p in _AUTH_PATTERNS):
+        return "auth", raw
+    if any(p in lower for p in _DEPLOY_PATTERNS):
+        return "deploy", raw
+    if any(p in lower for p in _ADMIN_PATTERNS):
+        return "admin", raw
+
+    # Transient (`_TRANSIENT_PATTERNS`) and any other unknown envelope
+    # error — the deployment is still working, so do NOT blacklist it.
+    return None, raw
 
 
 # ── Low-level HTTP helpers ────────────────────────────────────────────────────

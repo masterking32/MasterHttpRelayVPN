@@ -81,6 +81,12 @@ BATCH_MAX               = 64      # enough headroom for browser fan-out waves
 # ── Fan-out relay (parallel Apps Script instances) ────────────────────────
 # How long to ignore a script ID after it fails or is unreasonably slow.
 SCRIPT_BLACKLIST_TTL    = 600.0   # 10 minutes
+# Background re-probe of blacklisted script IDs: a randomized interval is
+# drawn uniformly from [MIN, MAX] each cycle so recovery (e.g. daily quota
+# reset, re-authorization) is detected ahead of static TTL expiry.
+SCRIPT_PROBE_INTERVAL_MIN = 300.0   # 5 minutes
+SCRIPT_PROBE_INTERVAL_MAX = 600.0   # 10 minutes
+SCRIPT_PROBE_TIMEOUT      = 15.0    # per-probe request budget
 
 
 # ── SNI rotation pool ─────────────────────────────────────────────────────
