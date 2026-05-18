@@ -22,8 +22,8 @@ __all__ = ["negotiate_socks5"]
 async def negotiate_socks5(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
-) -> tuple[str, int] | None:
-    """Perform a SOCKS5 handshake and return the requested (host, port).
+ ) -> tuple[str, str, int] | None:
+    """Perform a SOCKS5 handshake and return the requested SOCKS command and destination tuple.
 
     Sends protocol-level replies directly to *writer*.  Returns ``None``
     and leaves the connection in a closed state if negotiation fails at
@@ -55,8 +55,8 @@ async def negotiate_socks5(
     # ── Request ───────────────────────────────────────────────────
     req = await asyncio.wait_for(reader.readexactly(4), timeout=15)
     ver, cmd, _rsv, atyp = req
-    if ver != 5 or cmd != 0x01:
-        # Only CONNECT (0x01) is supported
+    if ver != 5 or cmd not in (0x01, 0x03):
+        # Support CONNECT (0x01) and UDP ASSOCIATE (0x03) only.
         writer.write(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
         await writer.drain()
         return None
@@ -85,4 +85,5 @@ async def negotiate_socks5(
     writer.write(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
     await writer.drain()
 
-    return host, port
+    cmd_name = "connect" if cmd == 0x01 else "udp_associate"
+    return cmd_name, host, port
