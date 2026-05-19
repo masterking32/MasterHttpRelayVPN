@@ -30,7 +30,14 @@
 	],
 	"direct_hosts": [
 		"rubika.ir",
-		"soft98.ir"
+		"splus.ir",
+		"shad.ir",
+		"soft98.ir",
+		"soroushplus.com",
+		"bale.ai",
+		"igap.net",
+		"eitaa.com",
+		"eitaa.org"
 	],
 	"youtube_via_relay": false,
 	"hosts": {
